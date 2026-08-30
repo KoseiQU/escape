@@ -62,6 +62,9 @@
     this.wallHeight = (typeof def.wallHeight === 'number') ? def.wallHeight : WALL_HEIGHT;
     this.def = def;
     this.meta = def.meta || {};
+    this._plateaus = this.meta.plateaus || [];
+    this._ramps = this.meta.ramps || [];
+    this._ceilings = this.meta.ceilings || [];
 
     var rows = def.rows || [];
     this.height = rows.length;
@@ -124,6 +127,78 @@
     return { x: (col + 0.5) * this.tileSize, z: (row + 0.5) * this.tileSize };
   };
 
+  /* ---------------- 床高さ（DESIGN.md §3「通路のバラエティ」） ----------------
+   * meta.plateaus : [{c0,r0,c1,r1,y}]            一定の高さ
+   * meta.ramps    : [{c0,r0,c1,r1,axis,y0,y1}]   軸方向に線形補間（階段/スロープ）
+   * meta.ceilings : [{c0,r0,c1,r1,h}]            床からの天井高（既定 wallHeight）
+   * ランプ区間の両端は「平坦なマス」に接続すること。連続性は validate() が検査する。
+   * 落下・跳躍は無い。プレイヤーYは floorYAt() に追従するだけ。
+   */
+
+  /** ワールド座標 (x,z) の床の高さ(m) */
+  GridMap.prototype.floorYAt = function (x, z) {
+    var T = this.tileSize;
+    var c = Math.floor(x / T), r = Math.floor(z / T);
+    var rs = this._ramps;
+    for (var i = 0; i < rs.length; i++) {
+      var a = rs[i];
+      if (c < a.c0 || c > a.c1 || r < a.r0 || r > a.r1) continue;
+      var t;
+      if (a.axis === 'x') t = (x - a.c0 * T) / ((a.c1 - a.c0 + 1) * T);
+      else t = (z - a.r0 * T) / ((a.r1 - a.r0 + 1) * T);
+      if (t < 0) t = 0; else if (t > 1) t = 1;
+      return a.y0 + (a.y1 - a.y0) * t;
+    }
+    var ps = this._plateaus;
+    for (var j = 0; j < ps.length; j++) {
+      var b = ps[j];
+      if (c >= b.c0 && c <= b.c1 && r >= b.r0 && r <= b.r1) return b.y;
+    }
+    return 0;
+  };
+
+  /** マス中心の床高さ */
+  GridMap.prototype.cellFloorY = function (col, row) {
+    return this.floorYAt((col + 0.5) * this.tileSize, (row + 0.5) * this.tileSize);
+  };
+
+  /** そのマスの天井高（床からの高さ） */
+  GridMap.prototype.ceilHAt = function (col, row) {
+    var cs = this._ceilings;
+    for (var i = 0; i < cs.length; i++) {
+      var a = cs[i];
+      if (col >= a.c0 && col <= a.c1 && row >= a.r0 && row <= a.r1) return a.h;
+    }
+    return this.wallHeight;
+  };
+
+  /** 高さ定義の連続性検査。隣接する歩行可能マスの境界で床が段差にならないこと */
+  GridMap.prototype.heightSeams = function () {
+    var T = this.tileSize, bad = [];
+    var D = [[1, 0], [0, 1]];
+    for (var r = 0; r < this.height; r++) {
+      for (var c = 0; c < this.width; c++) {
+        if (!this.isWalkable(c, r)) continue;
+        for (var d = 0; d < 2; d++) {
+          var nc = c + D[d][0], nr = r + D[d][1];
+          if (!this.isWalkable(nc, nr)) continue;
+          for (var k = 0; k < 3; k++) {
+            var f = 0.02 + k * 0.48, diff;
+            if (D[d][0]) {
+              var x = (c + 1) * T, z = (r + f) * T;
+              diff = Math.abs(this.floorYAt(x - 1e-4, z) - this.floorYAt(x + 1e-4, z));
+            } else {
+              var x2 = (c + f) * T, z2 = (r + 1) * T;
+              diff = Math.abs(this.floorYAt(x2, z2 - 1e-4) - this.floorYAt(x2, z2 + 1e-4));
+            }
+            if (diff > 0.01) { bad.push(c + ',' + r + '->' + nc + ',' + nr + ' Δ' + diff.toFixed(3)); k = 3; }
+          }
+        }
+      }
+    }
+    return bad;
+  };
+
   /** 歩行可能マスの列挙 */
   GridMap.prototype.walkableCells = function () {
     var out = [];
@@ -177,6 +252,11 @@
       errs.push('meta.spawn が未定義');
     } else if (!this.isWalkable(sp.col, sp.row)) {
       errs.push('spawn (' + sp.col + ',' + sp.row + ') が歩行不可マス');
+    }
+    // 床高さの連続性（段差＝落下になるので許さない）
+    var seams = this.heightSeams();
+    if (seams.length) {
+      errs.push('床高さが不連続 ' + seams.length + '箇所: ' + seams.slice(0, 4).join(' / '));
     }
     var refLists = ['notes', 'gimmicks', 'cells', 'checkpoints', 'patrol'];
     for (var i = 0; i < refLists.length; i++) {

@@ -323,6 +323,155 @@
     t.ok(wc.length > 0, '壁メッシュが生成されている', wc.length + '個');
   }
 
+  /* エリア1の数値ゲート（契約 DESIGN.md §3）。後続フェーズが変更しても area1 自体の
+   * 造形基準が壊れていないかを常に検査できるよう、g.map ではなく 'area1' を明示ロードする。 */
+  function testArea1Contract(t) {
+    var map = ESCAPE.Maps.load('area1');
+    var TILE = ESCAPE.TILE;
+
+    t.ok(map.width >= 55 && map.height >= 55, 'area1: 55x55マス以上', map.width + 'x' + map.height);
+
+    var cells = map.walkableCells();
+    t.ok(cells.length >= 900, 'area1: 歩行可能900マス以上', cells.length + 'マス');
+
+    var sp = map.meta.spawn;
+    var seen = map.floodFrom(sp.col, sp.row);
+    var missing = [];
+    for (var i = 0; i < cells.length; i++) {
+      var k = cells[i].col + ',' + cells[i].row;
+      if (!seen[k]) missing.push(k);
+    }
+    t.ok(missing.length === 0, 'area1: flood-fillで全歩行可能マスがspawnから到達可能',
+      cells.length + 'マス中 未到達' + missing.length + ' ' + missing.slice(0, 8).join(' '));
+
+    function degree(c, r) {
+      var n = 0;
+      if (map.isWalkable(c + 1, r)) n++;
+      if (map.isWalkable(c - 1, r)) n++;
+      if (map.isWalkable(c, r + 1)) n++;
+      if (map.isWalkable(c, r - 1)) n++;
+      return n;
+    }
+    var junctions = 0, deadends = 0;
+    for (var j = 0; j < cells.length; j++) {
+      var d = degree(cells[j].col, cells[j].row);
+      if (d >= 3) junctions++;
+      if (d === 1) deadends++;
+    }
+    t.ok(junctions >= 35, 'area1: 三叉路以上の分岐交差点が35箇所以上', junctions + '箇所');
+    t.ok(deadends >= 12, 'area1: 行き止まりが12箇所以上', deadends + '箇所');
+
+    /* 主要地点の参照整合: 存在しないマスを指さない・全て到達可能。
+     * 実体マス（メモ・仕掛け・ロッカー・扉）は「隣接する歩行可能マスが到達可能」、
+     * 歩行可能マス（板・チェックポイント・拘束室）は「そのマス自体が到達可能」で判定する。 */
+    function checkSolidPoints(name, list, expectTile) {
+      var bad = [];
+      for (var p = 0; p < list.length; p++) {
+        var e = list[p];
+        if (!map.inBounds(e.col, e.row)) { bad.push(e.col + ',' + e.row + ':場外'); continue; }
+        if (map.tileAt(e.col, e.row) !== expectTile) { bad.push(e.col + ',' + e.row + ':種別不一致'); continue; }
+        var reach = seen[(e.col + 1) + ',' + e.row] || seen[(e.col - 1) + ',' + e.row] ||
+          seen[e.col + ',' + (e.row + 1)] || seen[e.col + ',' + (e.row - 1)];
+        if (!reach) bad.push(e.col + ',' + e.row + ':隣接到達不可');
+      }
+      t.ok(bad.length === 0, 'area1: ' + name + 'の参照整合', bad.join(' / '));
+    }
+    function checkWalkablePoints(name, list, expectTile) {
+      var bad = [];
+      for (var p = 0; p < list.length; p++) {
+        var e = list[p];
+        if (!map.inBounds(e.col, e.row)) { bad.push(e.col + ',' + e.row + ':場外'); continue; }
+        if (map.tileAt(e.col, e.row) !== expectTile) { bad.push(e.col + ',' + e.row + ':種別不一致'); continue; }
+        if (!seen[e.col + ',' + e.row]) bad.push(e.col + ',' + e.row + ':到達不可');
+      }
+      t.ok(bad.length === 0, 'area1: ' + name + 'の参照整合', bad.join(' / '));
+    }
+
+    checkSolidPoints('メモ', map.meta.notes || [], TILE.NOTE);
+    checkSolidPoints('仕掛け', map.meta.gimmicks || [], TILE.GIMMICK);
+    checkWalkablePoints('板', map.meta.boards || [], TILE.BOARD);
+    checkSolidPoints('ロッカー', map.meta.lockers || [], TILE.LOCKER);
+    checkWalkablePoints('チェックポイント', map.meta.checkpoints || [], TILE.CHECKPOINT);
+    checkWalkablePoints('拘束室(牢)', map.meta.cells || [], TILE.CELL);
+
+    var doorBad = [];
+    var door = map.meta.door;
+    if (!door || !map.inBounds(door.col, door.row) || map.tileAt(door.col, door.row) !== TILE.DOOR) {
+      doorBad.push('door不正');
+    } else {
+      var dReach = seen[(door.col + 1) + ',' + door.row] || seen[(door.col - 1) + ',' + door.row] ||
+        seen[door.col + ',' + (door.row + 1)] || seen[door.col + ',' + (door.row - 1)];
+      if (!dReach) doorBad.push('door隣接到達不可');
+    }
+    var exitPad = map.meta.exitPad;
+    if (!exitPad || !map.inBounds(exitPad.col, exitPad.row) || !seen[exitPad.col + ',' + exitPad.row]) {
+      doorBad.push('exitPad不正/到達不可');
+    }
+    t.ok(doorBad.length === 0, 'area1: 出口(隔壁扉・前面パッド)の参照整合', doorBad.join(' / '));
+
+    /* 拘束室（牢）の重心がマップ中心±20%以内 */
+    var cellList = map.meta.cells || [];
+    var sx = 0, sy = 0;
+    for (var ci = 0; ci < cellList.length; ci++) { sx += cellList[ci].col; sy += cellList[ci].row; }
+    var cx = sx / cellList.length, cy = sy / cellList.length;
+    var midC = (map.width - 1) / 2, midR = (map.height - 1) / 2;
+    var tolC = map.width * 0.2, tolR = map.height * 0.2;
+    t.ok(Math.abs(cx - midC) <= tolC, 'area1: 拘束室の重心（列）がマップ中心±20%以内',
+      'cx=' + cx.toFixed(1) + ' 中心=' + midC + ' 許容=±' + tolC.toFixed(1));
+    t.ok(Math.abs(cy - midR) <= tolR, 'area1: 拘束室の重心（行）がマップ中心±20%以内',
+      'cy=' + cy.toFixed(1) + ' 中心=' + midR + ' 許容=±' + tolR.toFixed(1));
+
+    /* 床高さの隣接不連続ゼロ（GridMap.validate() も内部で呼ぶが単独でも明示検査する） */
+    var seams = map.heightSeams();
+    t.ok(seams.length === 0, 'area1: 床高さの隣接不連続がゼロ', seams.slice(0, 5).join(' / '));
+
+    /* 通路の直線見通し: 12マス超の直線は、meta宣言済みの長廊下等に限り4本以内・最長20マス */
+    function longRuns() {
+      var out = [];
+      for (var r = 0; r < map.height; r++) {
+        var c = 0;
+        while (c < map.width) {
+          if (map.isWalkable(c, r)) {
+            var start = c;
+            while (c < map.width && map.isWalkable(c, r)) c++;
+            if (c - start > 12) out.push({ c0: start, c1: c - 1, r0: r, r1: r });
+          } else c++;
+        }
+      }
+      for (var col = 0; col < map.width; col++) {
+        var rr = 0;
+        while (rr < map.height) {
+          if (map.isWalkable(col, rr)) {
+            var start2 = rr;
+            while (rr < map.height && map.isWalkable(col, rr)) rr++;
+            if (rr - start2 > 12) out.push({ c0: col, c1: col, r0: start2, r1: rr - 1 });
+          } else rr++;
+        }
+      }
+      return out;
+    }
+    var runs = longRuns();
+    t.ok(runs.length <= 4, 'area1: 12マス超の直線見通しは長廊下等4本以内', runs.length + '本');
+    var over20 = 0;
+    for (var ri = 0; ri < runs.length; ri++) {
+      var len = Math.max(runs[ri].c1 - runs[ri].c0, runs[ri].r1 - runs[ri].r0) + 1;
+      if (len > 20) over20++;
+    }
+    t.ok(over20 === 0, 'area1: 長廊下の最長は20マス以内', over20 + '本が超過');
+
+    var regions = map.meta.regions || [];
+    var undeclared = 0;
+    for (var rj = 0; rj < runs.length; rj++) {
+      var run = runs[rj], covered = false;
+      for (var rk = 0; rk < regions.length; rk++) {
+        var reg = regions[rk];
+        if (run.c0 >= reg.c0 && run.c1 <= reg.c1 && run.r0 >= reg.r0 && run.r1 <= reg.r1) { covered = true; break; }
+      }
+      if (!covered) undeclared++;
+    }
+    t.ok(undeclared === 0, 'area1: 12マス超の直線は全てmeta.regionsで宣言済み', undeclared + '本が未宣言');
+  }
+
   /* ---------------- 実行本体 ---------------- */
 
   function runAll(opts) {
@@ -343,7 +492,7 @@
     var suites = [
       testContract, testMapData, testReachability, testCollisionMatchesData, testSpawn,
       testDomWiring, testRenderedWallsMatchData, testSpeeds, testCrouchEye,
-      testWallPush, testWallSlide, testSweep, testLook, testPump
+      testWallPush, testWallSlide, testSweep, testLook, testPump, testArea1Contract
     ];
     for (var i = 0; i < suites.length; i++) {
       try {

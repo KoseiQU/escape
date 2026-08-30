@@ -19,6 +19,8 @@
     this.map = map;
     this.radius = RADIUS;
     this.x = 0; this.z = 0;
+    /** 足元の床の高さ(m)。マップの floorYAt に追従する（落下・跳躍は無い） */
+    this.y = 0;
     this.yaw = 0; this.pitch = 0;
     this.crouching = false;
     this.eyeHeight = EYE_STAND;
@@ -31,6 +33,7 @@
     var sp = (this.map.meta && this.map.meta.spawn) || { col: 1, row: 1, yawDeg: 180 };
     var c = this.map.cellCenter(sp.col, sp.row);
     this.x = c.x; this.z = c.z;
+    this.y = this.map.floorYAt(this.x, this.z);
     this.yaw = (sp.yawDeg || 0) * Math.PI / 180;
     this.pitch = 0;
     this.crouching = false;
@@ -82,7 +85,12 @@
       var nz = this.z + sz;
       if (!this.collidesAt(this.x, nz)) this.z = nz;
     }
+    /* 床高さへ追従。衝突は水平2Dのままなので、坂でも壁抜けの挙動は変わらない */
+    this.y = this.map.floorYAt(this.x, this.z);
   };
+
+  /** 目の高さ（ワールドY）。カメラはこれを使う */
+  Player.prototype.eyeY = function () { return this.y + this.eyeHeight; };
 
   /** 視点デルタ(px)を角度に反映 */
   Player.prototype.applyLook = function (dxPx, dyPx, sens) {

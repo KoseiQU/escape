@@ -12,7 +12,7 @@
   var MAX_FRAME = 0.25;   // 1フレームで消化する最大実時間(s)
 
   function Game() {
-    this.mapId = 'test';
+    this.mapId = 'area1';
     this.running = false;
     this.frameCount = 0;
     this.renderCount = 0;
@@ -28,10 +28,14 @@
 
     this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: false, powerPreference: 'high-performance' });
     this.renderer.setPixelRatio(Math.min(global.devicePixelRatio || 1, 2));
+    /* テクスチャの異方性はGPU上限内で控えめに（スマホ優先） */
+    if (ESCAPE.Textures) {
+      ESCAPE.Textures.setAnisotropy(Math.min(8, this.renderer.capabilities.getMaxAnisotropy()));
+    }
 
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(ESCAPE.World.FOG_COLOR);
-    this.scene.fog = new THREE.Fog(ESCAPE.World.FOG_COLOR, 3.0, 26.0);
+    this.scene.fog = new THREE.Fog(ESCAPE.World.FOG_COLOR, 1.6, 15.5);
 
     this.camera = new THREE.PerspectiveCamera(75, 1, 0.05, 300);
     this.camera.rotation.order = 'YXZ';
@@ -78,7 +82,9 @@
     if (w < 1) w = 1;
     if (h < 1) h = 1;
     this.viewW = w; this.viewH = h;
-    this.renderer.setSize(w, h, false);
+    /* updateStyle=true が必須。canvas は置換要素なので inset:0 だけでは
+       CSSサイズが決まらず、devicePixelRatio>1 の端末で描画面が画面より大きくなる。 */
+    this.renderer.setSize(w, h, true);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
     this.updateChrome();
@@ -138,12 +144,14 @@
 
     this.simTime += dt;
     this.frameCount++;
+    /* 蛍光灯のチラつき（ゲーム内時刻駆動＝__pumpでも同じ絵になる） */
+    if (this.world && this.world.update) this.world.update(this.simTime);
     this.syncCamera();
   };
 
   Game.prototype.syncCamera = function () {
     var p = this.player;
-    this.camera.position.set(p.x, p.eyeHeight, p.z);
+    this.camera.position.set(p.x, p.y + p.eyeHeight, p.z);
     this.camera.rotation.set(p.pitch, p.yaw, 0);
   };
 
@@ -158,10 +166,14 @@
     var el = this.dom.debug;
     if (!el) return;
     var p = this.player;
+    var w = this.world && this.world.stats;
     el.textContent =
-      'ESCAPE P1 / ' + this.map.name + '\n' +
-      'cell (' + p.col() + ',' + p.row() + ')  pos ' + p.x.toFixed(2) + ', ' + p.z.toFixed(2) + '\n' +
-      'yaw ' + (p.yaw * 180 / Math.PI).toFixed(0) + '°  ' + p.mode + '  ' + p.speed.toFixed(2) + ' m/s';
+      'ESCAPE P2 / ' + this.map.name + '\n' +
+      'cell (' + p.col() + ',' + p.row() + ')  pos ' + p.x.toFixed(2) + ', ' + p.z.toFixed(2) +
+        '  floorY ' + p.y.toFixed(2) + '\n' +
+      'yaw ' + (p.yaw * 180 / Math.PI).toFixed(0) + '°  ' + p.mode + '  ' + p.speed.toFixed(2) + ' m/s' +
+      (w ? ('\ntri ' + w.triangles + '  draw ' + this.renderer.info.render.calls +
+            '  灯 ' + w.fixtures + '  build ' + w.buildMs.toFixed(0) + 'ms') : '');
   };
 
   /** 製品初期状態へ完全復帰（runAll の後始末にも使う） */
