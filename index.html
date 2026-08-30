@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#0b0d10">
+<title>ESCAPE</title>
+<style>
+  :root { color-scheme: dark; }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html, body {
+    width:100%; height:100%; overflow:hidden; background:#0b0d10; color:#c8d0d8;
+    font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+    -webkit-user-select:none; user-select:none; -webkit-touch-callout:none;
+    touch-action:none; overscroll-behavior:none;
+  }
+  #view { position:fixed; inset:0; display:block; }
+
+  /* --- HUD --- */
+  #hud { position:fixed; inset:0; pointer-events:none; }
+  #crosshair {
+    position:absolute; left:50%; top:50%; width:6px; height:6px; margin:-3px 0 0 -3px;
+    border-radius:50%; background:rgba(200,215,230,.55);
+  }
+  #debug {
+    position:absolute; left:8px; top:8px; font-size:11px; line-height:1.5;
+    color:rgba(170,190,205,.75); white-space:pre; letter-spacing:.02em;
+    text-shadow:0 1px 2px rgba(0,0,0,.8);
+  }
+  #hint {
+    position:absolute; left:50%; bottom:10px; transform:translateX(-50%);
+    font-size:11px; color:rgba(150,168,182,.6); white-space:nowrap;
+  }
+  body.touch #hint { display:none; }
+
+  /* --- 仮想スティック（タッチ位置起点のフローティング式） --- */
+  #stick-base {
+    position:absolute; display:none; width:132px; height:132px; margin:-66px 0 0 -66px;
+    border-radius:50%; border:2px solid rgba(160,180,200,.30); background:rgba(120,145,165,.08);
+  }
+  #stick-knob {
+    position:absolute; left:50%; top:50%; width:56px; height:56px;
+    border-radius:50%; background:rgba(170,195,215,.28); border:2px solid rgba(190,210,230,.45);
+    transform:translate(-50%,-50%);
+  }
+
+  /* --- ボタン3つ（右下） --- */
+  #buttons { position:absolute; right:14px; bottom:16px; display:none; gap:12px; align-items:flex-end; }
+  body.touch #buttons { display:flex; }
+  .ctrl-btn {
+    pointer-events:auto; -webkit-tap-highlight-color:transparent;
+    width:74px; height:74px; border-radius:50%;
+    border:2px solid rgba(170,195,215,.38); background:rgba(30,38,46,.55);
+    color:#cbd6e0; font-size:13px; font-weight:600; letter-spacing:.05em;
+    display:flex; align-items:center; justify-content:center;
+  }
+  .ctrl-btn.on { background:rgba(120,180,210,.35); border-color:rgba(190,225,245,.75); color:#eaf4fb; }
+  #btn-interact { width:86px; height:86px; }
+
+  /* --- 縦持ち警告 --- */
+  #orientation {
+    position:fixed; inset:0; display:none; z-index:50;
+    background:#07090b; color:#c9d4de;
+    align-items:center; justify-content:center; text-align:center;
+  }
+  body.portrait-warn #orientation { display:flex; }
+  #orientation .inner { padding:24px; }
+  #orientation .icon { font-size:44px; margin-bottom:14px; display:block; }
+  #orientation .msg { font-size:17px; letter-spacing:.14em; }
+  #orientation .sub { margin-top:10px; font-size:12px; color:rgba(160,180,196,.65); }
+</style>
+</head>
+<body>
+  <canvas id="view"></canvas>
+
+  <div id="hud">
+    <div id="crosshair"></div>
+    <div id="debug"></div>
+    <div id="hint">WASD 移動 / Shift 走る / Ctrl しゃがむ / E 調べる / 画面クリックで視点</div>
+    <div id="stick-base"><div id="stick-knob"></div></div>
+    <div id="buttons">
+      <button class="ctrl-btn" id="btn-crouch" type="button">しゃがむ</button>
+      <button class="ctrl-btn" id="btn-run" type="button">走る</button>
+      <button class="ctrl-btn" id="btn-interact" type="button">調べる</button>
+    </div>
+  </div>
+
+  <div id="orientation">
+    <div class="inner">
+      <span class="icon">⟳</span>
+      <div class="msg">横にしてください</div>
+      <div class="sub">ESCAPE は横持ちでプレイします</div>
+    </div>
+  </div>
+
+  <script src="js/three.min.js"></script>
+  <script src="js/map.js"></script>
+  <script src="js/maps/test.js"></script>
+  <script src="js/input.js"></script>
+  <script src="js/player.js"></script>
+  <script src="js/world.js"></script>
+  <script src="js/game.js"></script>
+  <script src="js/test.js"></script>
+</body>
+</html>
