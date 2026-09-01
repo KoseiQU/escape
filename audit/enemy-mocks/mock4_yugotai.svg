@@ -1,0 +1,109 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 1000" width="1000" height="1000">
+  <defs>
+    <radialGradient id="bg4" cx="50%" cy="38%" r="80%">
+      <stop offset="0%" stop-color="#141117"/>
+      <stop offset="55%" stop-color="#0a080d"/>
+      <stop offset="100%" stop-color="#020203"/>
+    </radialGradient>
+    <radialGradient id="mass" cx="42%" cy="34%" r="80%">
+      <stop offset="0%" stop-color="#3e4437"/>
+      <stop offset="45%" stop-color="#272c22"/>
+      <stop offset="100%" stop-color="#0c0e0a"/>
+    </radialGradient>
+    <radialGradient id="faceG4" cx="48%" cy="42%" r="70%">
+      <stop offset="0%" stop-color="#e6e2d2"/>
+      <stop offset="60%" stop-color="#c2beab"/>
+      <stop offset="100%" stop-color="#75746a"/>
+    </radialGradient>
+    <filter id="rough" x="-10%" y="-10%" width="120%" height="120%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.024" numOctaves="4" seed="23" result="n"/>
+      <feDisplacementMap in="SourceGraphic" in2="n" scale="16"/>
+    </filter>
+    <filter id="rough2" x="-15%" y="-15%" width="130%" height="130%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.07" numOctaves="2" seed="51" result="n"/>
+      <feDisplacementMap in="SourceGraphic" in2="n" scale="9"/>
+    </filter>
+    <filter id="soft"><feGaussianBlur stdDeviation="2.6"/></filter>
+    <filter id="glow"><feGaussianBlur stdDeviation="8"/></filter>
+    <filter id="grain">
+      <feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" seed="8"/>
+      <feColorMatrix type="matrix" values="0 0 0 0 0.5 0 0 0 0 0.52 0 0 0 0 0.48 0 0 0 0.06 0"/>
+      <feComposite operator="over" in2="SourceGraphic"/>
+    </filter>
+  </defs>
+
+  <rect width="1000" height="1000" fill="url(#bg4)"/>
+  <!-- 深部の赤い非常灯の気配 -->
+  <ellipse cx="500" cy="330" rx="360" ry="240" fill="#4a1512" opacity="0.14" filter="url(#glow)"/>
+  <ellipse cx="500" cy="880" rx="380" ry="70" fill="#0e0c0a" opacity="0.85" filter="url(#soft)"/>
+
+  <!-- 肉塊本体: 幅3m級 -->
+  <g filter="url(#rough)">
+    <path d="M212 852 C160 740 190 600 268 508 C330 430 430 380 520 372 C640 362 750 420 806 520 C860 616 862 738 812 848 C700 886 320 888 212 852 Z" fill="url(#mass)"/>
+    <!-- 隆起するこぶ -->
+    <ellipse cx="330" cy="560" rx="90" ry="110" fill="#2e3428" opacity="0.9"/>
+    <ellipse cx="640" cy="500" rx="110" ry="120" fill="#333a2c" opacity="0.9"/>
+    <ellipse cx="500" cy="680" rx="140" ry="120" fill="#20251c" opacity="0.9"/>
+    <!-- 突き出た腕たち -->
+    <path d="M232 620 C186 596 152 600 122 626 C100 646 92 672 100 694 L128 688 C126 670 134 654 152 644 C176 630 204 632 232 648 Z" fill="#252b21"/>
+    <path d="M802 574 C846 552 880 556 906 580 C926 600 934 624 926 646 L898 640 C902 622 894 608 878 598 C856 586 830 588 806 602 Z" fill="#252b21"/>
+    <path d="M420 384 C414 344 422 310 444 288 C462 270 486 264 506 272 L500 300 C484 296 470 302 462 318 C452 336 452 360 460 382 Z" fill="#2b3126"/>
+    <path d="M336 850 C320 878 318 902 328 922 L356 916 C350 900 352 882 364 866 Z" fill="#20251c"/>
+    <path d="M688 846 C706 874 710 900 700 922 L672 916 C678 898 674 880 662 864 Z" fill="#20251c"/>
+    <!-- 指先の束 -->
+    <path d="M104 690 C96 706 92 722 94 738 M118 694 C112 710 110 726 112 742 M132 692 C128 708 126 722 128 738" stroke="#1c211a" stroke-width="6" fill="none" stroke-linecap="round"/>
+    <path d="M922 642 C930 658 934 674 932 690 M908 646 C914 662 916 678 914 694 M894 644 C898 660 900 674 898 690" stroke="#1c211a" stroke-width="6" fill="none" stroke-linecap="round"/>
+  </g>
+
+  <!-- 表面に浮かぶ顔たち（すべて笑顔・長い髪が塊に沿って垂れる） -->
+  <!-- 顔1: 中央上・最大 -->
+  <g>
+    <path d="M448 372 C430 470 428 570 444 656 L462 660 C450 570 452 472 468 386 Z" fill="#060708" filter="url(#rough2)"/>
+    <path d="M560 376 C580 474 582 576 566 660 L548 662 C562 574 560 476 544 390 Z" fill="#060708" filter="url(#rough2)"/>
+    <ellipse cx="506" cy="452" rx="52" ry="66" fill="url(#faceG4)"/>
+    <ellipse cx="506" cy="452" rx="52" ry="66" fill="#e2ded0" opacity="0.32" filter="url(#glow)"/>
+    <ellipse cx="486" cy="436" rx="11" ry="13" fill="#12140f"/>
+    <ellipse cx="528" cy="438" rx="11" ry="13" fill="#12140f"/>
+    <circle cx="487" cy="440" r="2.3" fill="#d4d8bf"/>
+    <circle cx="529" cy="442" r="2.3" fill="#d4d8bf"/>
+    <path d="M470 482 C488 508 526 508 544 480 C532 500 518 508 506 508 C494 508 478 498 470 482 Z" fill="#1a120e"/>
+    <path d="M476 488 C490 498 522 498 536 486" stroke="#d8d4bb" stroke-width="4" fill="none" opacity="0.9"/>
+  </g>
+  <!-- 顔2: 左・横向きに半分沈む -->
+  <g transform="rotate(-28 320 592)">
+    <path d="M282 556 C272 610 272 664 282 706 L294 706 C288 662 288 610 296 564 Z" fill="#060708" filter="url(#rough2)"/>
+    <ellipse cx="322" cy="592" rx="38" ry="48" fill="url(#faceG4)" opacity="0.94"/>
+    <ellipse cx="308" cy="580" rx="8" ry="10" fill="#12140f"/>
+    <ellipse cx="338" cy="582" rx="8" ry="10" fill="#12140f"/>
+    <path d="M296 614 C310 632 336 632 348 612 C338 626 328 632 322 632 C312 632 302 626 296 614 Z" fill="#1a120e"/>
+    <!-- 塊への沈み込み -->
+    <path d="M282 622 C300 646 340 650 360 636 C352 656 316 662 292 650 Z" fill="#20251c" opacity="0.9" filter="url(#rough2)"/>
+  </g>
+  <!-- 顔3: 右・上を向いて叫ぶように笑う -->
+  <g transform="rotate(22 664 576)">
+    <path d="M624 540 C616 596 616 650 626 694 L638 692 C632 650 632 600 640 552 Z" fill="#060708" filter="url(#rough2)"/>
+    <ellipse cx="664" cy="576" rx="40" ry="50" fill="url(#faceG4)" opacity="0.95"/>
+    <ellipse cx="648" cy="562" rx="8" ry="10" fill="#12140f"/>
+    <ellipse cx="680" cy="564" rx="8" ry="10" fill="#12140f"/>
+    <path d="M640 596 C654 622 678 622 690 594 C682 614 672 622 664 622 C654 622 646 612 640 596 Z" fill="#1a120e"/>
+    <path d="M646 602 C656 610 674 610 684 600" stroke="#d6d2b9" stroke-width="3.4" fill="none" opacity="0.9"/>
+  </g>
+  <!-- 顔4: 下・半分埋没 -->
+  <g>
+    <path d="M400 738 a40 46 0 0 1 80 6 L400 748 Z" fill="url(#faceG4)" opacity="0.85"/>
+    <ellipse cx="424" cy="742" rx="8" ry="9" fill="#12140f"/>
+    <ellipse cx="456" cy="744" rx="8" ry="9" fill="#12140f"/>
+    <path d="M414 762 C428 774 452 774 466 760 L462 772 C448 780 430 780 418 772 Z" fill="#1a120e"/>
+    <path d="M398 752 C420 770 462 772 484 756 C476 776 442 786 414 776 Z" fill="#20251c" opacity="0.92" filter="url(#rough2)"/>
+    <path d="M406 706 C398 730 396 752 398 772 L408 770 C404 748 408 726 414 708 Z" fill="#060708" filter="url(#rough2)"/>
+  </g>
+  <!-- 塊から垂れる髪の束 -->
+  <path d="M262 700 C258 760 260 816 268 862 L280 858 C272 812 272 758 278 706 Z" fill="#060708" filter="url(#rough2)"/>
+  <path d="M742 692 C750 752 752 810 746 858 L734 854 C740 808 738 754 730 700 Z" fill="#060708" filter="url(#rough2)"/>
+
+  <ellipse cx="500" cy="884" rx="300" ry="30" fill="#000" opacity="0.7" filter="url(#soft)"/>
+  <rect width="1000" height="1000" filter="url(#grain)" opacity="0.5" fill="none"/>
+
+  <text x="40" y="944" font-family="Hiragino Kaku Gothic ProN, sans-serif" font-size="26" fill="#a09a92">案④ 融合塊型（エリア3想定）</text>
+  <text x="40" y="976" font-family="Hiragino Kaku Gothic ProN, sans-serif" font-size="16" fill="#645e58">幅3m級・遅いが巨大／表面に複数の笑う顔が浮かび、動くたび別の顔がこちらを向く／腕が四方から生える</text>
+</svg>

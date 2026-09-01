@@ -1,0 +1,99 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 800" width="1100" height="800">
+  <defs>
+    <radialGradient id="bg2" cx="50%" cy="40%" r="80%">
+      <stop offset="0%" stop-color="#10161a"/>
+      <stop offset="55%" stop-color="#080c0e"/>
+      <stop offset="100%" stop-color="#020304"/>
+    </radialGradient>
+    <linearGradient id="flesh2" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#465a52"/>
+      <stop offset="35%" stop-color="#26332d"/>
+      <stop offset="100%" stop-color="#0d1210"/>
+    </linearGradient>
+    <radialGradient id="faceG2" cx="50%" cy="45%" r="70%">
+      <stop offset="0%" stop-color="#e6e4d2"/>
+      <stop offset="60%" stop-color="#c4c2ac"/>
+      <stop offset="100%" stop-color="#77796a"/>
+    </radialGradient>
+    <linearGradient id="water" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0c1416" stop-opacity="0.0"/>
+      <stop offset="100%" stop-color="#0e1d20" stop-opacity="0.85"/>
+    </linearGradient>
+    <filter id="rough" x="-10%" y="-10%" width="120%" height="120%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.03" numOctaves="3" seed="11" result="n"/>
+      <feDisplacementMap in="SourceGraphic" in2="n" scale="10"/>
+    </filter>
+    <filter id="rough2" x="-15%" y="-15%" width="130%" height="130%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.08" numOctaves="2" seed="31" result="n"/>
+      <feDisplacementMap in="SourceGraphic" in2="n" scale="7"/>
+    </filter>
+    <filter id="soft"><feGaussianBlur stdDeviation="2.5"/></filter>
+    <filter id="glow"><feGaussianBlur stdDeviation="8"/></filter>
+    <filter id="grain">
+      <feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" seed="5"/>
+      <feColorMatrix type="matrix" values="0 0 0 0 0.5 0 0 0 0 0.55 0 0 0 0 0.55 0 0 0 0.06 0"/>
+      <feComposite operator="over" in2="SourceGraphic"/>
+    </filter>
+  </defs>
+
+  <rect width="1100" height="800" fill="url(#bg2)"/>
+  <!-- 下水道の丸トンネルの気配 -->
+  <path d="M180 640 C180 300 920 300 920 640" fill="none" stroke="#131c1e" stroke-width="90" opacity="0.6" filter="url(#soft)"/>
+  <path d="M240 640 C240 360 860 360 860 640" fill="none" stroke="#0a1112" stroke-width="60" opacity="0.8" filter="url(#soft)"/>
+  <!-- 水面 -->
+  <rect x="0" y="612" width="1100" height="188" fill="url(#water)"/>
+  <path d="M60 632 L1040 628" stroke="#20393c" stroke-width="2" opacity="0.5"/>
+
+  <!-- 本体: 低い四足獣・体高0.9m -->
+  <g filter="url(#rough)">
+    <!-- 胴（長く、背骨が浮く） -->
+    <path d="M300 520 C360 452 470 430 590 438 C700 444 790 470 830 516 C842 548 828 574 790 586 C700 606 560 610 440 598 C360 590 306 566 292 544 Z" fill="url(#flesh2)"/>
+    <!-- 背骨の隆起 -->
+    <path d="M340 492 L372 478 L404 470 L440 462 L478 456 L518 452 L560 450 L602 450 L644 452 L686 458 L724 466 L758 478"
+          stroke="#586d60" stroke-width="7" fill="none" stroke-linecap="round" stroke-dasharray="10 16"/>
+    <!-- 前肢2本（人の腕そのもの・肘が外へ） -->
+    <path d="M742 540 C782 556 806 596 810 648 L826 700 L796 706 C782 668 774 636 756 612 C736 588 716 566 704 550 Z" fill="url(#flesh2)"/>
+    <path d="M676 556 C700 584 706 622 700 664 L706 712 L676 712 C668 674 666 640 656 616 C646 592 640 576 636 562 Z" fill="url(#flesh2)"/>
+    <!-- 後肢2本（畳んで沈む） -->
+    <path d="M356 540 C324 560 306 596 304 640 L292 700 L322 706 C334 668 342 638 358 616 C374 594 386 570 392 554 Z" fill="url(#flesh2)"/>
+    <path d="M430 560 C412 588 406 624 412 662 L406 708 L436 710 C444 674 446 642 456 618 C464 596 468 580 470 566 Z" fill="url(#flesh2)"/>
+    <!-- 指（水面に伸びる） -->
+    <path d="M800 700 C806 718 812 734 822 748 M786 704 C788 722 792 740 798 756 M812 696 C822 712 832 726 844 738" stroke="#22302a" stroke-width="6" fill="none" stroke-linecap="round"/>
+    <!-- 首: 胴の先で下へ折れて頭が水面近く -->
+    <path d="M806 500 C852 490 884 502 900 532 C912 556 908 582 892 600 L862 586 C872 570 872 552 860 540 C846 528 826 522 806 526 Z" fill="url(#flesh2)"/>
+  </g>
+
+  <!-- 頭部: 顔が上下逆さ・水面すれすれ -->
+  <g>
+    <!-- 髪: 水面に広がって浮く -->
+    <path d="M846 600 C800 626 740 640 668 642 C716 654 790 652 850 632 Z" fill="#07090a" filter="url(#rough2)"/>
+    <path d="M950 604 C1000 624 1040 642 1064 662 C1020 652 972 640 936 624 Z" fill="#07090a" filter="url(#rough2)"/>
+    <path d="M872 612 C860 656 852 700 852 742 L864 742 C866 700 874 660 884 622 Z" fill="#060708" filter="url(#rough2)"/>
+    <path d="M922 614 C936 658 944 700 946 740 L934 742 C930 702 922 662 912 624 Z" fill="#060708" filter="url(#rough2)"/>
+    <!-- 顔（逆さ） -->
+    <g transform="rotate(180 898 576)">
+      <ellipse cx="898" cy="576" rx="46" ry="58" fill="url(#faceG2)"/>
+      <ellipse cx="898" cy="576" rx="46" ry="58" fill="#e2e0cc" opacity="0.35" filter="url(#glow)"/>
+      <ellipse cx="880" cy="562" rx="10" ry="12" fill="#12140f"/>
+      <ellipse cx="918" cy="562" rx="10" ry="12" fill="#12140f"/>
+      <circle cx="881" cy="565" r="2.2" fill="#d2d8bf"/>
+      <circle cx="919" cy="565" r="2.2" fill="#d2d8bf"/>
+      <path d="M864 596 C880 622 918 622 934 594 C922 614 910 622 898 622 C886 622 872 612 864 596 Z" fill="#1a120e"/>
+      <path d="M870 602 C884 612 914 612 928 600" stroke="#d6d2b9" stroke-width="3.6" fill="none" opacity="0.9"/>
+    </g>
+  </g>
+
+  <!-- 水面の反射（顔の白だけ映る） -->
+  <ellipse cx="898" cy="668" rx="40" ry="10" fill="#c9cdb4" opacity="0.14" filter="url(#glow)"/>
+  <ellipse cx="560" cy="640" rx="240" ry="14" fill="#000" opacity="0.5" filter="url(#soft)"/>
+  <!-- 波紋 -->
+  <g stroke="#2a4448" stroke-width="1.6" fill="none" opacity="0.6">
+    <ellipse cx="820" cy="700" rx="46" ry="8"/>
+    <ellipse cx="820" cy="700" rx="76" ry="13"/>
+    <ellipse cx="300" cy="704" rx="40" ry="7"/>
+  </g>
+  <rect width="1100" height="800" filter="url(#grain)" opacity="0.5" fill="none"/>
+
+  <text x="40" y="742" font-family="Hiragino Kaku Gothic ProN, sans-serif" font-size="26" fill="#96a1a0">案② 人面獣型（エリア2想定）</text>
+  <text x="40" y="774" font-family="Hiragino Kaku Gothic ProN, sans-serif" font-size="16" fill="#5c6866">体高0.9mの四足獣／顔だけ人間で上下逆さ／長い髪が水面に広がる／止まると顔だけ持ち上げてこちらを見る</text>
+</svg>

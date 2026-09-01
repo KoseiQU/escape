@@ -1,0 +1,120 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 1100" width="800" height="1100">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="42%" r="75%">
+      <stop offset="0%" stop-color="#141b17"/>
+      <stop offset="55%" stop-color="#0a0e0c"/>
+      <stop offset="100%" stop-color="#030404"/>
+    </radialGradient>
+    <linearGradient id="flesh" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#111713"/>
+      <stop offset="55%" stop-color="#232d26"/>
+      <stop offset="85%" stop-color="#3d5245"/>
+      <stop offset="100%" stop-color="#57735f"/>
+    </linearGradient>
+    <linearGradient id="jacket" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#23251f"/>
+      <stop offset="60%" stop-color="#3b3e34"/>
+      <stop offset="100%" stop-color="#565a4a"/>
+    </linearGradient>
+    <radialGradient id="faceG" cx="45%" cy="40%" r="70%">
+      <stop offset="0%" stop-color="#e4e6d4"/>
+      <stop offset="60%" stop-color="#c2c7b0"/>
+      <stop offset="100%" stop-color="#7d8570"/>
+    </radialGradient>
+    <radialGradient id="floorGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#1c2a22" stop-opacity="0.9"/>
+      <stop offset="100%" stop-color="#000" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="rough" x="-10%" y="-10%" width="120%" height="120%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.032" numOctaves="3" seed="7" result="n"/>
+      <feDisplacementMap in="SourceGraphic" in2="n" scale="9"/>
+    </filter>
+    <filter id="rough2" x="-15%" y="-15%" width="130%" height="130%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.09" numOctaves="2" seed="21" result="n"/>
+      <feDisplacementMap in="SourceGraphic" in2="n" scale="6"/>
+    </filter>
+    <filter id="soft"><feGaussianBlur stdDeviation="2.2"/></filter>
+    <filter id="glow"><feGaussianBlur stdDeviation="7"/></filter>
+    <filter id="grain">
+      <feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" seed="4"/>
+      <feColorMatrix type="matrix" values="0 0 0 0 0.5 0 0 0 0 0.55 0 0 0 0 0.5 0 0 0 0.06 0"/>
+      <feComposite operator="over" in2="SourceGraphic"/>
+    </filter>
+  </defs>
+
+  <rect width="800" height="1100" fill="url(#bg)"/>
+  <!-- 奥の通路の気配 -->
+  <rect x="330" y="120" width="140" height="520" fill="#0f1512" opacity="0.55" filter="url(#soft)"/>
+  <rect x="352" y="120" width="96" height="500" fill="#050807" opacity="0.9"/>
+  <ellipse cx="400" cy="985" rx="300" ry="60" fill="url(#floorGlow)"/>
+
+  <!-- 本体（身長約2.5m・逆関節） -->
+  <g filter="url(#rough)">
+    <!-- 左脚(画面右)・逆関節: 膝が後ろへ折れる -->
+    <path d="M438 560 C452 640 492 668 470 742 C452 806 430 838 444 902 L470 966 L430 972 C414 918 402 872 414 812 C424 760 400 700 404 640 Z" fill="url(#flesh)"/>
+    <!-- 右脚(画面左) -->
+    <path d="M368 556 C352 642 316 676 340 748 C356 806 372 842 352 908 L322 964 L362 974 C384 918 396 868 386 810 C378 758 402 696 396 636 Z" fill="url(#flesh)"/>
+    <!-- 骨盤〜胴（拘束衣） -->
+    <path d="M356 380 C336 428 340 500 362 566 C386 600 420 600 442 566 C462 498 462 424 444 378 C420 356 380 356 356 380 Z" fill="url(#jacket)"/>
+    <!-- 拘束衣のベルト -->
+    <path d="M352 430 L452 424 L452 440 L352 448 Z" fill="#15160f"/>
+    <path d="M356 494 L450 488 L450 504 L356 512 Z" fill="#15160f"/>
+    <!-- 千切れた袖ストラップ -->
+    <path d="M446 520 C470 560 466 610 452 648 L442 644 C452 606 452 566 436 532 Z" fill="#454838" filter="url(#rough2)"/>
+    <!-- 左腕(画面右)・膝下まで届く -->
+    <path d="M444 392 C486 428 500 500 494 574 C490 648 500 716 486 786 C478 828 466 862 452 886 L438 878 C452 838 462 800 466 754 C472 690 460 630 466 566 C470 502 452 444 428 412 Z" fill="url(#flesh)"/>
+    <!-- 右腕(画面左) -->
+    <path d="M360 394 C320 432 306 502 310 576 C314 650 302 716 316 788 C324 830 334 860 348 884 L362 876 C348 836 340 798 336 752 C330 688 344 630 338 566 C334 502 350 446 374 414 Z" fill="url(#flesh)"/>
+    <!-- 長い指 -->
+    <path d="M448 880 C452 916 450 948 442 976 M456 882 C462 918 462 950 456 978 M438 884 C438 918 434 950 426 974" stroke="#28352c" stroke-width="7" fill="none" stroke-linecap="round"/>
+    <path d="M352 878 C348 914 350 946 358 974 M344 880 C338 916 338 948 344 976 M362 882 C362 916 366 948 374 972" stroke="#28352c" stroke-width="7" fill="none" stroke-linecap="round"/>
+    <!-- 首（長く・傾く） -->
+    <path d="M382 372 C384 344 380 316 388 292 L424 296 C420 322 420 348 418 372 Z" fill="url(#flesh)"/>
+  </g>
+
+  <!-- 点滴スタンド（肩に癒着） -->
+  <g stroke="#4a5350" stroke-width="5" fill="none">
+    <path d="M478 402 C520 380 542 340 544 300"/>
+    <path d="M544 300 L544 214"/>
+    <path d="M520 214 L568 214"/>
+    <path d="M544 214 L544 190"/>
+    <path d="M506 300 L582 300" stroke-width="3"/>
+  </g>
+  <path d="M560 216 C560 246 576 252 576 274 C576 292 560 298 552 288 C544 276 546 250 548 232 Z" fill="#5d1d1d" stroke="#2c0f0f" stroke-width="2"/>
+  <path d="M552 288 C548 330 520 360 486 396" stroke="#57302f" stroke-width="3" fill="none"/>
+
+  <!-- 頭部: 35度傾き＋長い髪＋笑う顔 -->
+  <g transform="rotate(-35 402 258)">
+    <!-- 後ろ髪 -->
+    <path d="M348 214 C332 300 336 396 352 470 C362 474 372 470 376 460 C366 392 362 306 372 232 Z" fill="#08090a" filter="url(#rough2)"/>
+    <path d="M452 216 C470 304 468 402 452 476 C444 482 434 478 430 466 C442 396 444 308 434 232 Z" fill="#08090a" filter="url(#rough2)"/>
+    <!-- 顔 -->
+    <ellipse cx="402" cy="252" rx="52" ry="66" fill="url(#faceG)"/>
+    <ellipse cx="402" cy="252" rx="52" ry="66" fill="#dfe3d1" opacity="0.35" filter="url(#glow)"/>
+    <!-- 目: 落ち窪んだ穴＋点光 -->
+    <ellipse cx="382" cy="236" rx="11" ry="14" fill="#141711"/>
+    <ellipse cx="424" cy="238" rx="11" ry="14" fill="#141711"/>
+    <circle cx="383" cy="240" r="2.4" fill="#cfd8bd"/>
+    <circle cx="425" cy="242" r="2.4" fill="#cfd8bd"/>
+    <!-- 頬のこけ -->
+    <path d="M362 264 C370 276 372 286 370 296" stroke="#8a917c" stroke-width="4" fill="none" opacity="0.6"/>
+    <path d="M444 266 C438 278 436 288 438 298" stroke="#8a917c" stroke-width="4" fill="none" opacity="0.6"/>
+    <!-- 笑い: 広すぎる三日月 -->
+    <path d="M366 284 C384 310 422 310 440 282 C428 302 414 310 402 310 C388 310 374 300 366 284 Z" fill="#1c130f"/>
+    <path d="M372 290 C388 302 418 302 434 288" stroke="#d8d4bb" stroke-width="4" fill="none" opacity="0.9"/>
+    <path d="M366 284 C384 306 422 306 440 282" stroke="#3a231c" stroke-width="2" fill="none"/>
+    <!-- 前髪の垂れ（重力方向＝傾きと逆にずれる） -->
+    <g transform="rotate(35 402 258)">
+      <path d="M378 196 C366 260 362 330 366 392 L374 394 C372 330 378 262 388 204 Z" fill="#060708"/>
+      <path d="M416 198 C424 262 428 334 424 398 L414 398 C418 332 412 262 404 202 Z" fill="#060708"/>
+      <path d="M398 194 C394 244 392 300 394 350 L402 350 C402 298 404 244 408 198 Z" fill="#0a0b0c"/>
+    </g>
+  </g>
+
+  <!-- 床の影 -->
+  <ellipse cx="398" cy="978" rx="150" ry="24" fill="#000" opacity="0.75" filter="url(#soft)"/>
+  <rect width="800" height="1100" filter="url(#grain)" opacity="0.5" fill="none"/>
+
+  <text x="40" y="1044" font-family="Hiragino Kaku Gothic ProN, sans-serif" font-size="26" fill="#9aa392">案① 逆関節・長肢型（エリア1想定）</text>
+  <text x="40" y="1076" font-family="Hiragino Kaku Gothic ProN, sans-serif" font-size="16" fill="#5f675b">身長約2.5m／首が常にこちらへ傾く／拘束衣と点滴スタンドが癒着／指が膝下まで届く</text>
+</svg>

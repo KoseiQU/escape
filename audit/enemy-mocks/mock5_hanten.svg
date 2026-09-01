@@ -1,0 +1,96 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 800" width="1100" height="800">
+  <defs>
+    <radialGradient id="bg5" cx="50%" cy="40%" r="80%">
+      <stop offset="0%" stop-color="#131614"/>
+      <stop offset="55%" stop-color="#090b0a"/>
+      <stop offset="100%" stop-color="#020303"/>
+    </radialGradient>
+    <linearGradient id="flesh5" x1="0" y1="1" x2="0" y2="0">
+      <stop offset="0%" stop-color="#0d110e"/>
+      <stop offset="55%" stop-color="#242b24"/>
+      <stop offset="100%" stop-color="#4b5c4d"/>
+    </linearGradient>
+    <radialGradient id="faceG5" cx="48%" cy="44%" r="70%">
+      <stop offset="0%" stop-color="#e7e4d4"/>
+      <stop offset="60%" stop-color="#c4c1ae"/>
+      <stop offset="100%" stop-color="#79786b"/>
+    </radialGradient>
+    <filter id="rough" x="-10%" y="-10%" width="120%" height="120%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.03" numOctaves="3" seed="29" result="n"/>
+      <feDisplacementMap in="SourceGraphic" in2="n" scale="9"/>
+    </filter>
+    <filter id="rough2" x="-15%" y="-15%" width="130%" height="130%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.09" numOctaves="2" seed="61" result="n"/>
+      <feDisplacementMap in="SourceGraphic" in2="n" scale="7"/>
+    </filter>
+    <filter id="soft"><feGaussianBlur stdDeviation="2.4"/></filter>
+    <filter id="glow"><feGaussianBlur stdDeviation="8"/></filter>
+    <filter id="grain">
+      <feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" seed="9"/>
+      <feColorMatrix type="matrix" values="0 0 0 0 0.5 0 0 0 0 0.54 0 0 0 0 0.5 0 0 0 0.06 0"/>
+      <feComposite operator="over" in2="SourceGraphic"/>
+    </filter>
+  </defs>
+
+  <rect width="1100" height="800" fill="url(#bg5)"/>
+  <!-- 廊下の消失点と明滅灯 -->
+  <path d="M120 120 L980 120 L860 560 L240 560 Z" fill="#0d1210" opacity="0.5"/>
+  <rect x="470" y="128" width="150" height="16" fill="#9fb8ab" opacity="0.55" filter="url(#glow)"/>
+  <rect x="500" y="130" width="90" height="10" fill="#d9e6dc" opacity="0.8"/>
+  <ellipse cx="545" cy="620" rx="330" ry="46" fill="#10130f" opacity="0.85" filter="url(#soft)"/>
+
+  <!-- 本体: ブリッジ姿勢（腹が天井側）で疾走 -->
+  <g filter="url(#rough)">
+    <!-- 反り返った胴（腹側が上） -->
+    <path d="M330 470 C380 360 480 300 590 296 C700 292 790 340 830 428 C810 452 780 458 750 448 C700 396 640 372 578 376 C500 380 428 424 384 486 C362 494 342 486 330 470 Z" fill="url(#flesh5)"/>
+    <!-- 浮き出た肋骨（腹側） -->
+    <g stroke="#5b6f5e" stroke-width="6" fill="none" stroke-linecap="round" opacity="0.85">
+      <path d="M520 320 C540 336 566 344 594 344"/>
+      <path d="M486 336 C508 354 538 364 570 364"/>
+      <path d="M456 360 C478 378 508 388 540 390"/>
+      <path d="M640 316 C660 326 682 330 704 328"/>
+    </g>
+    <!-- 腕2本（頭側で床を掴む） -->
+    <path d="M792 428 C830 452 852 492 858 540 L874 596 L842 604 C830 562 820 528 800 504 C780 480 762 462 750 448 Z" fill="url(#flesh5)"/>
+    <path d="M718 434 C742 462 750 500 746 542 L752 596 L720 596 C712 558 710 524 700 500 C690 476 684 458 680 446 Z" fill="url(#flesh5)"/>
+    <!-- 脚2本（逆側・膝が天井へ尖る） -->
+    <path d="M398 470 C370 440 350 400 356 356 C338 396 342 448 372 492 C348 516 336 552 338 592 L370 598 C372 562 382 532 402 510 C416 494 414 480 398 470 Z" fill="url(#flesh5)"/>
+    <path d="M470 432 C452 396 448 356 462 318 C438 352 434 404 456 452 C436 480 428 518 432 560 L464 562 C462 526 470 496 486 476 C498 460 492 444 470 432 Z" fill="url(#flesh5)"/>
+    <!-- 手指: 床に食い込む -->
+    <path d="M848 600 C854 616 862 630 874 642 M832 606 C834 622 838 638 846 652 M862 594 C872 608 882 620 894 630" stroke="#212b22" stroke-width="6" fill="none" stroke-linecap="round"/>
+    <path d="M726 592 C726 610 730 626 738 640 M712 592 C710 610 712 626 718 640" stroke="#212b22" stroke-width="6" fill="none" stroke-linecap="round"/>
+  </g>
+
+  <!-- 頭部: 胴の下から180度ねじれて正面を向く -->
+  <g>
+    <!-- 首のねじれ -->
+    <path d="M804 446 C818 470 822 496 816 520 L780 516 C786 494 784 470 774 452 Z" fill="url(#flesh5)" filter="url(#rough2)"/>
+    <path d="M780 470 C796 476 810 474 818 466 M778 488 C794 494 810 492 820 484" stroke="#1a221c" stroke-width="3" fill="none" opacity="0.8"/>
+    <!-- 長い髪: 床へ流れ落ちて引きずられる -->
+    <path d="M756 540 C716 570 664 588 604 594 C664 604 730 596 776 570 Z" fill="#07090a" filter="url(#rough2)"/>
+    <path d="M846 548 C888 574 924 596 948 620 C908 608 866 592 836 572 Z" fill="#07090a" filter="url(#rough2)"/>
+    <path d="M782 556 C774 600 770 642 772 680 L784 680 C784 642 790 602 798 566 Z" fill="#060708" filter="url(#rough2)"/>
+    <path d="M824 558 C834 600 838 640 838 678 L826 678 C826 642 820 604 812 566 Z" fill="#060708" filter="url(#rough2)"/>
+    <!-- 顔（正位置でこちらを見る） -->
+    <ellipse cx="802" cy="548" rx="46" ry="56" fill="url(#faceG5)"/>
+    <ellipse cx="802" cy="548" rx="46" ry="56" fill="#e3e0d0" opacity="0.35" filter="url(#glow)"/>
+    <ellipse cx="784" cy="534" rx="10" ry="12" fill="#12140f"/>
+    <ellipse cx="822" cy="536" rx="10" ry="12" fill="#12140f"/>
+    <circle cx="785" cy="538" r="2.2" fill="#d2d8bf"/>
+    <circle cx="823" cy="540" r="2.2" fill="#d2d8bf"/>
+    <path d="M768 570 C784 596 820 596 836 568 C824 588 812 596 802 596 C790 596 776 586 768 570 Z" fill="#1a120e"/>
+    <path d="M774 576 C788 586 818 586 832 574" stroke="#d7d3ba" stroke-width="3.6" fill="none" opacity="0.9"/>
+  </g>
+
+  <!-- 疾走の気配（後方に流れる残像） -->
+  <g opacity="0.25" filter="url(#soft)">
+    <path d="M330 452 C300 448 272 452 250 462" stroke="#3c4a3e" stroke-width="10" fill="none" stroke-linecap="round"/>
+    <path d="M356 500 C324 500 296 506 274 518" stroke="#3c4a3e" stroke-width="8" fill="none" stroke-linecap="round"/>
+  </g>
+
+  <ellipse cx="580" cy="612" rx="260" ry="20" fill="#000" opacity="0.7" filter="url(#soft)"/>
+  <rect width="1100" height="800" filter="url(#grain)" opacity="0.5" fill="none"/>
+
+  <text x="40" y="716" font-family="Hiragino Kaku Gothic ProN, sans-serif" font-size="26" fill="#98a196">案⑤ 反転歩行型</text>
+  <text x="40" y="748" font-family="Hiragino Kaku Gothic ProN, sans-serif" font-size="16" fill="#5e6660">ブリッジ姿勢のまま高速で這う／首だけ180度ねじれて常に正面を向く／長い髪が床を引きずられて音を立てる</text>
+</svg>
