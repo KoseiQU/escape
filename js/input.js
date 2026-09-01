@@ -64,6 +64,11 @@
     return this._keyRun || this._btnRunTouchId !== null || this._btnRunMouse === true;
   };
 
+  /** 「調べる」の押しっぱなし（牢の格子の長押しこじ開けに使う） */
+  Input.prototype.isInteractHeld = function () {
+    return !!this._keys.KeyE || this._interactHeld === true;
+  };
+
   /** 全入力を初期状態へ（runAll後の完全復帰・フォーカス喪失時に使用） */
   Input.prototype.reset = function () {
     this.moveX = 0; this.moveY = 0;
@@ -77,6 +82,7 @@
     this._touchLookId = null;
     this._btnRunTouchId = null;
     this._btnRunMouse = false;
+    this._interactHeld = false;
     this._mouseDragging = false;
     this._updateStickVisual(false, 0, 0);
     this._syncButtonVisual();
@@ -307,6 +313,15 @@
 
     bindTap(d.btnCrouch, function () { self.crouchOn = !self.crouchOn; self._syncButtonVisual(); });
     bindTap(d.btnInteract, function () { self.interactQueued++; });
+
+    /* 「調べる」の押しっぱなし判定（長押しでの牢脱出。押下回数はbindTapが担う） */
+    if (d.btnInteract) {
+      d.btnInteract.addEventListener('touchstart', function () { self._interactHeld = true; }, { passive: false });
+      d.btnInteract.addEventListener('touchend', function () { self._interactHeld = false; }, { passive: false });
+      d.btnInteract.addEventListener('touchcancel', function () { self._interactHeld = false; });
+      d.btnInteract.addEventListener('mousedown', function () { self._interactHeld = true; });
+      document.addEventListener('mouseup', function () { self._interactHeld = false; });
+    }
   };
 
   Input.STICK_RADIUS = STICK_RADIUS;

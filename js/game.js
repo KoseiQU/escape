@@ -132,11 +132,12 @@
       crouch: input.crouchOn
     });
 
-    // 3) 調べる（P1は押下ログのみ。対象判定はP4）
+    // 3) 調べる（ロッカー・板・牢の格子はP3b、メモ・仕掛けはP4）
     var n = input.consumeInteract();
     for (var i = 0; i < n; i++) {
       this.stats.interacts++;
-      if (global.console && console.log) {
+      var handled = this.stealth ? this.stealth.onInteract() : false;
+      if (!handled && global.console && console.log) {
         console.log('[ESCAPE] interact: cell(' + this.player.col() + ',' + this.player.row() + ') pos(' +
           this.player.x.toFixed(2) + ',' + this.player.z.toFixed(2) + ')');
       }
@@ -144,6 +145,12 @@
 
     this.simTime += dt;
     this.frameCount++;
+
+    // 4) ステルス機構（音イベント発生・ロッカー・牢）→ 敵AI の順で更新する。
+    //    プレイヤーの移動結果を見てから敵が知覚するため、同フレームの音も拾える。
+    if (this.stealth) this.stealth.step(dt);
+    if (this.ai) this.ai.step(dt);
+
     /* 蛍光灯のチラつき（ゲーム内時刻駆動＝__pumpでも同じ絵になる） */
     if (this.world && this.world.update) this.world.update(this.simTime);
     this.syncCamera();
@@ -167,13 +174,19 @@
     if (!el) return;
     var p = this.player;
     var w = this.world && this.world.stats;
+    var ai = this.ai, st = this.stealth;
     el.textContent =
-      'ESCAPE P2 / ' + this.map.name + '\n' +
+      'ESCAPE P3b / ' + this.map.name + '\n' +
       'cell (' + p.col() + ',' + p.row() + ')  pos ' + p.x.toFixed(2) + ', ' + p.z.toFixed(2) +
         '  floorY ' + p.y.toFixed(2) + '\n' +
       'yaw ' + (p.yaw * 180 / Math.PI).toFixed(0) + '°  ' + p.mode + '  ' + p.speed.toFixed(2) + ' m/s' +
       (w ? ('\ntri ' + w.triangles + '  draw ' + this.renderer.info.render.calls +
-            '  灯 ' + w.fixtures + '  build ' + w.buildMs.toFixed(0) + 'ms') : '');
+            '  灯 ' + w.fixtures + '  build ' + w.buildMs.toFixed(0) + 'ms') : '') +
+      (ai ? ('\n敵 ' + ai.state + '/' + ai.form + '  d ' +
+             Math.hypot(ai.enemy.x - p.x, ai.enemy.z - p.z).toFixed(1) + 'm  視界 ' +
+             ai.sightRange(p).toFixed(1) + 'm  ' + (ai.sees ? '発見中' : '未発見')) : '') +
+      (st ? ('\n牢 ' + st.jail.phase + '  捕獲' + st.captures + '  ' +
+             (st.inLocker() ? 'ロッカー内' : '—')) : '');
   };
 
   /** 製品初期状態へ完全復帰（runAll の後始末にも使う） */
@@ -190,6 +203,12 @@
     this.frameCount = 0;
     this._accum = 0;
     this._last = (global.performance ? performance.now() : Date.now());
+    /* P3b: 進行状態・音イベント・ステルス・敵AI も製品初期状態へ戻す
+       （stealth → ai の順。ai.reset は新しい map/world を参照する） */
+    this.progress = { flags: {} };
+    if (ESCAPE.noise) ESCAPE.noise.reset();
+    if (this.stealth) this.stealth.reset();
+    if (this.ai) this.ai.reset();
     this.syncCamera();
     this.updateChrome();
     return this;

@@ -472,6 +472,524 @@
     t.ok(undeclared === 0, 'area1: 12マス超の直線は全てmeta.regionsで宣言済み', undeclared + '本が未宣言');
   }
 
+  /* ================================================================
+   * P3b: 敵AI・ステルス機構（契約 DESIGN.md §4 / §6）
+   * ============================================================== */
+
+  /** 本番と同じ1論理ステップを n 回（stepFrame は敵AIまで含む） */
+  function sim(g, n) {
+    var dt = ESCAPE.FIXED_DT;
+    for (var i = 0; i < n; i++) g.stepFrame(dt);
+  }
+  /** 条件が満たされるまで進める。満たせたフレーム数、駄目なら -1 */
+  function simUntil(g, cond, maxFrames) {
+    var dt = ESCAPE.FIXED_DT;
+    for (var i = 0; i < maxFrames; i++) {
+      if (cond()) return i;
+      g.stepFrame(dt);
+    }
+    return cond() ? maxFrames : -1;
+  }
+  /** 敵をマスに置いて経路を捨てる */
+  function placeEnemy(g, col, row, yawDeg) {
+    g.ai.enemy.placeCell(col, row, yawDeg === undefined ? 180 : yawDeg, g.map);
+    g.ai.path = null; g.ai.goal = null; g.ai.repathT = 0;
+  }
+  /** 直線で並ぶ3マス（間が壁 / 間が床）を探す */
+  function findTriple(map, wallBetween) {
+    var cells = map.walkableCells();
+    for (var i = 0; i < cells.length; i++) {
+      var c = cells[i];
+      var midSolid = map.isSolid(c.col + 1, c.row);
+      if (!map.isWalkable(c.col + 2, c.row)) continue;
+      if (wallBetween ? midSolid : !midSolid) return c;
+    }
+    return null;
+  }
+  /** (col,row) へ2マス手前から直進で入れる開始点を探す */
+  function approachTo(map, col, row) {
+    var D = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+    for (var i = 0; i < 4; i++) {
+      var dc = D[i][0], dr = D[i][1];
+      if (!map.isWalkable(col + dc, row + dr)) continue;
+      if (!map.isWalkable(col + dc * 2, row + dr * 2)) continue;
+      /* 開始点から (col,row) へ向く yaw（forward = (-sin,-cos)） */
+      var yaw = Math.atan2(dc, dr) * 180 / Math.PI;
+      return { col: col + dc * 2, row: row + dr * 2, yawDeg: yaw };
+    }
+    return null;
+  }
+
+  function testEnemyTuning(t, g) {
+    var T = ESCAPE.ENEMY_TUNING;
+    if (!t.ok(!!T, '敵AI: バランス定数が1オブジェクトに集約されている')) return;
+    t.ok(T.chaseSpeed > ESCAPE.Player.SPEED_RUN, '敵AI: 追跡速度がプレイヤー走りより速い',
+      T.chaseSpeed + ' > ' + ESCAPE.Player.SPEED_RUN);
+    t.ok(T.patrolSpeed < ESCAPE.Player.SPEED_WALK, '敵AI: 巡回速度は歩きより遅い', T.patrolSpeed);
+    t.near(T.fovDeg, 110, 1e-9, '敵AI: 視野角110度');
+    t.near(T.sightLit, 12, 1e-9, '敵AI: 明所の発見距離12m');
+    t.near(T.sightDark, 5, 1e-9, '敵AI: 暗所の発見距離5m');
+    t.near(T.crouchFactor, 0.40, 1e-9, '敵AI: しゃがみで発見距離40%');
+    t.near(T.searchDur, 8, 1e-9, '敵AI: 探索8秒で巡回へ復帰');
+    t.ok(T.captureLimit === 3, '敵AI: 同一エリア3回目の捕獲でエリア最初から', T.captureLimit);
+    t.ok(!!g.ai && !!g.ai.enemy, '敵AI: area1で敵1体が常時稼働');
+    t.ok(!!g.ai && g.ai.enemy.group.visible, '敵AI: 敵がシーンに出ている');
+    t.ok(typeof ESCAPE.noise.emit === 'function', '音イベントAPI ESCAPE.noise.emit(x,z,radius) が存在');
+    t.ok(typeof ESCAPE.noise.emitCell === 'function', '音イベントAPI emitCell が存在');
+  }
+
+  function testPatrolData(t, g) {
+    var map = ESCAPE.Maps.load('area1'), meta = map.meta;
+    var route = meta.patrol || [];
+    t.ok(route.length >= 4, 'area1: 巡回路が4地点以上ある', route.length + '地点');
+    var seen = map.floodFrom(meta.spawn.col, meta.spawn.row);
+    var bad = [];
+    for (var i = 0; i < route.length; i++) {
+      var n = route[i];
+      if (!map.isWalkable(n.col, n.row) || !seen[n.col + ',' + n.row]) bad.push(n.col + ',' + n.row);
+    }
+    t.ok(bad.length === 0, 'area1: 巡回地点が全て歩行可能かつ到達可能', bad.join(' / '));
+    var sp = meta.enemySpawn;
+    t.ok(!!sp && map.isWalkable(sp.col, sp.row) && seen[sp.col + ',' + sp.row],
+      'area1: 敵スポーンが歩行可能かつ到達可能');
+    /* 巡回起点は拘束室から離す（契約: 牢送り直後に鉢合わせない） */
+    var cells = meta.cells || [], cx = 0, cz = 0;
+    for (var j = 0; j < cells.length; j++) { cx += cells[j].col; cz += cells[j].row; }
+    cx /= cells.length; cz /= cells.length;
+    var d = Math.hypot(sp.col - cx, sp.row - cz) * map.tileSize;
+    t.ok(d >= 20, 'area1: 敵スポーンが拘束室から20m以上離れている', d.toFixed(1) + 'm');
+    /* センサー・板は壁付きの造形（表示灯/ビーム・立てかけた板）を持てる位置にあること。
+       壁が無いマスに置くと造形が丸ごと描かれず「見えない罠」になる（P3bで実際に踏んだ不具合の同類検出）。 */
+    var noWall = [];
+    var lists = [['センサー', meta.sensors || []], ['板', meta.boards || []]];
+    for (var li = 0; li < lists.length; li++) {
+      for (var mi = 0; mi < lists[li][1].length; mi++) {
+        var e2 = lists[li][1][mi];
+        if (!g.world._wallDirOf(e2.col, e2.row)) noWall.push(lists[li][0] + '(' + e2.col + ',' + e2.row + ')');
+      }
+    }
+    t.ok(noWall.length === 0, 'area1: センサー・板が壁付きの造形を持てる位置にある', noWall.join(' / '));
+
+    var jc = meta.jailCell;
+    t.ok(!!jc && map.tileAt(jc.col, jc.row) === ESCAPE.TILE.CELL, 'area1: 牢送り先が拘束室(CELL)マス');
+    /* 鉄格子のある房は通り抜け不可・破られた房だけ通れる（描画と当たりの整合） */
+    var barred = 0, openable = 0, cellsList = meta.cells || [];
+    for (var ci = 0; ci < cellsList.length; ci++) {
+      var cc2 = cellsList[ci];
+      var isOpen = false, oc2 = meta.cellOpenings || [];
+      for (var oi = 0; oi < oc2.length; oi++) if (oc2[oi].col === cc2.col && oc2[oi].row === cc2.row) isOpen = true;
+      if (g.map.isBlocked(cc2.col, cc2.row)) barred++;
+      if (isOpen && !g.map.isBlocked(cc2.col, cc2.row)) openable++;
+    }
+    t.ok(barred === cellsList.length - (meta.cellOpenings || []).length,
+      'area1: 鉄格子のある房は当たり判定でも通れない', barred + '房');
+    t.ok(openable === (meta.cellOpenings || []).length, 'area1: 破られた房は通れる', openable + '房');
+    /* 実際に押し込んでも房に入れないこと */
+    var barCell = null;
+    for (var bi = 0; bi < cellsList.length && !barCell; bi++) {
+      if (g.map.isBlocked(cellsList[bi].col, cellsList[bi].row)) barCell = cellsList[bi];
+    }
+    if (barCell) {
+      var D2 = [[1, 0], [-1, 0], [0, 1], [0, -1]], from = null;
+      for (var di = 0; di < 4; di++) {
+        var nc2 = barCell.col + D2[di][0], nr2 = barCell.row + D2[di][1];
+        if (g.map.isWalkable(nc2, nr2) && !g.map.isBlocked(nc2, nr2) &&
+            g.map.tileAt(nc2, nr2) !== ESCAPE.TILE.CELL) { from = { c: nc2, r: nr2, d: D2[di] }; }
+      }
+      if (from) {
+        place(g, from.c, from.r, 0);
+        for (var s2 = 0; s2 < 40; s2++) g.player.moveBy(-from.d[0] * 0.08, -from.d[1] * 0.08);
+        t.ok(!(g.player.col() === barCell.col && g.player.row() === barCell.row),
+          'area1: 鉄格子を押しても房に入れない', g.player.col() + ',' + g.player.row());
+        g.player.reset();
+      }
+    }
+    var opened = false, oc = meta.cellOpenings || [];
+    for (var k = 0; k < oc.length; k++) if (oc[k].col === jc.col && oc[k].row === jc.row) opened = true;
+    t.ok(opened, 'area1: 牢送り先は「破られた房」＝出る動線がある');
+  }
+
+  function testVision(t, g) {
+    g.reset();
+    var ai = g.ai, T = ESCAPE.ENEMY_TUNING;
+    /* 見通しのある3マス: 4m先のプレイヤーは（暗所の5mでも）見える */
+    var open = findTriple(g.map, false);
+    if (t.ok(!!open, '視界検証に使える見通しの3マスがある')) {
+      placeEnemy(g, open.col, open.row, -90);          /* yaw -90° → 前方は +X */
+      place(g, open.col + 2, open.row, 0);
+      g.player.crouching = false;
+      t.ok(ai.canSeePlayer(), '視界: 正面4mのプレイヤーを見つける');
+      /* 視野角の外（真後ろ）は見えない */
+      placeEnemy(g, open.col, open.row, 90);
+      t.ok(!ai.canSeePlayer(), '視界: 視野角の外（背後）は見つけない');
+      /* しゃがみは発見距離が大幅に減る */
+      placeEnemy(g, open.col, open.row, -90);
+      var rStand = ai.sightRange();
+      g.player.crouching = true;
+      var rCrouch = ai.sightRange();
+      g.player.crouching = false;
+      t.near(rCrouch / rStand, T.crouchFactor, 1e-6, '視界: しゃがみで発見距離が40%になる');
+      t.ok(rCrouch < rStand, '視界: しゃがみ距離 < 立ち距離', rCrouch.toFixed(2) + ' < ' + rStand.toFixed(2));
+    }
+    /* 壁越しには見えない */
+    var wall = findTriple(g.map, true);
+    if (t.ok(!!wall, '視界検証に使える壁ごしの3マスがある')) {
+      placeEnemy(g, wall.col, wall.row, -90);
+      place(g, wall.col + 2, wall.row, 0);
+      t.ok(!ai.canSeePlayer(), '視界: 壁越しには見つからない（遮蔽レイキャスト）');
+    }
+    /* ロッカー内は不可視 */
+    var lockers = g.map.meta.lockers || [], lk = null, side = null;
+    var D = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+    for (var i = 0; i < lockers.length && !lk; i++) {
+      for (var d = 0; d < 4; d++) {
+        var nc = lockers[i].col + D[d][0], nr = lockers[i].row + D[d][1];
+        if (g.map.isWalkable(nc, nr)) { lk = lockers[i]; side = { col: nc, row: nr }; break; }
+      }
+    }
+    if (t.ok(!!lk, '視界検証に使えるロッカーがある')) {
+      place(g, side.col, side.row, 0);
+      g.player.yaw = Math.atan2(-(lk.col - side.col), -(lk.row - side.row));
+      placeEnemy(g, side.col, side.row, 0);
+      g.ai.enemy.x = g.player.x + 1.6; g.ai.enemy.z = g.player.z;
+      g.ai.enemy.facing = Math.PI / 2;          /* 前方 -X ＝ プレイヤーの方を向く */
+      t.ok(ai.canSeePlayer(), '視界: ロッカーに入る前は見つかる（前提）');
+      t.ok(g.stealth.onInteract(), 'ロッカー: 「調べる」で入れる');
+      t.ok(g.stealth.inLocker(), 'ロッカー: 中に入っている');
+      t.ok(!ai.canSeePlayer(), '視界: ロッカー内は不可視');
+      /* 中では移動できない */
+      var lx = g.player.x, lz = g.player.z;
+      g.input.moveY = 1;
+      sim(g, 30);
+      g.input.reset();
+      t.ok(Math.hypot(g.player.x - lx, g.player.z - lz) < 1e-6, 'ロッカー: 中では移動できない');
+      t.ok(g.stealth.onInteract(), 'ロッカー: 「調べる」で出られる');
+      t.ok(!g.stealth.inLocker(), 'ロッカー: 外に出ている');
+      t.ok(!g.player.collidesAt(g.player.x, g.player.z), 'ロッカー: 出た先で壁に埋まっていない');
+    }
+    /* 暗所では発見距離が落ちる */
+    var dark = { col: 4, row: 22 }, lit = { col: 7, row: 46 };
+    place(g, dark.col, dark.row, 0);
+    var rDark = ai.sightRange();
+    place(g, lit.col, lit.row, 0);
+    var rLit = ai.sightRange();
+    t.ok(rDark <= T.sightDark + 0.3, '視界: 暗い区画では発見距離が5m相当まで落ちる', rDark.toFixed(2) + 'm');
+    t.ok(rLit >= 9.0, '視界: 明るい区画では発見距離が伸びる', rLit.toFixed(2) + 'm');
+    t.ok(rLit > rDark + 3, '視界: 明所 > 暗所', rLit.toFixed(2) + ' > ' + rDark.toFixed(2));
+    g.reset();
+  }
+
+  function testNoiseEvents(t, g) {
+    var TILE = ESCAPE.TILE, ai = g.ai, st = g.stealth;
+
+    /* 音地盤: 走って踏むと敵が調査に来る / 歩きでは無音 */
+    function runOver(col, row, running) {
+      g.reset();
+      var ap = approachTo(g.map, col, row);
+      if (!ap) return null;
+      /* 敵は音は届くが姿は見えない位置に置く（壁越し） */
+      var target = g.map.cellCenter(col, row);
+      var start = g.map.cellCenter(ap.col, ap.row);
+      var cells = g.map.walkableCells(), spot = null;
+      for (var i = 0; i < cells.length && !spot; i++) {
+        var c = g.map.cellCenter(cells[i].col, cells[i].row);
+        var d = Math.hypot(c.x - target.x, c.z - target.z);
+        if (d < 6 || d > 15) continue;
+        if (!ai.blockedLine(c.x, c.z, target.x, target.z)) continue;
+        if (!ai.blockedLine(c.x, c.z, start.x, start.z)) continue;
+        spot = cells[i];
+      }
+      if (!spot) return null;
+      placeEnemy(g, spot.col, spot.row, 0);
+      ai.state = 'patrol'; ai.stateTime = 0;
+      place(g, ap.col, ap.row, ap.yawDeg);
+      g.input.moveY = 1;
+      g.input._keyRun = !!running;
+      var frames = simUntil(g, function () {
+        return g.player.col() === col && g.player.row() === row;
+      }, 200);
+      sim(g, 2);
+      g.input.reset();
+      return { frames: frames, state: ai.state };
+    }
+
+    var noiseCell = null, list = g.map.meta.noise || [];
+    for (var i = 0; i < list.length && !noiseCell; i++) {
+      if (approachTo(g.map, list[i].col, list[i].row)) noiseCell = list[i];
+    }
+    if (t.ok(!!noiseCell, '音地盤の検証に使えるマスがある')) {
+      var r1 = runOver(noiseCell.col, noiseCell.row, true);
+      if (t.ok(!!r1 && r1.frames >= 0, '音地盤: 走って踏むまで実移動できた')) {
+        t.ok(st.noiseSteps === 1, '音地盤: 走って踏むと音イベントが1回鳴る', st.noiseSteps);
+        t.ok(r1.state === 'investigate', '音地盤: 走って踏むと敵が調査状態になる', r1.state);
+      }
+      var r2 = runOver(noiseCell.col, noiseCell.row, false);
+      if (t.ok(!!r2 && r2.frames >= 0, '音地盤: 歩いて踏むまで実移動できた')) {
+        t.ok(st.noiseSteps === 0, '音地盤: 歩き（走らない）は無音', st.noiseSteps);
+        t.ok(r2.state === 'patrol', '音地盤: 歩きでは敵は巡回のまま', r2.state);
+      }
+    }
+
+    /* センサー: 走って通ると警報 / 歩けば鳴らない */
+    var sensors = g.map.meta.sensors || [], sc = null;
+    for (var j = 0; j < sensors.length && !sc; j++) {
+      if (approachTo(g.map, sensors[j].col, sensors[j].row)) sc = sensors[j];
+    }
+    if (t.ok(!!sc, 'センサーの検証に使えるマスがある')) {
+      t.ok(g.map.tileAt(sc.col, sc.row) === TILE.SENSOR, 'センサー: タイル種別が SENSOR');
+      var r3 = runOver(sc.col, sc.row, true);
+      if (t.ok(!!r3 && r3.frames >= 0, 'センサー: 走って通過するまで実移動できた')) {
+        t.ok(st.alarms === 1, 'センサー: 走って通ると警報が鳴る', st.alarms);
+        t.ok(r3.state === 'investigate', 'センサー: 警報で敵が調査に来る', r3.state);
+      }
+      var r4 = runOver(sc.col, sc.row, false);
+      if (t.ok(!!r4 && r4.frames >= 0, 'センサー: 歩いて通過するまで実移動できた')) {
+        t.ok(st.alarms === 0, 'センサー: 歩けば警報は鳴らない', st.alarms);
+      }
+    }
+
+    /* P4向けAPI: 任意地点の音で調査に来る */
+    g.reset();
+    var e = ai.enemy;
+    ESCAPE.noise.emit(e.x + 4, e.z, 20, 'gimmick');
+    sim(g, 1);
+    t.ok(ai.state === 'investigate', '音API: ESCAPE.noise.emit で調査状態になる', ai.state);
+    /* 遠すぎる音は聞こえない */
+    g.reset();
+    ESCAPE.noise.emit(ai.enemy.x + 60, ai.enemy.z + 60, 4, 'far');
+    sim(g, 1);
+    t.ok(ai.state === 'patrol', '音API: 半径外の音には反応しない', ai.state);
+    g.reset();
+  }
+
+  function testEnemyStateMachine(t, g) {
+    g.reset();
+    var ai = g.ai, st = g.stealth, T = ESCAPE.ENEMY_TUNING;
+    t.ok(ai.state === 'patrol', '状態機械: 初期は巡回', ai.state);
+    t.ok(ai.form === 'stand', '状態機械: 巡回は直立形態', ai.form);
+
+    var x0 = ai.enemy.x, z0 = ai.enemy.z;
+    sim(g, 180);
+    var moved = Math.hypot(ai.enemy.x - x0, ai.enemy.z - z0);
+    t.ok(moved > 1.0, '状態機械: 巡回で経路上を歩く', moved.toFixed(2) + 'm');
+    t.ok(ai.state === 'patrol', '状態機械: 誰も居なければ巡回のまま', ai.state);
+
+    /* 調査 */
+    ESCAPE.noise.emit(ai.enemy.x + 5, ai.enemy.z + 2, 20, 'test');
+    sim(g, 1);
+    t.ok(ai.state === 'investigate', '状態機械: 巡回 → 調査', ai.state);
+
+    /* 追跡（見通しのある3マスで正面に立つ） */
+    var open = findTriple(g.map, false);
+    placeEnemy(g, open.col, open.row, -90);
+    place(g, open.col + 2, open.row, 0);
+    g.player.crouching = false;
+    sim(g, 1);
+    t.ok(ai.state === 'chase', '状態機械: 発見で追跡へ', ai.state);
+    t.ok(ai.form === 'crawl', '状態機械: 追跡は反転形態へ遷移する', ai.form);
+    t.ok(ai.enemy.state === 'trans' || ai.enemy.poseT > 0, '状態機械: 形態遷移が始まっている',
+      ai.enemy.state + ' poseT=' + ai.enemy.poseT.toFixed(2));
+    /* 遷移が完走して反転形態になる（毎フレーム更新で上書きされない）。
+       完了判定は poseT ではなくアニメ状態で見る（transTime の丸め誤差で
+       poseT は1フレーム早く 1 に到達しうる） */
+    var done = simUntil(g, function () { return ai.enemy.state !== 'trans'; }, 200);
+    t.ok(done >= 0, '状態機械: 形態遷移が完走して反転形態になる', 'poseT=' + ai.enemy.poseT.toFixed(3));
+    t.near(ai.enemy.poseT, 1, 1e-9, '状態機械: 反転形態のポーズになりきる');
+    t.ok(ai.enemy.state === 'chase', '状態機械: 反転形態では疾走アニメになる',
+      ai.enemy.state + ' / AI=' + ai.state + ' / frames=' + done + ' / poseT=' + ai.enemy.poseT.toFixed(3) +
+      ' / jail=' + st.jail.phase);
+
+    /* 捕獲 → 牢送り */
+    g.progress.flags.p3bTest = 'keep';
+    place(g, open.col, open.row, 0);
+    g.player.x = ai.enemy.x + 0.55; g.player.z = ai.enemy.z;
+    sim(g, 1);
+    t.ok(st.captures === 1, '状態機械: 接触で捕獲される', st.captures);
+    t.ok(st.jail.phase === 'grab', '状態機械: 牢送り演出が始まる', st.jail.phase);
+    t.ok(ai.state === 'caught', '状態機械: 捕獲中の敵は停止する', ai.state);
+    /* 演出中の再捕獲は無視される（重なり対策） */
+    t.ok(st.capture() === false, '牢送り: 演出中の再捕獲は無視される');
+    t.ok(st.captures === 1, '牢送り: 演出中の再捕獲で回数が増えない', st.captures);
+
+    var toLocked = simUntil(g, function () { return st.jail.phase === 'locked'; }, 240);
+    t.ok(toLocked >= 0, '状態機械: 暗転を経て拘束室で復帰する', st.jail.phase);
+    var jc = g.map.meta.jailCell;
+    t.ok(g.player.col() === jc.col && g.player.row() === jc.row, '牢送り: 拘束室の房の中で復帰する',
+      g.player.col() + ',' + g.player.row());
+    t.ok(g.progress.flags.p3bTest === 'keep', '牢送り: 進行状態が保持される');
+    t.ok(ai.state === 'patrol' && ai.form === 'stand', '牢送り: 敵は直立形態で巡回へ戻る',
+      ai.state + '/' + ai.form);
+    t.ok(Math.abs(g.stealth.fade - 1) < 0.35 || g.stealth.fade < 1, '牢送り: 明転していく', g.stealth.fade);
+
+    /* 房から出られない → 「調べる」連打で格子を破る */
+    var px = g.player.x, pz = g.player.z;
+    g.input.moveY = 1;
+    sim(g, 60);
+    g.input.reset();
+    t.ok(g.player.col() === jc.col && g.player.row() === jc.row, '牢: 格子を破るまで房から出られない');
+    var presses = 0;
+    while (st.jail.phase === 'locked' && presses < 12) { st.onInteract(); presses++; }
+    t.ok(st.jail.phase === 'none', '牢: 「調べる」連打で脱出できる', presses + '回');
+    t.ok(st.escapes === 1, '牢: 自力脱出が記録される', st.escapes);
+    g.input.moveY = 1;
+    var out = simUntil(g, function () { return g.player.row() !== jc.row || g.player.col() !== jc.col; }, 200);
+    g.input.reset();
+    t.ok(out >= 0, '牢: 脱出後は房から出て動ける',
+      g.player.col() + ',' + g.player.row());
+    t.ok(g.progress.flags.p3bTest === 'keep', '牢: 脱出後も進行状態は保持されている');
+    g.reset();
+  }
+
+  function testBoardStall(t, g) {
+    g.reset();
+    var ai = g.ai, st = g.stealth, T = ESCAPE.ENEMY_TUNING;
+    var boards = g.map.meta.boards || [];
+    t.ok(boards.length > 0, '板: 配置がある', boards.length + '枚');
+    /* 巡回路（縦長廊下）上の板を使う */
+    var b = null;
+    for (var i = 0; i < boards.length; i++) if (boards[i].col === 34 && boards[i].row === 26) b = boards[i];
+    if (!b) b = boards[0];
+    var rec = st.boardAt(b.col, b.row);
+    /* 隣接マスから「調べる」で倒す */
+    var ap = approachTo(g.map, b.col, b.row);
+    if (!t.ok(!!ap && !!rec, '板: 検証に使える板がある')) return;
+    place(g, b.col + (ap.col - b.col) / 2, b.row + (ap.row - b.row) / 2, ap.yawDeg);
+    t.ok(g.stealth.onInteract(), '板: 「調べる」で倒せる');
+    t.ok(rec.toppled === true, '板: 倒れた状態になる');
+    t.ok(st.topples === 1, '板: 倒した回数が記録される', st.topples);
+
+    /* 敵が経路上で踏む → 足止め */
+    placeEnemy(g, b.col, b.row - 4, 180);
+    var far = g.map.cellCenter(b.col, b.row + 6);
+    place(g, b.col, b.row + 6, 0);
+    if (!g.map.isWalkable(b.col, b.row + 6)) place(g, b.col, b.row + 3, 0);
+    ai.toChase();
+    var hit = simUntil(g, function () { return ai.state === 'stalled'; }, 600);
+    t.ok(hit >= 0, '板: 敵が倒れた板に引っかかって足止めされる', ai.state);
+    var ex = ai.enemy.x, ez = ai.enemy.z;
+    sim(g, 60);
+    t.ok(Math.hypot(ai.enemy.x - ex, ai.enemy.z - ez) < 0.02, '板: 足止め中は動かない',
+      Math.hypot(ai.enemy.x - ex, ai.enemy.z - ez).toFixed(4) + 'm');
+    t.ok(rec.used === true, '板: 使い切り（一度踏むと消費される）');
+    t.ok(st.tripBoard(b.col, b.row) === false, '板: 二度目は足止めしない');
+    var free = simUntil(g, function () { return ai.state !== 'stalled'; }, 700);
+    t.ok(free >= 0, '板: 一定時間で足止めが解ける', ai.state);
+    /* 上で 60 フレーム（＝1秒）進めているぶんを足す */
+    var stalledSec = (free + 60) * ESCAPE.FIXED_DT;
+    t.ok(stalledSec >= T.boardStallDur - 0.2 && stalledSec <= T.boardStallDur + 0.4,
+      '板: 足止め時間が調整値どおり', stalledSec.toFixed(2) + 's / ' + T.boardStallDur + 's');
+    g.reset();
+    t.ok(st.boards[0].toppled === false, '板: リセットで元に戻る');
+  }
+
+  function testCaptureLimit(t, g) {
+    g.reset();
+    var st = g.stealth, ai = g.ai, T = ESCAPE.ENEMY_TUNING;
+    g.progress.flags.keepMe = 1;
+    for (var i = 0; i < T.captureLimit - 1; i++) {
+      t.ok(st.capture(), '捕獲' + (i + 1) + '回目: 牢送りが始まる');
+      var toLocked = simUntil(g, function () { return st.jail.phase === 'locked'; }, 240);
+      t.ok(toLocked >= 0, '捕獲' + (i + 1) + '回目: 拘束室で復帰する', st.jail.phase);
+      var guard = 0;
+      while (st.jail.phase === 'locked' && guard++ < 12) st.onInteract();
+      t.ok(st.jail.phase === 'none', '捕獲' + (i + 1) + '回目: 自力脱出できる');
+    }
+    t.ok(g.progress.flags.keepMe === 1, '牢送り（3回目未満）は進行状態を保持する');
+    t.ok(st.captures === T.captureLimit - 1, '捕獲回数が積み上がる', st.captures);
+
+    /* 3回目 = エリア最初から（チェックポイントは無関係） */
+    t.ok(st.capture(), '捕獲3回目: 発生する');
+    var done = simUntil(g, function () { return st.jail.phase === 'none'; }, 400);
+    t.ok(done >= 0, '捕獲3回目: 暗転を経て復帰する', st.jail.phase);
+    t.ok(st.areaResets === 1, '捕獲3回目: エリアがリセットされる', st.areaResets);
+    t.ok(st.captures === 0, '捕獲3回目: 捕獲回数がリセットされる', st.captures);
+    t.ok(!g.progress.flags.keepMe, '捕獲3回目: 進行状態がクリアされる');
+    var sp = g.map.meta.spawn;
+    t.ok(g.player.col() === sp.col && g.player.row() === sp.row, '捕獲3回目: エリア最初のスポーンへ戻る',
+      g.player.col() + ',' + g.player.row());
+    t.ok(ai.state === 'patrol' && ai.form === 'stand', '捕獲3回目: 敵も初期状態へ戻る', ai.state);
+    t.ok(st.fade === 0, '捕獲3回目: 暗転が明けている', st.fade);
+    g.reset();
+  }
+
+  function testChaseGiveUp(t, g) {
+    g.reset();
+    var ai = g.ai, T = ESCAPE.ENEMY_TUNING;
+    var open = findTriple(g.map, false);
+    placeEnemy(g, open.col, open.row, -90);
+    place(g, open.col + 2, open.row, 0);
+    sim(g, 1);
+    t.ok(ai.state === 'chase', '見失い: まず追跡状態にする', ai.state);
+    /* プレイヤーを遠くの別区画へ飛ばす（＝完全に見失う） */
+    var sp = g.map.meta.spawn;
+    place(g, sp.col, sp.row, 0);
+    var toSearch = simUntil(g, function () { return ai.state === 'search'; }, 400);
+    t.ok(toSearch >= 0, '見失い: 一定時間で追跡をやめて探索へ', ai.state);
+    var toPatrol = simUntil(g, function () { return ai.state === 'patrol'; },
+      Math.round(T.searchDur / ESCAPE.FIXED_DT) + 180);
+    t.ok(toPatrol >= 0, '見失い: 探索の後は巡回へ復帰する', ai.state);
+    var back = simUntil(g, function () { return ai.form === 'stand' && ai.enemy.poseT < 1e-6; }, 240);
+    t.ok(back >= 0, '見失い: 直立形態へ戻る', 'poseT=' + ai.enemy.poseT.toFixed(3));
+    g.reset();
+  }
+
+  /** 演出の途中で割り込みが入っても状態が壊れないこと */
+  function testInterruptSafety(t, g) {
+    g.reset();
+    var st = g.stealth, ai = g.ai;
+    st.capture();
+    sim(g, 20);                        /* 暗転の途中 */
+    t.ok(st.jail.phase !== 'none', '割り込み: 演出中である（前提）', st.jail.phase);
+    t.ok(st.onInteract() === true, '割り込み: 演出中の「調べる」は握り潰される');
+    t.ok(st.jail.pry === 0, '割り込み: 演出中はこじ開けが進まない', st.jail.pry);
+    /* 演出の途中で reset（runAll と同じ経路） */
+    g.reset();
+    t.ok(st.jail.phase === 'none', '割り込み: リセットで牢演出が解除される', st.jail.phase);
+    t.ok(st.fade === 0, '割り込み: リセットで暗転が消える', st.fade);
+    t.ok(st.captures === 0, '割り込み: リセットで捕獲回数が戻る', st.captures);
+    var sp = g.map.meta.spawn;
+    t.ok(g.player.col() === sp.col && g.player.row() === sp.row, '割り込み: リセットでスポーンに戻る');
+    /* ロッカーに入ったまま捕獲されない・リセットで出る */
+    var lockers = g.map.meta.lockers || [];
+    var D = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+    var lk = null, side = null;
+    for (var i = 0; i < lockers.length && !lk; i++) {
+      for (var d = 0; d < 4; d++) {
+        var nc = lockers[i].col + D[d][0], nr = lockers[i].row + D[d][1];
+        if (g.map.isWalkable(nc, nr)) { lk = lockers[i]; side = { col: nc, row: nr }; break; }
+      }
+    }
+    place(g, side.col, side.row, 0);
+    g.player.yaw = Math.atan2(-(lk.col - side.col), -(lk.row - side.row));
+    st.onInteract();
+    t.ok(st.inLocker(), '割り込み: ロッカーに入っている（前提）');
+    t.ok(st.capture() === false, '割り込み: ロッカー内では捕獲されない');
+    g.ai.enemy.x = g.player.x; g.ai.enemy.z = g.player.z;
+    ai.state = 'chase';
+    sim(g, 5);
+    t.ok(st.captures === 0, '割り込み: 敵が重なっても捕獲されない', st.captures);
+    g.reset();
+    t.ok(!st.inLocker(), '割り込み: リセットでロッカーから出る');
+  }
+
+  /** __enemyDebug（P3a）と敵AIの両立 */
+  function testEnemyDebugCoexist(t, g) {
+    g.reset();
+    if (!t.ok(typeof global.__enemyDebug === 'object', '__enemyDebug が存在する')) return;
+    var e = global.__enemyDebug.get();
+    t.ok(e === g.ai.enemy, '__enemyDebug: AIの個体を操作対象にする（2体作らない）');
+    var info = global.__enemyDebug.info();
+    t.ok(typeof info.triangles === 'number' && typeof info.poseT === 'number',
+      '__enemyDebug: info のシグネチャが維持されている');
+    global.__enemyDebug.setPose(1);
+    t.ok(g.ai.manual === true, '__enemyDebug: 直接操作するとAIの駆動が止まる');
+    sim(g, 30);
+    t.near(e.poseT, 1, 1e-9, '__enemyDebug: AIにポーズを上書きされない');
+    global.__enemyDebug.release();
+    t.ok(g.ai.manual === false, '__enemyDebug: release でAIへ操作が戻る');
+    g.reset();
+  }
+
   /* ---------------- 実行本体 ---------------- */
 
   function runAll(opts) {
@@ -492,7 +1010,10 @@
     var suites = [
       testContract, testMapData, testReachability, testCollisionMatchesData, testSpawn,
       testDomWiring, testRenderedWallsMatchData, testSpeeds, testCrouchEye,
-      testWallPush, testWallSlide, testSweep, testLook, testPump, testArea1Contract
+      testWallPush, testWallSlide, testSweep, testLook, testPump, testArea1Contract,
+      /* P3b: 敵AI・ステルス */
+      testEnemyTuning, testPatrolData, testVision, testNoiseEvents, testEnemyStateMachine,
+      testBoardStall, testCaptureLimit, testChaseGiveUp, testInterruptSafety, testEnemyDebugCoexist
     ];
     for (var i = 0; i < suites.length; i++) {
       try {
@@ -515,6 +1036,25 @@
     t.ok(g.input.lookDX === 0 && g.input.lookDY === 0, '復帰: 視点入力ゼロ');
     t.ok(g.input.crouchOn === false && g.input.isRunning() === false, '復帰: ボタン状態オフ');
     t.ok(g.running === true, '復帰: ループが動作中');
+    /* P3b: 敵AI・ステルスも製品初期状態へ戻ること */
+    if (g.ai) {
+      var esp = g.map.meta.enemySpawn, ec = g.map.cellCenter(esp.col, esp.row);
+      t.ok(g.ai.state === 'patrol' && g.ai.form === 'stand', '復帰: 敵が巡回・直立形態', g.ai.state);
+      t.ok(g.ai.manual === false, '復帰: 敵AIがデバッグ操作から戻っている');
+      t.near(Math.hypot(g.ai.enemy.x - ec.x, g.ai.enemy.z - ec.z), 0, 1e-6, '復帰: 敵が巡回起点にいる');
+      t.near(g.ai.enemy.poseT, 0, 1e-9, '復帰: 敵の形態が直立');
+    }
+    if (g.stealth) {
+      var upAll = true;
+      for (var bi = 0; bi < g.stealth.boards.length; bi++) {
+        if (g.stealth.boards[bi].toppled || g.stealth.boards[bi].used) upAll = false;
+      }
+      t.ok(g.stealth.captures === 0 && g.stealth.jail.phase === 'none', '復帰: 捕獲・牢の状態が初期化',
+        g.stealth.captures + '/' + g.stealth.jail.phase);
+      t.ok(g.stealth.fade === 0 && !g.stealth.inLocker(), '復帰: 暗転もロッカーも解除');
+      t.ok(upAll, '復帰: 倒した板が元に戻る');
+      t.ok(ESCAPE.noise.pending.length === 0, '復帰: 音イベントのキューが空', ESCAPE.noise.pending.length);
+    }
 
     return summarize(t, opts);
   }

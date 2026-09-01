@@ -110,13 +110,30 @@
     if (this.inBounds(col, row)) this.tiles[row * this.width + col] = t;
   };
 
+  /* 動的な通行止め（P3b）。タイル種別は変えずに「当たりだけ足す」ための層。
+   * 例: 拘束室の鉄格子がある房（描画は world._cellBars、当たりはここ）。
+   * isSolid / isWalkable の両方に効く（＝flood-fill も敵の経路も同じ壁を見る）。
+   * World の生成後に設定すること（生成前に塞ぐと壁として描画されてしまう）。
+   * 素の定義に対する検査（testArea1Contract 等）は Maps.load() の新品を使うので影響しない。 */
+  GridMap.prototype.setBlocked = function (col, row, on) {
+    if (!this._blocked) this._blocked = Object.create(null);
+    if (on) this._blocked[col + ',' + row] = true;
+    else delete this._blocked[col + ',' + row];
+  };
+  GridMap.prototype.clearBlocked = function () { this._blocked = null; };
+  GridMap.prototype.isBlocked = function (col, row) {
+    return !!(this._blocked && this._blocked[col + ',' + row]);
+  };
+
   GridMap.prototype.isSolid = function (col, row) {
     if (!this.inBounds(col, row)) return true; // 場外は常に壁
+    if (this._blocked && this._blocked[col + ',' + row]) return true;
     return defOf(this.tiles[row * this.width + col]).solid;
   };
 
   GridMap.prototype.isWalkable = function (col, row) {
     if (!this.inBounds(col, row)) return false;
+    if (this._blocked && this._blocked[col + ',' + row]) return false;
     return defOf(this.tiles[row * this.width + col]).walkable;
   };
 

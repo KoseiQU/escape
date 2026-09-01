@@ -32,6 +32,20 @@
     font-size:11px; color:rgba(150,168,182,.6); white-space:nowrap;
   }
   body.touch #hint { display:none; }
+  /* --- ステルスHUD（P3b。捕獲回数は簡素に） --- */
+  #status {
+    position:absolute; right:12px; top:10px; font-size:12px; letter-spacing:.08em;
+    color:rgba(196,168,168,.78); text-shadow:0 1px 3px rgba(0,0,0,.85);
+  }
+  #prompt {
+    position:absolute; left:50%; bottom:118px; transform:translateX(-50%);
+    font-size:13px; letter-spacing:.06em; color:rgba(222,232,240,.92);
+    text-shadow:0 1px 4px rgba(0,0,0,.9); white-space:nowrap;
+  }
+  /* 牢送りの暗転。opacity はゲーム内時刻から毎フレーム書く（CSS遷移に頼らない） */
+  #blackout {
+    position:fixed; inset:0; z-index:40; background:#000; opacity:0; pointer-events:none;
+  }
 
   /* --- 仮想スティック（タッチ位置起点のフローティング式） --- */
   #stick-base {
@@ -76,6 +90,8 @@
   <div id="hud">
     <div id="crosshair"></div>
     <div id="debug"></div>
+    <div id="status"></div>
+    <div id="prompt"></div>
     <div id="hint">WASD 移動 / Shift 走る / Ctrl しゃがむ / E 調べる / 画面クリックで視点</div>
     <div id="stick-base"><div id="stick-knob"></div></div>
     <div id="buttons">
@@ -84,6 +100,8 @@
       <button class="ctrl-btn" id="btn-interact" type="button">調べる</button>
     </div>
   </div>
+
+  <div id="blackout"></div>
 
   <div id="orientation">
     <div class="inner">
@@ -103,6 +121,7 @@
   <script src="js/world.js"></script>
   <script src="js/game.js"></script>
   <script src="js/enemy_model.js"></script>
+  <script src="js/enemy_ai.js"></script>
   <script src="js/test.js"></script>
 </body>
 </html>

@@ -1980,7 +1980,21 @@
     if (!g) return;
     var enemy = null;
 
+    /* P3b: 敵AIが実体を持つならそれを操作対象にする（デバッグ用の2体目は作らない）。
+       AIが握ったままだと毎フレームの更新でポーズ指定が上書きされるので、
+       モデルを直接いじるフックは manual=true にしてAIの駆動を止める。 */
+    function ai() {
+      var gg = ESCAPE.game;
+      return (gg && gg.ai && gg.ai.enemy) ? gg.ai : null;
+    }
+    function detach() {
+      var a = ai();
+      if (a) { a.manual = true; return a.enemy; }
+      return null;
+    }
     function ensure() {
+      var a = ai();
+      if (a) return a.enemy;
       if (enemy) return enemy;
       enemy = new Enemy({ seed: 3 });
       g.scene.add(enemy.group);
@@ -1995,7 +2009,8 @@
     var origStep = g.stepFrame;
     g.stepFrame = function (dt) {
       origStep.call(this, dt);
-      if (enemy && enemy.group.visible) {
+      /* AIが持つ個体は AI 側が更新する（二重更新＝アニメ上書きを避ける） */
+      if (enemy && enemy.group.visible && !(this.ai && this.ai.enemy === enemy)) {
         enemy.update(dt, this.simTime);
         enemy.syncLight(this.world, this.map);
       }
@@ -2011,7 +2026,7 @@
       },
       /** 形態を直接指定（0=直立 1=反転、中間可）。遷移アニメは止める */
       setPose: function (t) {
-        var e = ensure();
+        var e = ensure(); detach();
         e.state = (t >= 0.5) ? 'chase' : 'walk';
         if (t > 0 && t < 1) e.state = 'idle';
         e.poseT = Math.max(0, Math.min(1, t));
@@ -2020,30 +2035,36 @@
       },
       /** 直立形態の歩行アニメ on/off */
       walk: function (on) {
-        var e = ensure();
+        var e = ensure(); detach();
         if (on === false) { e.state = 'idle'; return e.state; }
         e.poseT = 0; e.state = 'walk';
         return e.state;
       },
       /** 反転形態の疾走アニメ on/off */
       chase: function (on) {
-        var e = ensure();
+        var e = ensure(); detach();
         if (on === false) { e.state = 'idle'; return e.state; }
         e.poseT = 1; e.state = 'chase';
         return e.state;
       },
       /** 形態遷移を開始（引数なし=現在の逆へ） */
       transition: function (to) {
-        var e = ensure();
+        var e = ensure(); detach();
         var want = (to === undefined) ? (e.poseT < 0.5 ? 1 : 0) : ((to === 'crawl' || to === 1) ? 1 : 0);
         e.setForm(want ? 'crawl' : 'stand', false);
         return { dir: e.transDir, dur: e.transDur };
       },
       /** マス指定で配置 */
       place: function (col, row, yawDeg) {
-        var e = ensure();
-        e.placeCell(col, row, yawDeg === undefined ? 180 : yawDeg, g.map);
+        var e = ensure(); detach();
+        e.placeCell(col, row, yawDeg === undefined ? 180 : yawDeg, ESCAPE.game.map);
         return { x: e.x, z: e.z, y: e.floorY };
+      },
+      /** AIへ操作を返す（デバッグで握った後の復帰） */
+      release: function () {
+        var a = ai();
+        if (a) { a.manual = false; a.path = null; a.repathT = 0; }
+        return !!a;
       },
       /** 状態の読み出し（検証用） */
       info: function () {
