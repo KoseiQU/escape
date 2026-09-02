@@ -1316,6 +1316,713 @@
     localStorage.removeItem(SAVE_KEY);
   }
 
+  /* ================================================================
+   * P4.5: 音響＋恐怖演出（契約 DESIGN.md §4「音響と恐怖演出」）
+   *
+   * 検証方針:
+   *   出力デバイスの無い環境では AudioContext の clock が凍結し gain 自動化が
+   *   反映されない。したがって「音が鳴っているか」は OfflineAudioContext の
+   *   レンダ結果（RMS/peak）でのみ数値判定する。ライブ側は
+   *   「発火ロジックが正しく回るか・例外ゼロか」だけを見る。
+   *   runAll 中は engine.testMode = true にして実出力を止める（runAll 側で設定）。
+   * ============================================================== */
+
+  var AUDIO_KEY = 'escape.audio.v1';
+
+  /** 契約に列挙された音が全て実装されているか */
+  function testAudioContract(t, g) {
+    var A = ESCAPE.Audio, au = ESCAPE.audio;
+    if (!t.ok(!!A && !!au, '音響: ESCAPE.Audio / ESCAPE.audio が存在する')) return;
+    t.ok(typeof A.render === 'function', '音響: OfflineAudioContext レンダヘルパーがある');
+    t.ok(A.MAX_VOICES > 0 && A.MAX_VOICES <= 48, '音響: 同時発音数の上限が設定されている', A.MAX_VOICES);
+    /* 契約 §4 に列挙された音がすべて音色として存在すること */
+    var need = ['footstep', 'noiseStep', 'breath', 'pant', 'heartbeat',
+      'drip', 'metalFar',
+      'enemyDrag', 'enemyMoan', 'enemyJoint', 'enemyClaw', 'boneCrack', 'scream',
+      'sting', 'chaseRelease', 'capture',
+      'lever', 'terminalKey', 'terminalErr', 'terminalOk',
+      'handleCreak', 'doorRoar', 'alarm', 'pry', 'grateBreak',
+      'lockerDoor', 'boardCrash', 'paper', 'checkpoint'];
+    var missing = [];
+    for (var i = 0; i < need.length; i++) if (typeof A.VOICES[need[i]] !== 'function') missing.push(need[i]);
+    t.ok(missing.length === 0, '音響: 契約 §4 の全ての音が実装されている', missing.join(' / '));
+    /* 床種4種（契約: タイル/金属/水たまり/ガラス片） */
+    var mats = ['tile', 'metal', 'water', 'glass'], mm = [];
+    for (var j = 0; j < mats.length; j++) if (!A.FLOOR_MAT[mats[j]]) mm.push(mats[j]);
+    t.ok(mm.length === 0, '音響: 床種4種の足音パラメータがある', mm.join(' / '));
+    /* 区画ごとの環境ドローン */
+    var regions = (g.map.meta && g.map.meta.regions) || [];
+    var noAmb = 0;
+    for (var k = 0; k < regions.length; k++) if (!A.AMBIENCE[regions[k].id]) noAmb++;
+    t.ok(noAmb === 0, '音響: 全ての区画に環境ドローンの色味が定義されている', noAmb + '区画が未定義');
+    /* 恐怖演出のDOM */
+    t.ok(!!document.getElementById('fx-vignette') && !!document.getElementById('fx-flash') &&
+      !!document.getElementById('fx-noise'), '演出: 減光・フラッシュ・ノイズのDOMが結線されている');
+  }
+
+  /** OfflineAudioContext レンダの RMS/peak を数値判定（契約 §4「検証」） */
+  function testAudioRender(t) {
+    var A = ESCAPE.Audio, C = global.OfflineAudioContext || global.webkitOfflineAudioContext;
+    if (!t.ok(!!C, '音響: OfflineAudioContext が使える環境')) return;
+    if (!t.ok(A.ready(), '音響: レンダキャッシュが揃っている（prewarm完了）',
+      A.prewarmError() || Object.keys(A.cache).length + '/' + A.prewarmList.length)) return;
+    var c = A.cache;
+
+    function gate(key, minRms, minPeak) {
+      var m = c[key];
+      if (!m) { t.ok(false, '音響レンダ: ' + key + ' が無い'); return null; }
+      t.ok(m.rms >= minRms && m.peak >= minPeak && m.peak <= 1.0 && !m.clipped,
+        '音響レンダ: ' + key + ' の RMS/peak が範囲内',
+        'rms=' + m.rms.toFixed(4) + ' peak=' + m.peak.toFixed(4) + ' (min ' + minRms + '/' + minPeak + ')');
+      t.ok(m.onset >= 0 && m.onset < 0.30, '音響レンダ: ' + key + ' が時間内に発音する', 'onset=' + m.onset.toFixed(3));
+      return m;
+    }
+
+    /* 足音3種（歩き/走り/しゃがみ） */
+    var w = gate('step_walk', 0.004, 0.05);
+    var r = gate('step_run', 0.008, 0.10);
+    var cr = gate('step_crouch', 0.001, 0.01);
+    if (w && r && cr) {
+      t.ok(r.peak > w.peak && w.peak > cr.peak,
+        '音響レンダ: 足音の大きさが 走り > 歩き > しゃがみ',
+        r.peak.toFixed(3) + ' > ' + w.peak.toFixed(3) + ' > ' + cr.peak.toFixed(3));
+      t.ok(r.rms > w.rms && w.rms > cr.rms, '音響レンダ: 足音のRMSも同じ順',
+        r.rms.toFixed(4) + ' > ' + w.rms.toFixed(4) + ' > ' + cr.rms.toFixed(4));
+    }
+    /* 床種で音色が変わる（同じ音量指定でも波形が違う＝RMSが一致しない） */
+    var mats = ['step_metal', 'step_water', 'step_glass'];
+    var same = 0;
+    for (var i = 0; i < mats.length; i++) {
+      gate(mats[i], 0.002, 0.02);
+      if (c[mats[i]] && w && Math.abs(c[mats[i]].rms - w.rms) < 1e-6) same++;
+    }
+    t.ok(same === 0, '音響レンダ: 床種ごとに音色（RMS）が異なる', same + '種がタイルと同一');
+    /* 音地盤を走った時は強い音（普通の足音より大きい） */
+    var ns = gate('noise_step', 0.010, 0.20);
+    if (ns && w) t.ok(ns.peak > w.peak * 1.5, '音響レンダ: 音地盤踏みは通常の足音より明確に大きい',
+      ns.peak.toFixed(3) + ' vs ' + w.peak.toFixed(3));
+    /* 発見スティング・心拍・レバー・警報 */
+    var st = gate('sting', 0.020, 0.30);
+    var hb = gate('heartbeat', 0.010, 0.10);
+    var lv = gate('lever', 0.030, 0.30);
+    gate('alarm', 0.010, 0.10);
+    gate('scream', 0.008, 0.10);
+    gate('boneCrack', 0.004, 0.05);
+    gate('capture', 0.020, 0.30);
+    gate('drip', 0.004, 0.05);
+    gate('doorRoar', 0.020, 0.30);
+    gate('enemyMoan', 0.010, 0.10);
+    gate('enemyClaw', 0.004, 0.05);
+    gate('pry', 0.003, 0.03);
+    gate('breath', 0.001, 0.01);
+    if (st && w) t.ok(st.peak > w.peak * 2, '音響レンダ: 発見スティングは足音より遥かに大きい',
+      st.peak.toFixed(3) + ' vs ' + w.peak.toFixed(3));
+    if (lv) t.ok(lv.activeRatio > 0.25, '音響レンダ: レバーは長く響く駆動音', lv.activeRatio.toFixed(3));
+    if (hb) t.ok(hb.activeRatio > 0.05 && hb.activeRatio < 0.60, '音響レンダ: 心拍は二拍の短い音',
+      hb.activeRatio.toFixed(3));
+  }
+
+  /** 音の情報設計（契約 §4「StereoPannerで方向、距離で減衰＋ローパス」） */
+  function testAudioSpatial(t) {
+    var A = ESCAPE.Audio;
+    /* 方向: yaw=0 では前方が -Z・右が +X */
+    t.ok(A.panFor(0, 0, 0, 5, 0) > 0.5, '空間化: 右にある音は右へ振れる', A.panFor(0, 0, 0, 5, 0).toFixed(3));
+    t.ok(A.panFor(0, 0, 0, -5, 0) < -0.5, '空間化: 左にある音は左へ振れる', A.panFor(0, 0, 0, -5, 0).toFixed(3));
+    t.near(A.panFor(0, 0, 0, 0, -5), 0, 1e-6, '空間化: 正面の音は中央');
+    t.near(A.panFor(0, 0, 0, 0, 0), 0, 1e-9, '空間化: 同一地点は中央（0除算しない）');
+    /* 180度振り向くと左右が入れ替わる。90度振り向くと真横の音は正面/背面になる */
+    t.ok(A.panFor(0, 0, Math.PI, 5, 0) < -0.5, '空間化: 振り向くと左右が入れ替わる',
+      A.panFor(0, 0, Math.PI, 5, 0).toFixed(3));
+    t.near(A.panFor(0, 0, -Math.PI / 2, 5, 0), 0, 1e-6,
+      '空間化: 音の方へ向き直すと中央に来る');
+    t.ok(Math.abs(A.panFor(0, 0, 0, 5, 0)) <= 1, '空間化: パンは -1..1 に収まる');
+
+    /* 距離減衰: 単調減少・上限距離でゼロ */
+    var prev = Infinity, mono = true;
+    for (var d = 0; d <= 30; d += 0.5) {
+      var a = A.attenuationFor(d);
+      if (a > prev + 1e-12) mono = false;
+      prev = a;
+      if (a < 0) mono = false;
+    }
+    t.ok(mono, '空間化: 距離減衰が単調に減る');
+    t.near(A.attenuationFor(0), 1, 1e-9, '空間化: 距離0で減衰なし');
+    t.near(A.attenuationFor(A.ATTEN_MAX), 0, 1e-9, '空間化: 上限距離でゼロ');
+    t.near(A.attenuationFor(A.ATTEN_MAX + 5), 0, 1e-9, '空間化: 上限距離より遠くもゼロ');
+    t.ok(A.attenuationFor(3) > A.attenuationFor(12) * 3, '空間化: 近い音が明確に大きい',
+      A.attenuationFor(3).toFixed(3) + ' vs ' + A.attenuationFor(12).toFixed(3));
+
+    /* ローパス: 遠いほど・遮蔽されるほど籠もる */
+    t.ok(A.lowpassFor(1, false) > A.lowpassFor(12, false),
+      '空間化: 遠い音ほど高域が落ちる', A.lowpassFor(1, false).toFixed(0) + ' > ' + A.lowpassFor(12, false).toFixed(0));
+    t.ok(A.lowpassFor(6, true) < A.lowpassFor(6, false),
+      '空間化: 壁越しは高域が落ちる（壁越しでも聞こえる＝無音にはしない）',
+      A.lowpassFor(6, true).toFixed(0) + ' < ' + A.lowpassFor(6, false).toFixed(0));
+    t.ok(A.lowpassFor(40, true) >= 180, '空間化: ローパスの下限を割らない', A.lowpassFor(40, true).toFixed(0));
+    t.ok(A.OCCLUDE_GAIN > 0 && A.OCCLUDE_GAIN < 1,
+      '空間化: 壁越しは減衰するが無音にはならない（敵の位置が分かる）', A.OCCLUDE_GAIN);
+  }
+
+  /** 状態遷移ごとの発音フックが呼ばれる（契約 §4） */
+  function testAudioHooks(t, g) {
+    g.reset();
+    var au = ESCAPE.audio, ai = g.ai, st = g.stealth;
+    var before = au.errors;
+
+    function counted(name) { return au.events[name] || 0; }
+    function delta(name, fn, label) {
+      var n0 = counted(name);
+      fn();
+      t.ok(counted(name) > n0, '音響フック: ' + label + ' で ' + name + ' が発火する',
+        n0 + ' -> ' + counted(name));
+    }
+
+    /* 発見 → 追跡（形態遷移は同じフレームで始まるので先に基準を取る） */
+    var open = findTriple(g.map, false);
+    var n0form = counted('form');
+    delta('spot', function () {
+      placeEnemy(g, open.col, open.row, -90);
+      place(g, open.col + 2, open.row, 0);
+      g.player.crouching = false;
+      sim(g, 1);
+    }, '巡回→追跡（発見）');
+    t.ok(ai.state === 'chase', '音響フック: 追跡状態になっている（前提）', ai.state);
+
+    /* 形態遷移（骨鳴り＋絶叫） */
+    simUntil(g, function () { return (au.events.form || 0) > n0form; }, 60);
+    t.ok((au.events.form || 0) > n0form, '音響フック: 形態遷移で form（骨鳴り＋絶叫）が発火する',
+      n0form + ' -> ' + counted('form'));
+
+    /* 追跡解除 */
+    delta('lose', function () {
+      var sp = g.map.meta.spawn;
+      place(g, sp.col, sp.row, 0);
+      simUntil(g, function () { return ai.state === 'search'; }, 400);
+    }, '見失い→探索');
+
+    /* 捕獲 */
+    g.reset();
+    delta('capture', function () { st.capture(); }, '捕獲');
+    simUntil(g, function () { return st.jail.phase === 'locked'; }, 240);
+    /* 格子こじ開け → 破壊 */
+    delta('pry', function () { st.onInteract(); }, '格子をこじ開ける');
+    delta('grateBreak', function () {
+      var guard = 0;
+      while (st.jail.phase === 'locked' && guard++ < 12) st.onInteract();
+    }, '格子の破壊');
+
+    /* 音地盤・センサー */
+    g.reset();
+    var noiseCell = (g.map.meta.noise || [])[0];
+    delta('noiseStep', function () {
+      place(g, noiseCell.col, noiseCell.row, 0);
+      g.stealth.lastCell = ''; g.stealth.cellNoised = false;
+      g.player.mode = 'run'; g.player.speed = 4.6;
+      g.stealth._footstepNoise();
+    }, '音地盤を走って踏む');
+    var sensorCell = (g.map.meta.sensors || [])[0];
+    delta('sensor', function () {
+      place(g, sensorCell.col, sensorCell.row, 0);
+      g.stealth.lastCell = ''; g.stealth.cellNoised = false;
+      g.player.mode = 'run'; g.player.speed = 4.6;
+      g.stealth._footstepNoise();
+    }, 'センサーを走って通る');
+
+    /* ロッカー・板 */
+    g.reset();
+    var lockers = g.map.meta.lockers || [], D = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+    var lk = null, side = null;
+    for (var i = 0; i < lockers.length && !lk; i++) {
+      for (var d = 0; d < 4; d++) {
+        var nc = lockers[i].col + D[d][0], nr = lockers[i].row + D[d][1];
+        if (g.map.isWalkable(nc, nr)) { lk = lockers[i]; side = { col: nc, row: nr }; break; }
+      }
+    }
+    if (lk) {
+      delta('lockerIn', function () {
+        place(g, side.col, side.row, 0);
+        g.player.yaw = Math.atan2(-(lk.col - side.col), -(lk.row - side.row));
+        st.onInteract();
+      }, 'ロッカーに入る');
+      delta('lockerOut', function () { st.onInteract(); }, 'ロッカーから出る');
+    }
+    var bd = (g.map.meta.boards || [])[0];
+    var ap = bd ? approachTo(g.map, bd.col, bd.row) : null;
+    if (ap) {
+      delta('boardTopple', function () {
+        place(g, bd.col + (ap.col - bd.col) / 2, bd.row + (ap.row - bd.row) / 2, ap.yawDeg);
+        st.onInteract();
+      }, '板を倒す');
+    }
+    /* 敵の足止め */
+    g.reset();
+    var b2 = g.stealth.boardAt(bd.col, bd.row);
+    if (b2) {
+      delta('stall', function () {
+        g.stealth.topple(b2);
+        placeEnemy(g, bd.col, bd.row - 4, 180);
+        place(g, bd.col, bd.row + 6, 0);
+        if (!g.map.isWalkable(bd.col, bd.row + 6)) place(g, bd.col, bd.row + 3, 0);
+        ai.toChase();
+        simUntil(g, function () { return ai.state === 'stalled'; }, 600);
+      }, '敵が板に引っかかる');
+    }
+
+    /* 仕掛け（レバー→端末→ハンドル） */
+    g.reset();
+    localStorage.removeItem(SAVE_KEY);
+    var gm = g.map.meta.gimmicks || [];
+    var lever = null, term = null, handle = null;
+    for (var k = 0; k < gm.length; k++) {
+      if (gm[k].role === 'lever') lever = gm[k];
+      else if (gm[k].role === 'terminal') term = gm[k];
+      else if (gm[k].role === 'handle') handle = gm[k];
+    }
+    delta('lever', function () { interactAt(g, lever.col, lever.row); }, 'レバー投入');
+    delta('terminalKey', function () {
+      interactAt(g, term.col, term.row);
+      g.progress._kpPress('1');
+    }, '端末のキー操作');
+    delta('terminalErr', function () {
+      g.progress._kpPress('1'); g.progress._kpPress('1'); g.progress._kpPress('1');
+    }, '端末の誤入力');
+    delta('terminalOk', function () {
+      g.progress.keypadDigits = ''; g.progress.keypadErr = false; g.progress._kpErrT = 0;
+      var code = ESCAPE.PROGRESS_DOOR_CODE;
+      for (var q = 0; q < code.length; q++) g.progress._kpPress(code.charAt(q));
+    }, '端末の解錠');
+    delta('handleCreak', function () {
+      interactAt(g, handle.col, handle.row);
+      g.input._interactHeld = true;
+      sim(g, 20);
+    }, 'ハンドルを回す');
+    delta('doorRoar', function () {
+      simUntil(g, function () { return g.progress.gimmick.doorOpen; },
+        Math.ceil(3.2 / ESCAPE.FIXED_DT) + 60);
+      g.input._interactHeld = false;
+    }, '隔壁の開放');
+    t.ok(g.progress.gimmick.doorOpen === true, '音響フック: 隔壁が実際に開いている（前提）');
+
+    /* メモ・チェックポイント */
+    g.reset();
+    localStorage.removeItem(SAVE_KEY);
+    var note = (g.map.meta.notes || [])[0];
+    delta('noteOpen', function () { interactAt(g, note.col, note.row); }, 'メモを開く');
+    delta('noteClose', function () { g.progress.onCloseTap(); }, 'メモを閉じる');
+    var cp = (g.map.meta.checkpoints || [])[0];
+    delta('checkpoint', function () { place(g, cp.col, cp.row, 0); sim(g, 2); }, 'チェックポイント通過');
+
+    t.ok(au.errors === before, '音響: フックの一連で例外ゼロ', au.errors + ' (before ' + before + ')');
+    g.reset();
+    localStorage.removeItem(SAVE_KEY);
+  }
+
+  /** AudioContext 未解錠でも例外ゼロ・無音で通る（iOS Safari の既定状態） */
+  function testAudioLocked(t, g) {
+    g.reset();
+    var au = ESCAPE.audio;
+    var e0 = au.errors;
+    t.ok(au.ctxLive() === null, '音響: テスト中は実出力しない（ctxLive が null）');
+    /* 未解錠でも全ての音色を play() できる（例外ゼロ・null が返る） */
+    var names = Object.keys(ESCAPE.Audio.VOICES), threw = null;
+    try {
+      for (var i = 0; i < names.length; i++) au.play(names[i], { x: g.player.x + 3, z: g.player.z });
+      for (var j = 0; j < names.length; j++) au.play(names[j], {});
+      au.event('spot', {}); au.event('unknown-event-name', {});
+      au.step(1 / 60);
+      au.cameraShake({ pitch: 0, yaw: 0, roll: 0 });
+    } catch (err) { threw = err && err.message; }
+    t.ok(threw === null, '音響: 未解錠でも発音呼び出しで例外が出ない', threw);
+    t.ok(au.errors === e0, '音響: 未解錠での発音がエラーを積まない', au.errors + ' (before ' + e0 + ')');
+    /* 未解錠でも「鳴らすと決めた」記録は積む＝発火ロジックを検証できる */
+    t.ok((au.fired.footstep || 0) >= 0 && typeof au.fired === 'object', '音響: 発火カウンタが取れる');
+    g.reset();
+  }
+
+  /** 同時発音数の上限管理（スマホ想定） */
+  function testAudioVoiceCap(t) {
+    var au = ESCAPE.audio, A = ESCAPE.Audio;
+    au._live.length = 0;
+    var d0 = au.dropped;
+    var ok = 0;
+    for (var i = 0; i < A.MAX_VOICES + 5; i++) if (au._alloc(0, 5000)) ok++;
+    t.ok(ok === A.MAX_VOICES, '音響: 同時発音数が上限で頭打ちになる', ok + '/' + A.MAX_VOICES);
+    t.ok(au.dropped > d0, '音響: 上限超過が記録される', (au.dropped - d0) + '件');
+    /* 優先度つきは少しだけ通る（発見・捕獲・警報を落とさない） */
+    t.ok(au._alloc(1, 5000) === true, '音響: 優先度つきの音は上限を超えても鳴らせる');
+    au._live.length = 0;
+    au.dropped = d0;
+    t.ok(au._live.length === 0, '音響: ボイス管理を初期化できる');
+  }
+
+  /** 音量設定の保存・復元（契約 §4「マスター音量は設定に保持」） */
+  function testAudioSettings(t) {
+    var au = ESCAPE.audio;
+    var keep = null;
+    try { keep = global.localStorage.getItem(AUDIO_KEY); } catch (e) { /* noop */ }
+    var v0 = au.getVolume();
+    au.setVolume(0.42);
+    t.near(au.getVolume(), 0.42, 1e-9, '音量: 設定できる');
+    var raw = null;
+    try { raw = global.localStorage.getItem(AUDIO_KEY); } catch (e2) { /* noop */ }
+    if (t.ok(!!raw, '音量: localStorage へ保存される')) {
+      var d = JSON.parse(raw);
+      t.near(d.volume, 0.42, 1e-9, '音量: 保存内容が一致する');
+    }
+    au.volume = 0; au.muted = true;
+    au._loadSettings();
+    t.near(au.getVolume(), 0.42, 1e-9, '音量: 起動時に復元される');
+    t.ok(au.muted === false, '音量: 消音状態も復元される');
+    au.setVolume(1.5);
+    t.near(au.getVolume(), 1, 1e-9, '音量: 範囲外は 0..1 に丸められる');
+    au.setVolume(-1);
+    t.near(au.getVolume(), 0, 1e-9, '音量: 負値は0に丸められる');
+    /* 後始末（テストが利用者の設定を書き換えたままにしない） */
+    au.setVolume(v0);
+    try {
+      if (keep === null) global.localStorage.removeItem(AUDIO_KEY);
+      else global.localStorage.setItem(AUDIO_KEY, keep);
+    } catch (e3) { /* noop */ }
+  }
+
+  /**
+   * 音響ディレクタの発火ロジック。
+   * 「Aが状態設定→Bの毎フレーム更新が上書き」型の回帰を検出する:
+   *   心拍レートは距離で毎フレーム変わるが、累積器は発火時にしか減らないので鳴り続ける。
+   */
+  function testAudioDirector(t, g) {
+    g.reset();
+    var au = ESCAPE.audio, sp = g.map.meta.spawn;
+    var open = findTriple(g.map, false);
+
+    /**
+     * 同じ通路を走り/歩き続ける（音響ディレクタは stepFrame 経由でしか動かないので
+     * player.step() を直接叩く drive() は使えない）。
+     * 進みすぎたら開始点へ戻す＝短い通路でも速度を保ったまま走り続けられる。
+     */
+    function travel(frames, running) {
+      var sx = g.player.x, sz = g.player.z;
+      g.input.moveY = 1;
+      g.input._keyRun = !!running;
+      for (var i = 0; i < frames; i++) {
+        if (Math.hypot(g.player.x - sx, g.player.z - sz) > 2.4) { g.player.x = sx; g.player.z = sz; }
+        sim(g, 1);
+      }
+      g.input.reset();
+    }
+
+    /* 足音: 歩けば鳴る・止まれば鳴らない。敵は止めて捕獲による中断を避ける */
+    g.ai.manual = true;
+    place(g, open.col, open.row, -90);           /* -90° = 前方が +X（findTriple の向き） */
+    var f0 = au.fired.footstep || 0;
+    travel(120, false);
+    var nWalk = (au.fired.footstep || 0) - f0;
+    t.ok(nWalk >= 2, '音響ディレクタ: 歩くと足音が繰り返し鳴る', nWalk + '歩');
+    var f1 = au.fired.footstep || 0;
+    sim(g, 60);
+    t.ok((au.fired.footstep || 0) === f1, '音響ディレクタ: 止まると足音は鳴らない');
+
+    /* 走ると歩きより歩数が増える（同じフレーム数で） */
+    place(g, open.col, open.row, -90);
+    var fr0 = au.fired.footstep || 0;
+    travel(120, true);
+    var nRun = (au.fired.footstep || 0) - fr0;
+    t.ok(nRun > nWalk, '音響ディレクタ: 走ると足音の間隔が詰まる', nRun + ' > ' + nWalk);
+
+    /* しゃがみでも鳴る（音量は小さい＝レンダ側で検証済み） */
+    place(g, open.col, open.row, -90);
+    var fc0 = au.fired.footstep || 0;
+    g.input.crouchOn = true;
+    travel(120, false);
+    g.input.crouchOn = false;
+    t.ok((au.fired.footstep || 0) > fc0, '音響ディレクタ: しゃがみ移動でも足音が鳴る',
+      ((au.fired.footstep || 0) - fc0) + '歩');
+
+    /* 息切れ: 走り続けると exertion が上がって pant が鳴る */
+    place(g, open.col, open.row, -90);
+    var p0 = au.fired.pant || 0;
+    travel(300, true);
+    t.ok(au.exertion > 0.42, '音響ディレクタ: 走り続けると息が上がる', au.exertion.toFixed(3));
+    t.ok((au.fired.pant || 0) > p0, '音響ディレクタ: 息切れの音が鳴る',
+      ((au.fired.pant || 0) - p0) + '回');
+    /* 休むと息が戻る */
+    g.input.reset();
+    sim(g, 300);
+    t.ok(au.exertion < 0.42, '音響ディレクタ: 休むと息が整う', au.exertion.toFixed(3));
+    g.ai.manual = false;
+
+    /* 心拍: 追跡中は鳴り続け、距離で速まる（毎フレームのレート更新で止まらない） */
+    g.reset();
+    placeEnemy(g, open.col, open.row, -90);
+    place(g, open.col + 2, open.row, 0);
+    g.player.crouching = false;
+    sim(g, 1);
+    var h0 = au.fired.heartbeat || 0;
+    /* プレイヤーを固定したまま120フレーム（2秒）進める */
+    for (var i = 0; i < 120; i++) {
+      g.player.x = g.map.cellCenter(open.col + 2, open.row).x;
+      g.player.z = g.map.cellCenter(open.col + 2, open.row).z;
+      sim(g, 1);
+    }
+    var beats = (au.fired.heartbeat || 0) - h0;
+    t.ok(beats >= 2, '音響ディレクタ: 追跡中は心拍が鳴り続ける（レート再設定で止まらない）', beats + '拍');
+    t.ok(beats <= 8, '音響ディレクタ: 心拍が過剰に鳴らない', beats + '拍');
+
+    /* 敵の徘徊音: 巡回で歩くたびに鳴る（プレイヤーは離れた位置＝捕獲されない） */
+    g.reset();
+    var d0 = (au.fired.enemyDrag || 0) + (au.fired.enemyClaw || 0);
+    place(g, sp.col, sp.row, 0);
+    sim(g, 240);
+    t.ok((au.fired.enemyDrag || 0) + (au.fired.enemyClaw || 0) > d0,
+      '音響ディレクタ: 敵の徘徊音が鳴る',
+      ((au.fired.enemyDrag || 0) + (au.fired.enemyClaw || 0) - d0) + '回 / 敵 ' + g.ai.state);
+    t.ok(g.stealth.jail.phase === 'none', '音響ディレクタ: 徘徊音の検証中に捕獲されていない');
+
+    /* 床種の判定（音地盤のマスで water/glass が返る） */
+    var noises = g.map.meta.noise || [];
+    var kinds = {};
+    for (var k = 0; k < noises.length; k++) kinds[au.floorMaterial(noises[k].col, noises[k].row)] = true;
+    t.ok(kinds.water && kinds.glass, '音響ディレクタ: 音地盤の床種（水/硝子）を判定できる',
+      Object.keys(kinds).join(','));
+    var ramp = (g.map.meta.ramps || [])[0];
+    t.ok(au.floorMaterial(ramp.c0 + 1, ramp.r0) === 'metal', '音響ディレクタ: 傾斜路は金属床の音になる');
+    t.ok(au.floorMaterial(sp.col, sp.row) === 'tile', '音響ディレクタ: 通常の通路はタイルの音になる');
+
+    /* 環境ドローン: 区画をまたぐと目標値が変わる */
+    var w = g.world;
+    var ra = w._regionAt(sp.col, sp.row);
+    var rb = null;
+    var regions = g.map.meta.regions || [];
+    for (var r2 = 0; r2 < regions.length && !rb; r2++) if (regions[r2].id !== ra) rb = regions[r2].id;
+    t.ok(!!ESCAPE.Audio.AMBIENCE[ra] && !!ESCAPE.Audio.AMBIENCE[rb] &&
+      ESCAPE.Audio.AMBIENCE[ra].f !== ESCAPE.Audio.AMBIENCE[rb].f,
+      '音響ディレクタ: 区画ごとにドローンの色味が違う', ra + ' vs ' + rb);
+
+    /* 蛍光灯: 明滅器具の明滅レベルが時間で変化する（ジー音の同期元） */
+    var flick = null;
+    for (var fi = 0; fi < w.fixtures.length && !flick; fi++) if (w.fixtures[fi].state === 'flicker') flick = w.fixtures[fi];
+    if (t.ok(!!flick, '音響ディレクタ: 明滅器具がある（ジー音の同期元）')) {
+      var lvls = {};
+      for (var ti = 0; ti < 40; ti++) lvls[w.flickerLevelAt(flick, ti * 0.037).toFixed(3)] = true;
+      t.ok(Object.keys(lvls).length > 3, '音響ディレクタ: 明滅レベルが時間で変化する',
+        Object.keys(lvls).length + '値');
+      t.near(w.flickerLevelAt({ state: 'off' }, 0), 0, 1e-9, '音響ディレクタ: 消灯器具の明滅レベルは0');
+    }
+    g.reset();
+  }
+
+  /**
+   * 環境音の情報設計（契約 §4）:
+   *   区画ごとのドローン／明滅に同期する蛍光灯のジー音（近接で増大）／
+   *   漆黒区画では環境音を絞って呼吸だけにする／ページ非表示で一時停止。
+   * 出力デバイスに依存しないよう「鳴らすべき音量（target）」で判定する。
+   */
+  function testAudioAmbience(t, g) {
+    g.reset();
+    var au = ESCAPE.audio, w = g.world, map = g.map;
+
+    function standAt(x, z, frames) {
+      g.player.x = x; g.player.z = z;
+      g.player.y = map.floorYAt(x, z);
+      for (var i = 0; i < (frames || 30); i++) {
+        g.player.x = x; g.player.z = z;
+        sim(g, 1);
+      }
+    }
+    function cellAt(col, row) { return map.cellCenter(col, row); }
+
+    /* 区画をまたぐとドローンの目標音量・参照区画が切り替わる */
+    var sp = map.meta.spawn;
+    var c0 = cellAt(sp.col, sp.row);
+    standAt(c0.x, c0.z, 40);
+    var regionA = au.ambRegion, ambA = au.ambTarget;
+    t.ok(ambA > 0, '環境音: 通常の通路でドローンが鳴る', ambA.toFixed(4));
+
+    /* 漆黒区画: 環境音を絞り、呼吸を前に出す */
+    var bz = (map.meta.blackZones || [])[0];
+    if (t.ok(!!bz, '環境音: 漆黒区画がある（前提）')) {
+      var cb = cellAt(bz.c0 + 1, bz.r0);
+      t.ok(!!w._inBlackZone(bz.c0 + 1, bz.r0), '環境音: 漆黒区画の判定が効く');
+      /* 呼吸の山を拾うため十分な時間を取る（呼吸周期は約4秒） */
+      var peakNormal = 0;
+      standAt(c0.x, c0.z, 1);
+      for (var i = 0; i < 600; i++) { g.player.x = c0.x; g.player.z = c0.z; sim(g, 1); peakNormal = Math.max(peakNormal, au.breathTarget); }
+      var ambNormal = au.ambTarget;
+      var peakBlack = 0;
+      for (var j = 0; j < 600; j++) { g.player.x = cb.x; g.player.z = cb.z; sim(g, 1); peakBlack = Math.max(peakBlack, au.breathTarget); }
+      t.ok(au.ambTarget < ambNormal * 0.5, '環境音: 漆黒区画では環境音が絞られる',
+        au.ambTarget.toFixed(4) + ' < ' + ambNormal.toFixed(4));
+      t.ok(peakBlack > peakNormal * 1.5, '環境音: 漆黒区画では呼吸が前に出る',
+        peakBlack.toFixed(5) + ' > ' + peakNormal.toFixed(5));
+    }
+
+    /* 蛍光灯のジー音: 明滅パターンに同期し、近接で増大・遠ざかると消える */
+    g.reset();
+    var flick = null;
+    for (var fi = 0; fi < w.fixtures.length && !flick; fi++) if (w.fixtures[fi].state === 'flicker') flick = w.fixtures[fi];
+    if (t.ok(!!flick, '環境音: 明滅器具がある（前提）')) {
+      var lo = 1, hi = 0, tLo = 1, tHi = 0;
+      g.player.x = flick.x; g.player.z = flick.z;
+      for (var k = 0; k < 240; k++) {
+        g.player.x = flick.x; g.player.z = flick.z;
+        sim(g, 1);
+        lo = Math.min(lo, au._buzzLevel); hi = Math.max(hi, au._buzzLevel);
+        tLo = Math.min(tLo, au.buzzTarget); tHi = Math.max(tHi, au.buzzTarget);
+      }
+      t.ok(au.buzzDist < 1.5, '環境音: 直下の明滅器具を同期元にする', au.buzzDist.toFixed(2) + 'm');
+      t.ok(lo < 0.30 && hi > 0.70, '環境音: 明滅レベルが上下する（ジー音の同期元）',
+        lo.toFixed(3) + '..' + hi.toFixed(3));
+      t.ok(tHi > tLo, '環境音: ジー音の音量が明滅に同期して上下する',
+        tLo.toFixed(5) + '..' + tHi.toFixed(5));
+      t.ok(tHi > 0.01, '環境音: 明滅器具の近くではジー音が聞こえる音量になる', tHi.toFixed(5));
+      /* 遠ざかると消える。「最寄りの明滅器具」から最も遠い歩行可能マスで判定する
+         （特定の1灯から遠いだけでは別の灯が近い場合があるので同期元の距離で選ぶ） */
+      var flicks = [];
+      for (var fj = 0; fj < w.fixtures.length; fj++) if (w.fixtures[fj].state === 'flicker') flicks.push(w.fixtures[fj]);
+      var far = null, best = -1;
+      var cells = map.walkableCells();
+      for (var ci = 0; ci < cells.length; ci++) {
+        var cc = map.cellCenter(cells[ci].col, cells[ci].row);
+        var nd = Infinity;
+        for (var fk = 0; fk < flicks.length; fk++) {
+          var dd = Math.hypot(cc.x - flicks[fk].x, cc.z - flicks[fk].z);
+          if (dd < nd) nd = dd;
+        }
+        if (nd > best) { best = nd; far = cc; }
+      }
+      standAt(far.x, far.z, 30);
+      t.ok(au.buzzDist > 8, '環境音: 明滅器具から最も遠いマスを検証に使う', best.toFixed(1) + 'm');
+      t.ok(au.buzzTarget < tHi * 0.25, '環境音: 明滅器具から離れるとジー音がほぼ消える',
+        au.buzzTarget.toFixed(5) + ' << ' + tHi.toFixed(5));
+      /* 到達半径の外では完全に無音になる（同期元を人為的に遠くへ置いて確認する） */
+      var keepX = flicks[0].x, keepZ = flicks[0].z, moved = [];
+      for (var fm = 0; fm < flicks.length; fm++) {
+        moved.push([flicks[fm].x, flicks[fm].z]);
+        flicks[fm].x += 10000; flicks[fm].z += 10000;
+      }
+      au._flickerFx = null;                    /* 索引を作り直させる */
+      standAt(far.x, far.z, 5);
+      t.near(au.buzzTarget, 0, 1e-12, '環境音: 到達半径の外ではジー音が完全に消える');
+      for (var fr = 0; fr < flicks.length; fr++) { flicks[fr].x = moved[fr][0]; flicks[fr].z = moved[fr][1]; }
+      au._flickerFx = null;
+      t.ok(flicks[0].x === keepX && flicks[0].z === keepZ, '環境音: 検証で動かした器具を元に戻す');
+    }
+
+    /* 滴り・遠い金属音がランダム間隔で鳴る */
+    g.reset();
+    var d0 = au.fired.drip || 0, m0 = au.fired.metalFar || 0;
+    g.ai.manual = true;                       /* 捕獲による中断を避ける */
+    sim(g, 60 * 60);                          /* 60秒 */
+    g.ai.manual = false;
+    t.ok((au.fired.drip || 0) > d0, '環境音: 配管の滴りがランダム間隔で鳴る',
+      ((au.fired.drip || 0) - d0) + '回/60s');
+    t.ok((au.fired.metalFar || 0) > m0, '環境音: 遠い金属音が鳴る',
+      ((au.fired.metalFar || 0) - m0) + '回/60s');
+
+    /* ページ非表示で環境音を一時停止する */
+    g.reset();
+    var wasHidden = au.hidden;
+    au.hidden = true;
+    sim(g, 30);
+    t.ok(au.ctxLive() === null, '環境音: 非表示中は発音経路を止める');
+    au.hidden = wasHidden;
+    sim(g, 5);
+    t.ok(au.hidden === false, '環境音: 表示に戻ると再開できる状態になる');
+    g.reset();
+  }
+
+  /** 恐怖演出（軽量）: 減光・微振動・FOV微増・フラッシュ／リセットで完全復帰 */
+  function testFearFx(t, g) {
+    g.reset();
+    var au = ESCAPE.audio, fx = au.fx;
+    t.near(fx.vignette, 0, 1e-9, '演出: リセット直後は減光ゼロ');
+    t.near(fx.fovAdd, 0, 1e-9, '演出: リセット直後はFOV加算ゼロ');
+    t.near(g.camera.fov, 75, 1e-6, '演出: リセット直後のFOVは基準値', g.camera.fov);
+
+    /* 遠くにいる間は演出が控えめ */
+    var sp = g.map.meta.spawn;
+    place(g, sp.col, sp.row, 0);
+    sim(g, 30);
+    var farVig = au.fx.vignette;
+
+    /* 発見されるとスティングのフラッシュ・ノイズ・振動が立つ */
+    var open = findTriple(g.map, false);
+    placeEnemy(g, open.col, open.row, -90);
+    place(g, open.col + 2, open.row, 0);
+    g.player.crouching = false;
+    sim(g, 1);
+    t.ok(au.fx.flash > 0.2, '演出: 発見でフラッシュが立つ', au.fx.flash.toFixed(3));
+    t.ok(au.fx.noise > 0.2, '演出: 発見でノイズが立つ', au.fx.noise.toFixed(3));
+    t.ok(au.fx.shakeImpulse > 0.2, '演出: 発見で振動が立つ', au.fx.shakeImpulse.toFixed(3));
+    sim(g, 40);
+    t.ok(au.fx.vignette > farVig, '演出: 敵が近いと周辺が減光する',
+      au.fx.vignette.toFixed(3) + ' > ' + farVig.toFixed(3));
+    t.ok(au.fx.fovAdd > 0.5, '演出: 追跡中はFOVが少し広がる', au.fx.fovAdd.toFixed(3));
+    t.ok(g.camera.fov > 75.4, '演出: カメラのFOVに反映される', g.camera.fov.toFixed(2));
+    var sh = { pitch: 0, yaw: 0, roll: 0 };
+    au.cameraShake(sh);
+    t.ok(Math.abs(sh.pitch) + Math.abs(sh.yaw) + Math.abs(sh.roll) > 0,
+      '演出: カメラ揺れの値が出る');
+    t.ok(Math.abs(sh.pitch) < 0.05 && Math.abs(sh.roll) < 0.05, '演出: 揺れは微振動の範囲',
+      sh.pitch.toFixed(4));
+    /* フラッシュ・ノイズは時間で減衰して消える */
+    sim(g, 120);
+    t.ok(au.fx.flash === 0 && au.fx.noise === 0, '演出: フラッシュ・ノイズが減衰して消える',
+      au.fx.flash + '/' + au.fx.noise);
+
+    /* 牢送り演出中は減光を敵に引っ張られない（暗転と二重にしない） */
+    g.stealth.capture();
+    sim(g, 30);
+    t.ok(au.fx.dread < 0.55, '演出: 牢送り演出中は敵由来の恐怖演出を止める', au.fx.dread.toFixed(3));
+
+    /* リセットで完全復帰 */
+    g.reset();
+    t.near(au.fx.vignette, 0, 1e-9, '演出: リセットで減光が戻る');
+    t.near(au.fx.shake, 0, 1e-9, '演出: リセットで振動が戻る');
+    t.near(au.fx.flash, 0, 1e-9, '演出: リセットでフラッシュが戻る');
+    t.near(au.fx.black, 0, 1e-9, '演出: リセットで瞬間暗転が戻る');
+    t.near(g.camera.fov, 75, 1e-6, '演出: リセットでFOVが基準値に戻る', g.camera.fov);
+    var vg = document.getElementById('fx-vignette');
+    t.ok(vg && (vg.style.opacity === '0.000' || Number(vg.style.opacity) === 0),
+      '演出: リセットでDOMの減光も消える', vg && vg.style.opacity);
+  }
+
+  /** 巡回のランダム停止（「目撃」演出の素）。停止しても巡回は再開する */
+  function testPatrolPause(t, g) {
+    g.reset();
+    var ai = g.ai, T = ESCAPE.ENEMY_TUNING;
+    t.ok(T.patrolPauseFirst >= 5, '巡回停止: 最初の停止は巡回開始から十分後', T.patrolPauseFirst + 's');
+    /* 3秒（=既存テストの巡回移動判定の長さ）では止まらない */
+    var x0 = ai.enemy.x, z0 = ai.enemy.z;
+    sim(g, 180);
+    t.ok(ai.pauses === 0, '巡回停止: 開始直後は止まらない（既存の巡回テストを壊さない）', ai.pauses);
+    t.ok(Math.hypot(ai.enemy.x - x0, ai.enemy.z - z0) > 1.0, '巡回停止: その間は歩いている');
+    /* 十分な時間を進めれば必ず1回以上止まり、その間は動かない */
+    var paused = simUntil(g, function () { return ai.pauseT > 0; },
+      Math.ceil((T.patrolPauseFirst + 6) / ESCAPE.FIXED_DT));
+    if (t.ok(paused >= 0, '巡回停止: 一定時間後に立ち止まる', ai.pauses + '回')) {
+      var px = ai.enemy.x, pz = ai.enemy.z;
+      sim(g, 30);
+      t.ok(ai.state === 'patrol', '巡回停止: 停止中も巡回状態のまま', ai.state);
+      t.ok(Math.hypot(ai.enemy.x - px, ai.enemy.z - pz) < 0.02, '巡回停止: 停止中は動かない',
+        Math.hypot(ai.enemy.x - px, ai.enemy.z - pz).toFixed(4));
+      t.near(ai.speed, 0, 1e-9, '巡回停止: 停止中の速度はゼロ');
+      var resumed = simUntil(g, function () { return ai.pauseT <= 0 && ai.speed > 0.05; },
+        Math.ceil((T.patrolPauseDur + T.patrolPauseDurVar + 3) / ESCAPE.FIXED_DT));
+      t.ok(resumed >= 0, '巡回停止: 一定時間で巡回を再開する');
+    }
+    /* 発見されたら停止は無視して追跡へ */
+    var open = findTriple(g.map, false);
+    placeEnemy(g, open.col, open.row, -90);
+    ai.pauseT = 5;
+    place(g, open.col + 2, open.row, 0);
+    g.player.crouching = false;
+    sim(g, 1);
+    t.ok(ai.state === 'chase', '巡回停止: 停止中でも発見すれば追跡へ移る', ai.state);
+    g.reset();
+    t.ok(ai.pauses === 0 && ai.pauseT === 0, '巡回停止: リセットで初期化される');
+  }
+
   /* ---------------- 実行本体 ---------------- */
 
   function runAll(opts) {
@@ -1325,6 +2032,12 @@
       t.ok(false, 'ゲームが初期化されている');
       return summarize(t);
     }
+
+    /* P4.5: 機械テスト中は実出力しない（契約）。連続音も即座に止めてから始める。
+       finally 相当で必ず戻す＝runAll 後の通常操作で音が出なくならないこと。 */
+    var au = ESCAPE.audio;
+    var audioWasTest = au ? au.testMode : false;
+    if (au) { au.testMode = true; au.panic(); }
 
     // 実行前スナップショット（＝製品初期状態）
     g.reset();
@@ -1343,7 +2056,10 @@
       /* P4: 調べるUI統合・メモ・仕掛け連鎖・チェックポイント/セーブ */
       testGimmickOrderAndNotes, testMemoNotes, testMemoCloseGestures, testModalInterruptSafety,
       testHandleHoldInterrupt, testCheckpointAutoSave, testSaveLoadRestore, testEraseAllData,
-      testAreaResetKeepsGimmick
+      testAreaResetKeepsGimmick,
+      /* P4.5: 音響＋恐怖演出 */
+      testAudioContract, testAudioRender, testAudioSpatial, testAudioHooks, testAudioLocked, testAudioVoiceCap,
+      testAudioSettings, testAudioDirector, testAudioAmbience, testFearFx, testPatrolPause
     ];
     for (var i = 0; i < suites.length; i++) {
       try {
@@ -1402,6 +2118,24 @@
         t.ok(global.localStorage.getItem('escape.save.area1.v1') === null,
           '復帰: 機械テストが残したセーブデータが残っていない');
       } catch (e) { /* localStorage無効環境は対象外 */ }
+    }
+    /* P4.5: 音響・恐怖演出も製品初期状態へ戻ること */
+    if (au) {
+      au.testMode = audioWasTest;                 /* 実出力の停止を必ず解除する */
+      t.ok(au.testMode === false, '復帰: 機械テストの無音モードが解除される', au.testMode);
+      t.near(au.fx.vignette, 0, 1e-9, '復帰: 周辺減光がゼロ');
+      t.near(au.fx.shake, 0, 1e-9, '復帰: 画面振動がゼロ');
+      t.near(au.fx.fovAdd, 0, 1e-9, '復帰: FOV加算がゼロ');
+      t.near(g.camera.fov, 75, 1e-6, '復帰: カメラのFOVが基準値', g.camera.fov);
+      t.near(au.exertion, 0, 1e-9, '復帰: 息切れの蓄積がゼロ');
+      t.near(au.hbT, 0, 1e-9, '復帰: 心拍の累積器がゼロ');
+      t.ok(au._live.length === 0, '復帰: 発音中のボイスが残っていない', au._live.length);
+      t.ok(au.errors === 0, '復帰: 音響の例外がゼロ', au.errors);
+      if (au.amb) {
+        t.near(au.amb.out.gain.value, 0, 1e-9, '復帰: 環境ドローンが止まっている');
+        t.near(au.buzz.out.gain.value, 0, 1e-9, '復帰: 蛍光灯のジー音が止まっている');
+        t.near(au.breath.out.gain.value, 0, 1e-9, '復帰: 呼吸音が止まっている');
+      }
     }
 
     return summarize(t, opts);

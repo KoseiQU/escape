@@ -97,6 +97,11 @@
 
   var SAVE_KEY = 'escape.save.area1.v1';
 
+  /** 音響フックの共通口（P4.5）。音響モジュールが無くても落ちない */
+  function sfx(name, p) {
+    if (ESCAPE.audio && ESCAPE.audio.event) ESCAPE.audio.event(name, p);
+  }
+
   function bindTap(el, fn) {
     if (!el) return;
     el.addEventListener('touchstart', function (e) { e.preventDefault(); e.stopPropagation(); fn(); }, { passive: false });
@@ -213,6 +218,8 @@
         this.gimmick.power = true;
         var c1 = this.game.map.cellCenter(t.col, t.row);
         ESCAPE.noise.emit(c1.x, c1.z, LEVER_NOISE_RADIUS, 'lever');
+        /* 契約 §4「レバー投入の重い駆動音が施設全体に響く」 */
+        sfx('lever', { x: c1.x, z: c1.z });
         this.save();
       }
       return true;
@@ -256,11 +263,16 @@
       if (this._handleNoiseT <= 0) {
         var c = g.map.cellCenter(t.col, t.row);
         ESCAPE.noise.emit(c.x, c.z, ESCAPE.ENEMY_TUNING.gimmickNoiseRadius, 'handle');
+        /* 契約 §4「隔壁ハンドルの軋み」。回している間だけ周期発火する */
+        sfx('handleCreak', { x: c.x, z: c.z });
         this._handleNoiseT = HANDLE_NOISE_INTERVAL;
       }
       if (this.gimmick.handleHold >= 1) {
         this.gimmick.handleHold = 1;
         this.gimmick.doorOpen = true;
+        var co = g.map.cellCenter(t.col, t.row);
+        /* 契約 §4「開放の轟音」 */
+        sfx('doorRoar', { x: co.x, z: co.z });
         this.save();
       }
     } else {
@@ -275,6 +287,7 @@
     var entry = this._checkpointAt[g.player.col() + ',' + g.player.row()];
     if (!entry || entry.id === this.checkpoint) return;
     this.checkpoint = entry.id;
+    sfx('checkpoint', {});
     this.save();
   };
 
@@ -324,6 +337,7 @@
     this.memoId = id;
     if (this.dom.memoTitle) this.dom.memoTitle.textContent = txt.title;
     if (this.dom.memoBody) this.dom.memoBody.textContent = txt.body;
+    sfx('noteOpen', {});
     this._syncModalDom();
   };
 
@@ -343,6 +357,7 @@
     if (this._kpErrT > 0) return;               /* 誤入力表示中は入力を受け付けない */
     if (this.keypadDigits.length >= 4) return;
     this.keypadDigits += k;
+    sfx('terminalKey', {});
     if (this.keypadDigits.length === 4) this._submitCode();
   };
 
@@ -351,10 +366,12 @@
       this.gimmick.code = true;
       this.keypadErr = false;
       this._closeModal();
+      sfx('terminalOk', {});
       this.save();
     } else {
       this.keypadErr = true;
       this._kpErrT = KEYPAD_ERR_DUR;
+      sfx('terminalErr', {});
     }
   };
 
@@ -380,6 +397,7 @@
 
   Progress.prototype._closeModal = function () {
     if (this.modal === 'ending') return; /* クリア画面は自然には閉じない */
+    if (this.modal === 'memo') sfx('noteClose', {});
     this.modal = null;
     this._syncModalDom();
   };
@@ -459,6 +477,8 @@
   /** 契約 §2「永続フラグには必ずリセット経路」。暫定UI（設定/タイトル前）から呼ぶ */
   Progress.prototype.eraseAllData = function () {
     try { global.localStorage.removeItem(SAVE_KEY); } catch (e) { /* 無視 */ }
+    /* P4.5: 音量設定も永続化しているので同じ経路で消す */
+    if (ESCAPE.audio && ESCAPE.audio.eraseSettings) ESCAPE.audio.eraseSettings();
     this.game.reset();
   };
 

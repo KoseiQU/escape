@@ -1936,6 +1936,24 @@
     return lvl;
   }
 
+  /**
+   * 器具1つの現在の明るさ(0..1)。P4.5の蛍光灯ジー音が明滅に同期するための参照口。
+   * flicker 以外は状態そのままの固定値を返す。
+   */
+  World.prototype.flickerLevelAt = function (f, t) {
+    if (!f) return 0;
+    if (f.state === 'off') return 0;
+    if (f.state !== 'flicker') return 1;
+    if (this._flickByGroup === undefined || this._flickByGroupN !== this.flickers.length) {
+      this._flickByGroup = Object.create(null);
+      for (var i = 0; i < this.flickers.length; i++) this._flickByGroup[this.flickers[i].group] = this.flickers[i];
+      this._flickByGroupN = this.flickers.length;
+    }
+    var e = this._flickByGroup[f.fgroup];
+    if (!e) return 1;
+    return flickerLevel(e.pattern, e.phase, t);
+  };
+
   World.prototype.update = function (t) {
     for (var i = 0; i < this.flickers.length; i++) {
       var e = this.flickers[i];

@@ -47,6 +47,26 @@
     position:fixed; inset:0; z-index:40; background:#000; opacity:0; pointer-events:none;
   }
 
+  /* --- P4.5: 恐怖演出のオーバーレイ（ポストプロセス不要・全て毎フレームJSで書く） --- */
+  /* 周辺減光。敵が近いほど視界の縁が閉じる。瞬間暗転では background を上書きする */
+  #fx-vignette {
+    position:fixed; inset:0; z-index:30; pointer-events:none; opacity:0;
+    background:radial-gradient(ellipse at 50% 50%,
+      rgba(0,0,0,0) 32%, rgba(0,0,0,.55) 72%, rgba(0,0,0,.95) 100%);
+  }
+  /* 発見スティングの一瞬のフラッシュ */
+  #fx-flash {
+    position:fixed; inset:0; z-index:32; pointer-events:none; opacity:0;
+    background:radial-gradient(ellipse at 50% 50%,
+      rgba(255,226,226,.62) 0%, rgba(178,44,44,.42) 48%, rgba(40,0,0,.10) 100%);
+    mix-blend-mode:screen;
+  }
+  /* 発見スティングのノイズ。背景画像はCanvasから生成する（外部素材禁止） */
+  #fx-noise {
+    position:fixed; inset:-12px; z-index:31; pointer-events:none; opacity:0;
+    background-repeat:repeat; background-size:96px 96px; mix-blend-mode:overlay;
+  }
+
   /* --- 仮想スティック（タッチ位置起点のフローティング式） --- */
   #stick-base {
     position:absolute; display:none; width:132px; height:132px; margin:-66px 0 0 -66px;
@@ -174,6 +194,9 @@
     </div>
   </div>
 
+  <div id="fx-vignette"></div>
+  <div id="fx-noise"></div>
+  <div id="fx-flash"></div>
   <div id="blackout"></div>
 
   <!-- P4: メモ拡大表示 -->
@@ -242,6 +265,7 @@
   <script src="js/enemy_model.js"></script>
   <script src="js/enemy_ai.js"></script>
   <script src="js/progress.js"></script>
+  <script src="js/audio.js"></script>
   <script src="js/test.js"></script>
 </body>
 </html>

@@ -10,6 +10,7 @@
 
   var FIXED_DT = 1 / 60;
   var MAX_FRAME = 0.25;   // 1フレームで消化する最大実時間(s)
+  var BASE_FOV = 75;      // 通常時の視野角。追跡中だけ音響ディレクタが少し広げる
 
   function Game() {
     this.mapId = 'area1';
@@ -37,7 +38,7 @@
     this.scene.background = new THREE.Color(ESCAPE.World.FOG_COLOR);
     this.scene.fog = new THREE.Fog(ESCAPE.World.FOG_COLOR, 1.6, 15.5);
 
-    this.camera = new THREE.PerspectiveCamera(75, 1, 0.05, 300);
+    this.camera = new THREE.PerspectiveCamera(BASE_FOV, 1, 0.05, 300);
     this.camera.rotation.order = 'YXZ';
 
     this.map = ESCAPE.Maps.load(this.mapId);
@@ -168,13 +169,28 @@
 
     /* 蛍光灯のチラつき（ゲーム内時刻駆動＝__pumpでも同じ絵になる） */
     if (this.world && this.world.update) this.world.update(this.simTime);
+    /* 5) 音響ディレクタ＋恐怖演出（P4.5）。世界の更新後＝明滅レベルが確定してから */
+    if (ESCAPE.audio && ESCAPE.audio.step) ESCAPE.audio.step(dt);
     this.syncCamera();
   };
 
+  /** カメラ揺れの一時受け（毎フレームの生成を避ける） */
+  var SHAKE = { pitch: 0, yaw: 0, roll: 0 };
+
   Game.prototype.syncCamera = function () {
     var p = this.player;
+    var au = ESCAPE.audio;
+    var s = SHAKE;
+    s.pitch = 0; s.yaw = 0; s.roll = 0;
+    if (au && au.cameraShake) au.cameraShake(s);
     this.camera.position.set(p.x, p.y + p.eyeHeight, p.z);
-    this.camera.rotation.set(p.pitch, p.yaw, 0);
+    this.camera.rotation.set(p.pitch + s.pitch, p.yaw + s.yaw, s.roll);
+    /* 追跡中のFOV微増（契約 §4「恐怖演出（軽量）」）。変化した時だけ行列を作り直す */
+    var want = BASE_FOV + ((au && au.fx) ? au.fx.fovAdd : 0);
+    if (Math.abs(this.camera.fov - want) > 0.0008) {
+      this.camera.fov = want;
+      this.camera.updateProjectionMatrix();
+    }
   };
 
   Game.prototype.render = function () {
@@ -228,6 +244,8 @@
     if (ESCAPE.noise) ESCAPE.noise.reset();
     if (this.stealth) this.stealth.reset();
     if (this.ai) this.ai.reset();
+    /* P4.5: 音響ディレクタ・恐怖演出も初期状態へ（連続音の鳴りっぱなしを止める） */
+    if (ESCAPE.audio && ESCAPE.audio.reset) ESCAPE.audio.reset();
     this.syncCamera();
     this.updateChrome();
     return this;

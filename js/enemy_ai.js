@@ -73,8 +73,22 @@
     wakeDur: 1.20,            // 明転(s)
     pryPerPress: 0.34,        // 「調べる」1回ぶんの格子こじ開け
     pryHoldRate: 0.55,        // 長押し(1/s)
-    pryDecay: 0.10            // 手を止めると戻る(1/s)
+    pryDecay: 0.10,           // 手を止めると戻る(1/s)
+
+    /* 巡回のランダム停止（P4.5 恐怖演出）。
+       通路の先で立ち止まる個体を「目撃」する状況を自然に発生させる。
+       最初の停止は必ず firstPause 秒より後（機械テストの巡回移動判定を壊さないため） */
+    patrolPauseFirst: 7.0,    // 巡回開始から最初に止まりうるまで(s)
+    patrolPauseGap: 11.0,     // 停止後、次に止まりうるまでの最短(s)
+    patrolPauseVar: 9.0,      // 上記に足す振れ幅(s)
+    patrolPauseDur: 2.6,      // 停止の長さ(s)
+    patrolPauseDurVar: 2.2
   };
+
+  /** 音響フックの共通口。音響モジュールが無くても落ちない */
+  function sfx(name, p) {
+    if (ESCAPE.audio && ESCAPE.audio.event) ESCAPE.audio.event(name, p);
+  }
 
   /* ロッカー内の目線を扉のどれだけ内側に置くか(m)。
      world._locker の箱（奥行0.58・前面から0.12突出）の内側に入る値。 */
@@ -235,6 +249,11 @@
     this.alerts = 0;
     this.heard = 0;
     this.sees = false;
+    /* 巡回のランダム停止（P4.5）。pauseNext は「次に止まりうる巡回累積時間」 */
+    this.patrolTime = 0;
+    this.pauseT = 0;
+    this.pauses = 0;
+    this.pauseNext = this.T.patrolPauseFirst;
 
     var sp = meta.enemySpawn || this.route[0] || meta.spawn || { col: 1, row: 1 };
     this.spawn = sp;
@@ -441,6 +460,9 @@
     this.path = null; this.goal = null; this.repathT = 0;
     this.lostTime = 0; this.arrived = false;
     this.routeIdx = this._nearestRouteIdx();
+    /* 巡回へ戻った直後は必ず歩き出す（立ち止まりは firstPause 秒より後） */
+    this.pauseT = 0;
+    this.pauseNext = this.patrolTime + this.T.patrolPauseFirst;
   };
   EnemyAI.prototype.toInvestigate = function (x, z) {
     if (this.state === 'chase' || this.state === 'caught') return false;
@@ -460,8 +482,12 @@
     this.lastSeen = { x: p.x, z: p.z };
     this.path = null; this.goal = null; this.repathT = 0;
     this.alerts++;
+    /* 発見スティング（契約 §4: 不協和音の刺し音＋画面の一瞬のフラッシュ/ノイズ） */
+    sfx('spot', { x: this.enemy.x, z: this.enemy.z });
   };
   EnemyAI.prototype.toSearch = function () {
+    /* 追跡からの離脱＝減衰音（契約 §4「追跡解除で減衰音」） */
+    if (this.state === 'chase') sfx('lose', { x: this.enemy.x, z: this.enemy.z });
     this.state = 'search'; this.stateTime = 0;
     this.path = null; this.repathT = 0;
     this.arrived = false; this.lookT = 0;
@@ -475,6 +501,7 @@
     this.stallT = this.T.boardStallDur;
     this.stateTime = 0;
     this.speed = 0;
+    sfx('stall', { x: this.enemy.x, z: this.enemy.z });
   };
 
   /** 捕獲された（Stealth が牢送り演出を持つ） */
@@ -612,6 +639,24 @@
 
   EnemyAI.prototype._patrolStep = function (dt) {
     if (!this.route.length) { this.speed = 0; return; }
+    var T = this.T;
+    /* 巡回のランダム停止（契約 §4「巡回のランダム停止で『目撃』演出を自然に起こす」）。
+       止まっている間は通路の先を眺めるように向きだけ僅かに動かす。 */
+    this.patrolTime += dt;
+    if (this.pauseT > 0) {
+      this.pauseT -= dt;
+      this.speed = 0;
+      this.enemy.facing = angNorm(this.pauseYaw + Math.sin(this.patrolTime * 0.55) * 0.16);
+      return;
+    }
+    if (this.patrolTime >= this.pauseNext) {
+      this.pauseT = T.patrolPauseDur + this.rand() * T.patrolPauseDurVar;
+      this.pauseNext = this.patrolTime + this.pauseT + T.patrolPauseGap + this.rand() * T.patrolPauseVar;
+      this.pauseYaw = this.enemy.facing;
+      this.pauses++;
+      this.speed = 0;
+      return;
+    }
     var n = this.route[this.routeIdx % this.route.length];
     var c = this.map.cellCenter(n.col, n.row);
     if (this._moveTo(dt, c.x, c.z, this.T.patrolSpeed)) {
@@ -696,6 +741,8 @@
     this.cellNoised = false;
     this.prompt = '';
     this._domCache = null;
+    this._noiseKinds = null;     /* 音地盤の材質索引はマップに紐づくので作り直す */
+    this._pryT = 0;              /* 格子こじ開け音の間引き用タイマー */
     this._blockBarredCells();
     this._syncDom();
   };
@@ -750,12 +797,27 @@
     if (tile === TILE.NOISE) {
       this.noiseSteps++;
       ESCAPE.noise.emit(c.x, c.z, this.T.runNoiseRadius, 'step');
+      /* 契約 §4:「音イベントが起きた」と分かる強い音。床種は meta.noise の kind */
+      sfx('noiseStep', { x: c.x, z: c.z, mat: this._noiseKindAt(col, row) });
     } else {
       this.alarms++;
       this.alarmT = 2.2;
       ESCAPE.noise.emit(c.x, c.z, this.T.sensorNoiseRadius, 'sensor');
+      sfx('sensor', { x: c.x, z: c.z });
     }
     this.cellNoised = true;
+  };
+
+  /** 音地盤マスの材質（meta.noise の kind。既定は水たまり） */
+  Stealth.prototype._noiseKindAt = function (col, row) {
+    if (!this._noiseKinds) {
+      this._noiseKinds = Object.create(null);
+      var list = (this.map.meta && this.map.meta.noise) || [];
+      for (var i = 0; i < list.length; i++) {
+        this._noiseKinds[list[i].col + ',' + list[i].row] = (list[i].kind === 'glass') ? 'glass' : 'water';
+      }
+    }
+    return this._noiseKinds[col + ',' + row] || 'water';
   };
 
   /* ---------------- ロッカー ---------------- */
@@ -792,6 +854,7 @@
     p.y = map.floorYAt(p.x, p.z);
     p.yaw = this.locker.faceYaw;
     p.speed = 0;
+    sfx('lockerIn', { x: c.x, z: c.z });
     return true;
   };
 
@@ -813,6 +876,7 @@
     p.x = x; p.z = z;
     p.y = this.map.floorYAt(x, z);
     this.locker = null;
+    sfx('lockerOut', { x: x, z: z });
     return true;
   };
 
@@ -841,6 +905,7 @@
     b.toppled = true;
     this.topples++;
     this._addFallenBoard(b);
+    sfx('boardTopple', {});
     return true;
   };
 
@@ -921,6 +986,8 @@
     J.phase = 'grab'; J.t = 0; J.pry = 0;
     J.reset = (this.captures >= this.T.captureLimit);
     this.game.player.speed = 0;
+    /* 契約 §4「捕獲時に耳元の音＋暗転」 */
+    sfx('capture', {});
     return true;
   };
 
@@ -1002,6 +1069,9 @@
     if (J.phase !== 'locked') return false;
     J.pry = clamp(J.pry + amount, 0, 1);
     this.grateShake = 0.35;
+    /* 格子をこじ開ける金属音。長押しの連続呼び出しでは間引く（1発ずつ鳴らさない） */
+    this._pryT = (this._pryT || 0) - amount;
+    if (this._pryT <= 0) { this._pryT = 0.12; sfx('pry', {}); }
     if (J.pry >= 1) this._breakGrate();
     return true;
   };
@@ -1012,6 +1082,7 @@
     this.fade = 0;
     this.escapes++;
     this._removeGrate();
+    sfx('grateBreak', {});
     return true;
   };
 
