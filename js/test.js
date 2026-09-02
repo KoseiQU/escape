@@ -519,6 +519,19 @@
     }
     return null;
   }
+  /** (col,row) に隣接する歩行可能マスから、それへ向く yaw で立てる位置を返す（P4: 調べる範囲の検証用。
+   *  approachTo は「2マス手前から直進で入れる」ことまで要求するため、1マス四方しか
+   *  歩行可能マスがない壁付きの仕掛け（隔壁ハンドル等）では使えない） */
+  function adjacentTo(map, col, row) {
+    var D = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+    for (var i = 0; i < 4; i++) {
+      var dc = D[i][0], dr = D[i][1];
+      if (!map.isWalkable(col + dc, row + dr)) continue;
+      var yaw = Math.atan2(dc, dr) * 180 / Math.PI;
+      return { col: col + dc, row: row + dr, yawDeg: yaw };
+    }
+    return null;
+  }
 
   function testEnemyTuning(t, g) {
     var T = ESCAPE.ENEMY_TUNING;
@@ -990,6 +1003,319 @@
     g.reset();
   }
 
+  /* ================================================================
+   * P4: 調べるUI統合・メモ・仕掛け連鎖・チェックポイント/セーブ（契約 DESIGN.md §4 / §6）
+   * ============================================================== */
+
+  var SAVE_KEY = 'escape.save.area1.v1';
+
+  /** 実際の「調べる」経路（progress→stealth の順）を通す */
+  function interactAt(g, col, row) {
+    var ap = adjacentTo(g.map, col, row);
+    if (!ap) return null;
+    place(g, ap.col, ap.row, ap.yawDeg);
+    var handled = g.progress.onInteract();
+    if (!handled) handled = g.stealth.onInteract();
+    return handled;
+  }
+
+  function testGimmickOrderAndNotes(t, g) {
+    g.reset();
+    localStorage.removeItem(SAVE_KEY);
+    var pr = g.progress, TILE = ESCAPE.TILE, gm = g.map.meta.gimmicks;
+    var lever = null, terminal = null, handle = null;
+    for (var i = 0; i < gm.length; i++) {
+      if (gm[i].role === 'lever') lever = gm[i];
+      if (gm[i].role === 'terminal') terminal = gm[i];
+      if (gm[i].role === 'handle') handle = gm[i];
+    }
+    if (!t.ok(lever && terminal && handle, '仕掛け: lever/terminal/handle の3役が揃っている')) return;
+    t.ok(g.map.tileAt(lever.col, lever.row) === TILE.GIMMICK &&
+      g.map.tileAt(terminal.col, terminal.row) === TILE.GIMMICK &&
+      g.map.tileAt(handle.col, handle.row) === TILE.GIMMICK, '仕掛け: 3タイルとも GIMMICK 種別');
+
+    /* 順序違反: 未通電の端末を操作しても進まない（notes.md の掲示で応答） */
+    var h1 = interactAt(g, terminal.col, terminal.row);
+    t.ok(h1 === true, '端末(未通電): 「調べる」は消費される（応答のみ）');
+    t.ok(pr.gimmick.code === false, '端末(未通電): コードは進まない');
+    t.ok(pr.modal === null, '端末(未通電): テンキーは開かない');
+    t.ok(pr._flashMsg === ESCAPE.PROGRESS_PLACARD.noPower, '端末(未通電): NO POWER 表示で応答', pr._flashMsg);
+
+    /* 順序違反: 未解錠のハンドルを回しても進まない */
+    var h2 = interactAt(g, handle.col, handle.row);
+    t.ok(h2 === true, 'ハンドル(未解錠): 「調べる」は消費される（応答のみ）');
+    t.ok(pr.gimmick.doorOpen === false, 'ハンドル(未解錠): 隔壁は開かない');
+    t.ok(pr._flashMsg === ESCAPE.PROGRESS_PLACARD.bulkhead, 'ハンドル(未解錠): 隔壁の掲示で応答', pr._flashMsg);
+    pr._flashT = 0; pr._flashMsg = ''; /* この応答表示を次の検証まで持ち越さない */
+
+    /* 仕掛け1: レバー投入 → 大きな音（大半径）＋ 端末が起動 */
+    var noiseBefore = ESCAPE.noise.count;
+    var ap1 = adjacentTo(g.map, lever.col, lever.row);
+    place(g, ap1.col, ap1.row, ap1.yawDeg);
+    t.ok(pr._findTarget() && pr._findTarget().entry.role === 'lever', 'レバー: 「調べる」対象として検出される');
+    sim(g, 1); // プロンプトDOMは step() 側で更新される
+    t.ok(g.progress.dom.prompt.textContent === ESCAPE.PROGRESS_UI_TEXT.lever,
+      'レバー: プロンプト文言「' + ESCAPE.PROGRESS_UI_TEXT.lever + '」', g.progress.dom.prompt.textContent);
+    var h3 = interactAt(g, lever.col, lever.row);
+    t.ok(h3 === true && pr.gimmick.power === true, 'レバー: 投入で電源が入る');
+    t.ok(ESCAPE.noise.count > noiseBefore, 'レバー: 駆動音イベントが発火する');
+    t.ok(ESCAPE.noise.last && ESCAPE.noise.last.radius >= 40, 'レバー: 駆動音は大半径', ESCAPE.noise.last && ESCAPE.noise.last.radius);
+    ESCAPE.noise.reset();
+
+    /* 仕掛け2: 端末 → テンキーが開く。誤入力は弾かれ、正しいコードで解錠 */
+    var h4 = interactAt(g, terminal.col, terminal.row);
+    t.ok(h4 === true && pr.modal === 'keypad', '端末(通電後): 「調べる」でテンキーが開く');
+    var kpSub = document.getElementById('keypad-sub');
+    t.ok(!!kpSub && kpSub.textContent === ESCAPE.PROGRESS_PLACARD.codePrompt,
+      'テンキー: 見出しが「' + ESCAPE.PROGRESS_PLACARD.codePrompt + '」のまま', kpSub && kpSub.textContent);
+    pr._kpPress('1'); pr._kpPress('1'); pr._kpPress('1'); pr._kpPress('1');
+    t.ok(pr.keypadDigits === '1111' && pr.keypadErr === true, 'テンキー: 誤入力(1111)は弾かれる');
+    t.ok(pr.gimmick.code === false, 'テンキー: 誤入力ではコードは進まない');
+    t.ok(pr.modal === 'keypad', 'テンキー: 誤入力してもテンキーは開いたまま（やり直せる）');
+    sim(g, Math.ceil(1.0 / ESCAPE.FIXED_DT));
+    t.ok(pr.keypadDigits === '' && pr.keypadErr === false, 'テンキー: 誤入力表示は一定時間で消えて入力し直せる');
+    pr._kpPress('2'); pr._kpPress('7'); pr._kpPress('3'); pr._kpPress('9');
+    t.ok(pr.gimmick.code === true, 'テンキー: 正しいコード(2739)で解錠される');
+    t.ok(pr.modal === null, 'テンキー: 正しいコードでテンキーが自動的に閉じる');
+
+    /* 仕掛け3: ハンドルは長押し3秒。短い保持では解放されない・離すと戻る */
+    var ap3 = adjacentTo(g.map, handle.col, handle.row);
+    place(g, ap3.col, ap3.row, ap3.yawDeg);
+    g.input._keys.KeyE = true;
+    sim(g, 60); // 1s
+    var afterOne = pr.gimmick.handleHold;
+    t.ok(afterOne > 0.2 && afterOne < 0.5, 'ハンドル: 保持中は割合が進む', afterOne.toFixed(3));
+    g.input._keys.KeyE = false;
+    sim(g, 40); // 離す
+    t.near(pr.gimmick.handleHold, 0, 1e-6, 'ハンドル: 離すと割合が0へ戻る');
+    t.ok(pr.gimmick.doorOpen === false, 'ハンドル: 短い保持では隔壁は開かない');
+
+    var noiseBefore2 = ESCAPE.noise.count;
+    g.input._keys.KeyE = true;
+    var opened = simUntil(g, function () { return pr.gimmick.doorOpen; },
+      Math.ceil(4.0 / ESCAPE.FIXED_DT));
+    g.input._keys.KeyE = false;
+    t.ok(opened >= 0, 'ハンドル: 3秒の長押しで隔壁が開く', 'frames=' + opened);
+    t.ok(ESCAPE.noise.count > noiseBefore2, 'ハンドル: 回している間も音が鳴り続ける（複数回発火）',
+      ESCAPE.noise.count - noiseBefore2);
+    ESCAPE.noise.reset();
+
+    /* EXIT到達でクリア（隔壁が開いていない状態では発火しない前提を上のフラグで担保済み） */
+    var ep = g.map.meta.exitPad;
+    place(g, ep.col, ep.row, 0);
+    sim(g, 3);
+    t.ok(pr.cleared === true, 'EXIT到達: クリア扱いになる');
+    t.ok(pr.modal === 'ending', 'EXIT到達: クリア表示（暫定画面）が開く');
+
+    g.reset();
+    localStorage.removeItem(SAVE_KEY);
+  }
+
+  function testMemoNotes(t, g) {
+    g.reset();
+    var notes = g.map.meta.notes || [];
+    t.ok(notes.length === 6, 'メモ: area1に6枚配置されている', notes.length);
+    var seenMemoTitles = {};
+    for (var i = 0; i < notes.length; i++) {
+      var n = notes[i];
+      var text = ESCAPE.PROGRESS_NOTE_TEXTS[n.id];
+      if (!t.ok(!!text, 'メモ ' + n.id + ': 本文の対応がある')) continue;
+      var ap = adjacentTo(g.map, n.col, n.row);
+      if (!t.ok(!!ap, 'メモ ' + n.id + ': 「調べる」が届く隣接マスがある')) continue;
+      place(g, ap.col, ap.row, ap.yawDeg);
+      var target = g.progress._findTarget();
+      t.ok(!!target && target.kind === 'note' && target.entry.id === n.id,
+        'メモ ' + n.id + ': 「調べる」対象として検出される');
+      var h = g.progress.onInteract();
+      t.ok(h === true && g.progress.modal === 'memo', 'メモ ' + n.id + ': 「調べる」で拡大表示が開く');
+      t.ok(g.progress.dom.memoBody.textContent === text.body, 'メモ ' + n.id + ': 本文が docs/notes.md と一致する');
+      t.ok(g.progress.notesRead[n.id] === true, 'メモ ' + n.id + ': 既読として記録される');
+      seenMemoTitles[text.title] = true;
+      var h2 = g.progress.onInteract();
+      t.ok(h2 === true && g.progress.modal === null, 'メモ ' + n.id + ': 「調べる」で閉じる');
+    }
+    t.ok(Object.keys(seenMemoTitles).length === 6, 'メモ: memo1〜6が重複なく1枚ずつ対応している',
+      Object.keys(seenMemoTitles).length);
+    g.reset();
+  }
+
+  function testMemoCloseGestures(t, g) {
+    g.reset();
+    var notes = g.map.meta.notes || [];
+    var n = notes[0];
+    var ap = adjacentTo(g.map, n.col, n.row);
+    if (!t.ok(!!ap, 'メモを開く準備ができる')) return;
+
+    /* Esc 相当（onCloseTap 経由）で閉じる */
+    place(g, ap.col, ap.row, ap.yawDeg);
+    g.progress.onInteract();
+    t.ok(g.progress.modal === 'memo', 'メモが開いている（前提）');
+    g.progress.onCloseTap();
+    t.ok(g.progress.modal === null, 'メモ: Esc相当（onCloseTap）で閉じる');
+
+    /* タップ（オーバーレイのbindTap経路と同じ処理）で閉じる */
+    place(g, ap.col, ap.row, ap.yawDeg);
+    g.progress.onInteract();
+    t.ok(g.progress.modal === 'memo', 'メモが開いている（前提2）');
+    g.progress.onCloseTap();
+    t.ok(g.progress.modal === null, 'メモ: タップ相当で閉じる');
+    g.reset();
+  }
+
+  /** メモ・テンキー表示中は「中断安全」= 視点・移動停止＋捕獲されない */
+  function testModalInterruptSafety(t, g) {
+    g.reset();
+    var notes = g.map.meta.notes || [];
+    var n = notes[0];
+    var ap = adjacentTo(g.map, n.col, n.row);
+    if (!t.ok(!!ap, 'メモを開く準備ができる')) return;
+    place(g, ap.col, ap.row, ap.yawDeg);
+    g.progress.onInteract();
+    if (!t.ok(g.progress.modal === 'memo', 'メモが開いている（前提）')) return;
+
+    var x0 = g.player.x, z0 = g.player.z, yaw0 = g.player.yaw;
+    g.input.moveY = 1; g.input.lookDX = 800;
+    sim(g, 20);
+    t.ok(g.player.x === x0 && g.player.z === z0, 'メモ表示中: 移動が止まる');
+    t.ok(g.player.yaw === yaw0, 'メモ表示中: 視点が止まる');
+    g.input.reset();
+
+    /* 敵がすぐ隣に来ても捕獲されない */
+    placeEnemy(g, g.player.col(), g.player.row(), 0);
+    g.ai.enemy.x = g.player.x + 0.3; g.ai.enemy.z = g.player.z;
+    g.ai.state = 'chase';
+    sim(g, 30);
+    t.ok(g.stealth.captures === 0, 'メモ表示中: 敵が隣接しても捕獲されない');
+    t.ok(g.stealth.hidden() === true, 'メモ表示中: Stealth.hidden()がtrueになる（P4フック）');
+
+    g.progress.onCloseTap();
+    t.ok(g.progress.modal === null, 'メモを閉じられる（後始末）');
+    g.reset();
+  }
+
+  /** ハンドル長押し中に捕獲されても状態が壊れない（保持は中断され、牢送りは正常に進む） */
+  function testHandleHoldInterrupt(t, g) {
+    g.reset();
+    var gm = g.map.meta.gimmicks, handle = null;
+    for (var i = 0; i < gm.length; i++) if (gm[i].role === 'handle') handle = gm[i];
+    g.progress.gimmick.power = true;
+    g.progress.gimmick.code = true;
+    var ap = adjacentTo(g.map, handle.col, handle.row);
+    if (!t.ok(!!ap, 'ハンドルに近づける')) return;
+    place(g, ap.col, ap.row, ap.yawDeg);
+    g.input._keys.KeyE = true;
+    sim(g, 30); // 0.5s ぶん保持（開放には満たない）
+    t.ok(g.progress.gimmick.handleHold > 0 && g.progress.gimmick.doorOpen === false,
+      'ハンドル: 保持中（開放前）', g.progress.gimmick.handleHold.toFixed(3));
+
+    /* 保持中に捕獲される */
+    placeEnemy(g, ap.col, ap.row, 0);
+    g.ai.enemy.x = g.player.x + 0.3; g.ai.enemy.z = g.player.z;
+    g.ai.state = 'chase';
+    sim(g, 5);
+    t.ok(g.stealth.captures === 1, 'ハンドル保持中: 捕獲は普通に起きる（無敵ではない）');
+    var toLocked = simUntil(g, function () { return g.stealth.jail.phase === 'locked'; }, 300);
+    t.ok(toLocked >= 0, 'ハンドル保持中に捕獲されても牢送り演出は正常に完了する');
+    g.input._keys.KeyE = false;
+    t.ok(g.progress.gimmick.doorOpen === false, 'ハンドル保持中断: 隔壁は未開放のまま（3秒に届いていない）');
+    var guard = 0;
+    while (g.stealth.jail.phase === 'locked' && guard++ < 12) g.stealth.onInteract();
+    t.ok(g.stealth.jail.phase === 'none', 'ハンドル保持中断: 牢から自力脱出できる');
+    sim(g, 10);
+    t.near(g.progress.gimmick.handleHold, 0, 1e-6, 'ハンドル保持中断: 脱出後は保持割合が0に戻っている（対象を離れたため）');
+    g.reset();
+  }
+
+  function testCheckpointAutoSave(t, g) {
+    g.reset();
+    localStorage.removeItem(SAVE_KEY);
+    var cps = g.map.meta.checkpoints || [];
+    if (!t.ok(cps.length >= 1, 'チェックポイントが配置されている')) return;
+    var cp = cps[0];
+    place(g, cp.col, cp.row, 0);
+    sim(g, 2);
+    t.ok(g.progress.checkpoint === cp.id, 'チェックポイント通過で自動記録される', g.progress.checkpoint);
+    var raw = null;
+    try { raw = localStorage.getItem(SAVE_KEY); } catch (e) { /* noop */ }
+    t.ok(!!raw, 'チェックポイント通過でlocalStorageへ自動保存される');
+    var data = JSON.parse(raw);
+    t.ok(data.checkpoint === cp.id, 'セーブデータのチェックポイントが一致する', data.checkpoint);
+    g.reset();
+    localStorage.removeItem(SAVE_KEY);
+  }
+
+  /** セーブ→(同一インスタンスで)ロード復元。新規タブでの「リロードで再開」に相当する経路 */
+  function testSaveLoadRestore(t, g) {
+    g.reset();
+    localStorage.removeItem(SAVE_KEY);
+    var cps = g.map.meta.checkpoints || [];
+    var cp = cps[1] || cps[0];
+    g.progress.gimmick.power = true;
+    g.progress.gimmick.code = true;
+    g.progress.checkpoint = cp.id;
+    g.progress.save();
+
+    var raw = localStorage.getItem(SAVE_KEY);
+    if (!t.ok(!!raw, 'セーブデータが書き込まれている')) return;
+    var parsed = JSON.parse(raw);
+    t.ok(parsed.gimmick.power === true && parsed.gimmick.code === true && parsed.gimmick.doorOpen === false,
+      'セーブ内容: 仕掛け進行が記録される');
+
+    /* 「リロード」を模す: 同じインスタンスをメモリ上だけ初期状態へ戻してから load() する
+       （実際のリロードは新しい Progress を作るが、DOM二重結線を避けるため経路のみ共有） */
+    g.progress.reset();
+    t.ok(g.progress.gimmick.power === false && g.progress.checkpoint === null, 'reset()直後は初期状態（前提）');
+    var loaded = g.progress.load();
+    t.ok(loaded === true, 'load(): セーブから復元できる');
+    t.ok(g.progress.gimmick.power === true && g.progress.gimmick.code === true,
+      'load(): 仕掛け進行が復元される');
+    t.ok(g.progress.checkpoint === cp.id, 'load(): チェックポイントが復元される');
+    t.ok(g.player.col() === cp.col && g.player.row() === cp.row,
+      'load(): プレイヤーがチェックポイント位置へ復元される', g.player.col() + ',' + g.player.row());
+
+    g.reset();
+    localStorage.removeItem(SAVE_KEY);
+  }
+
+  /** 契約 §2: 永続フラグには必ずリセット経路（データ全消去） */
+  function testEraseAllData(t, g) {
+    g.reset();
+    g.progress.gimmick.power = true;
+    g.progress.checkpoint = g.map.meta.checkpoints[0].id;
+    g.progress.save();
+    t.ok(!!localStorage.getItem(SAVE_KEY), 'セーブデータがある（前提）');
+    g.progress.eraseAllData();
+    t.ok(localStorage.getItem(SAVE_KEY) === null, 'データ全消去: localStorageから消える');
+    t.ok(g.progress.gimmick.power === false && g.progress.checkpoint === null,
+      'データ全消去: 進行状態が初期化される');
+    var sp = g.map.meta.spawn;
+    t.ok(g.player.col() === sp.col && g.player.row() === sp.row,
+      'データ全消去: プレイヤーがスポーンへ戻る（game.reset()経由）');
+    g.reset();
+  }
+
+  /** 牢送り3回目のエリアリセットでも仕掛け進行は保持し、チェックポイントのみ巻き戻る */
+  function testAreaResetKeepsGimmick(t, g) {
+    g.reset();
+    localStorage.removeItem(SAVE_KEY);
+    var T = ESCAPE.ENEMY_TUNING;
+    g.progress.gimmick.power = true;
+    g.progress.gimmick.code = true;
+    g.progress.checkpoint = g.map.meta.checkpoints[1].id;
+    g.stealth.captures = T.captureLimit - 1;
+    t.ok(g.stealth.capture() === true, '3回目の捕獲が発生する（前提）');
+    var done = simUntil(g, function () { return g.stealth.jail.phase === 'none'; }, 400);
+    t.ok(done >= 0, '3回目の捕獲: エリアリセットが完了する');
+    t.ok(g.stealth.areaResets === 1, 'エリアリセットが記録される');
+    t.ok(g.progress.gimmick.power === true && g.progress.gimmick.code === true,
+      'エリアリセット: 仕掛け進行(電源/コード)は保持される（契約 §4）');
+    t.ok(g.progress.checkpoint === null, 'エリアリセット: チェックポイントは巻き戻る');
+    var sp = g.map.meta.spawn;
+    t.ok(g.player.col() === sp.col && g.player.row() === sp.row, 'エリアリセット: 位置はエリア最初へ戻る');
+    g.reset();
+    localStorage.removeItem(SAVE_KEY);
+  }
+
   /* ---------------- 実行本体 ---------------- */
 
   function runAll(opts) {
@@ -1013,7 +1339,11 @@
       testWallPush, testWallSlide, testSweep, testLook, testPump, testArea1Contract,
       /* P3b: 敵AI・ステルス */
       testEnemyTuning, testPatrolData, testVision, testNoiseEvents, testEnemyStateMachine,
-      testBoardStall, testCaptureLimit, testChaseGiveUp, testInterruptSafety, testEnemyDebugCoexist
+      testBoardStall, testCaptureLimit, testChaseGiveUp, testInterruptSafety, testEnemyDebugCoexist,
+      /* P4: 調べるUI統合・メモ・仕掛け連鎖・チェックポイント/セーブ */
+      testGimmickOrderAndNotes, testMemoNotes, testMemoCloseGestures, testModalInterruptSafety,
+      testHandleHoldInterrupt, testCheckpointAutoSave, testSaveLoadRestore, testEraseAllData,
+      testAreaResetKeepsGimmick
     ];
     for (var i = 0; i < suites.length; i++) {
       try {
@@ -1054,6 +1384,24 @@
       t.ok(g.stealth.fade === 0 && !g.stealth.inLocker(), '復帰: 暗転もロッカーも解除');
       t.ok(upAll, '復帰: 倒した板が元に戻る');
       t.ok(ESCAPE.noise.pending.length === 0, '復帰: 音イベントのキューが空', ESCAPE.noise.pending.length);
+    }
+    /* P4: 進行状態(仕掛け・メモ・モーダル)も製品初期状態へ戻ること */
+    if (g.progress) {
+      var pr = g.progress;
+      t.ok(!pr.gimmick.power && !pr.gimmick.code && !pr.gimmick.doorOpen,
+        '復帰: 仕掛け進行が初期化', JSON.stringify(pr.gimmick));
+      t.near(pr.gimmick.handleHold, 0, 1e-9, '復帰: ハンドル保持割合が0');
+      t.ok(pr.checkpoint === null, '復帰: チェックポイントが未設定');
+      t.ok(pr.modal === null, '復帰: モーダルが閉じている');
+      t.ok(!pr.cleared, '復帰: クリア扱いが解除');
+      t.ok(pr.dom.memoOverlay.classList.contains('show') === false &&
+        pr.dom.keypadOverlay.classList.contains('show') === false &&
+        pr.dom.endingOverlay.classList.contains('show') === false,
+        '復帰: メモ/テンキー/クリアのオーバーレイが全て非表示');
+      try {
+        t.ok(global.localStorage.getItem('escape.save.area1.v1') === null,
+          '復帰: 機械テストが残したセーブデータが残っていない');
+      } catch (e) { /* localStorage無効環境は対象外 */ }
     }
 
     return summarize(t, opts);

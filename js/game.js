@@ -45,6 +45,11 @@
     this.scene.add(this.world.group);
 
     this.player = new ESCAPE.Player(this.map);
+    this.progress = ESCAPE.Progress ? new ESCAPE.Progress(this) : { flags: {} };
+    /* 起動時1回だけ: セーブがあればチェックポイント位置・仕掛け進行を復元する
+       （g.reset() は機械テストの製品初期状態復帰であり、ここでは呼ばない＝
+       セーブの読み込みは「本当の起動」でしか起きない） */
+    if (this.progress.load) this.progress.load();
 
     this.dom = {
       root: document.body,
@@ -119,24 +124,33 @@
   /** 1論理ステップ。__pump もrAFループもここを通る */
   Game.prototype.stepFrame = function (dt) {
     var input = this.input;
+    /* メモ・テンキーが開いている間は「中断安全」= 視点・移動を止める
+       （敵AI・音イベントは止めない＝メモを読んでいる間に敵が接近する状況を再現できる。
+       捕獲そのものは Stealth.hidden() 側で無効化する＝P4） */
+    var modal = this.progress && this.progress.modalOpen && this.progress.modalOpen();
 
     // 1) 視点
     var look = input.consumeLook();
-    this.player.applyLook(look.dx, look.dy, ESCAPE.Input.LOOK_SENS);
+    if (!modal) this.player.applyLook(look.dx, look.dy, ESCAPE.Input.LOOK_SENS);
 
     // 2) 移動
-    this.player.step(dt, {
-      moveX: input.moveX,
-      moveY: input.moveY,
-      run: input.isRunning(),
-      crouch: input.crouchOn
-    });
+    if (!modal) {
+      this.player.step(dt, {
+        moveX: input.moveX,
+        moveY: input.moveY,
+        run: input.isRunning(),
+        crouch: input.crouchOn
+      });
+    } else {
+      this.player.speed = 0;
+    }
 
-    // 3) 調べる（ロッカー・板・牢の格子はP3b、メモ・仕掛けはP4）
+    // 3) 調べる（ロッカー・板・牢の格子はP3b／メモ・仕掛け・出口はP4が先に受ける）
     var n = input.consumeInteract();
     for (var i = 0; i < n; i++) {
       this.stats.interacts++;
-      var handled = this.stealth ? this.stealth.onInteract() : false;
+      var handled = this.progress ? this.progress.onInteract() : false;
+      if (!handled) handled = this.stealth ? this.stealth.onInteract() : false;
       if (!handled && global.console && console.log) {
         console.log('[ESCAPE] interact: cell(' + this.player.col() + ',' + this.player.row() + ') pos(' +
           this.player.x.toFixed(2) + ',' + this.player.z.toFixed(2) + ')');
@@ -146,10 +160,11 @@
     this.simTime += dt;
     this.frameCount++;
 
-    // 4) ステルス機構（音イベント発生・ロッカー・牢）→ 敵AI の順で更新する。
+    // 4) ステルス機構（音イベント発生・ロッカー・牢）→ 敵AI → 進行(P4) の順で更新する。
     //    プレイヤーの移動結果を見てから敵が知覚するため、同フレームの音も拾える。
     if (this.stealth) this.stealth.step(dt);
     if (this.ai) this.ai.step(dt);
+    if (this.progress) this.progress.step(dt);
 
     /* 蛍光灯のチラつき（ゲーム内時刻駆動＝__pumpでも同じ絵になる） */
     if (this.world && this.world.update) this.world.update(this.simTime);
@@ -186,7 +201,11 @@
              Math.hypot(ai.enemy.x - p.x, ai.enemy.z - p.z).toFixed(1) + 'm  視界 ' +
              ai.sightRange(p).toFixed(1) + 'm  ' + (ai.sees ? '発見中' : '未発見')) : '') +
       (st ? ('\n牢 ' + st.jail.phase + '  捕獲' + st.captures + '  ' +
-             (st.inLocker() ? 'ロッカー内' : '—')) : '');
+             (st.inLocker() ? 'ロッカー内' : '—')) : '') +
+      (this.progress && this.progress.gimmick ? ('\n仕掛け 電源' + (this.progress.gimmick.power ? '○' : '×') +
+             ' コード' + (this.progress.gimmick.code ? '○' : '×') +
+             ' 隔壁' + (this.progress.gimmick.doorOpen ? '開' : '×') +
+             '  CP:' + (this.progress.checkpoint || '—')) : '');
   };
 
   /** 製品初期状態へ完全復帰（runAll の後始末にも使う） */
@@ -203,9 +222,9 @@
     this.frameCount = 0;
     this._accum = 0;
     this._last = (global.performance ? performance.now() : Date.now());
-    /* P3b: 進行状態・音イベント・ステルス・敵AI も製品初期状態へ戻す
-       （stealth → ai の順。ai.reset は新しい map/world を参照する） */
-    this.progress = { flags: {} };
+    /* P3b/P4: 進行状態・音イベント・ステルス・敵AI も製品初期状態へ戻す
+       （progress → stealth → ai の順。ai.reset は新しい map/world を参照する） */
+    if (this.progress) this.progress.reset(); else this.progress = { flags: {} };
     if (ESCAPE.noise) ESCAPE.noise.reset();
     if (this.stealth) this.stealth.reset();
     if (this.ai) this.ai.reset();

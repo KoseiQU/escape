@@ -719,7 +719,9 @@
 
   /* ---------------- 見つからない状態 ---------------- */
   Stealth.prototype.hidden = function () {
-    return !!this.locker || this.jail.phase !== 'none';
+    /* P4: メモ・テンキーなどのモーダルを開いている間は中断安全（捕獲を無効化） */
+    var pr = this.game.progress;
+    return !!this.locker || this.jail.phase !== 'none' || !!(pr && pr.modalOpen && pr.modalOpen());
   };
   Stealth.prototype.inLocker = function () { return !!this.locker; };
 
@@ -1027,6 +1029,9 @@
     g.player.reset();
     g.input.reset();
     if (g.progress) g.progress.flags = {};
+    /* P4: 位置とチェックポイントのみ巻き戻す。仕掛け進行(電源/コード/隔壁)は保持する
+       （契約 §4: 牢送りは「進行状態は保持のまま自力脱出して再開」） */
+    if (g.progress && g.progress.onAreaReset) g.progress.onAreaReset();
     if (g.ai) g.ai.reset();
   };
 

@@ -71,6 +71,79 @@
   .ctrl-btn.on { background:rgba(120,180,210,.35); border-color:rgba(190,225,245,.75); color:#eaf4fb; }
   #btn-interact { width:86px; height:86px; }
 
+  /* --- P4: メモ / テンキー / クリア のモーダル共通 --- */
+  .modal-overlay {
+    position:fixed; inset:0; z-index:60; display:none;
+    background:rgba(6,8,10,.88);
+    align-items:center; justify-content:center; text-align:center;
+    pointer-events:auto;
+  }
+  .modal-overlay.show { display:flex; }
+  .modal-hint {
+    margin-top:16px; font-size:11px; letter-spacing:.10em; color:rgba(160,180,196,.55);
+  }
+  #memo-paper {
+    width:min(86vw, 520px); max-height:80vh; overflow:auto;
+    background:linear-gradient(180deg,#efe6cd,#e2d7b8);
+    color:#241f16; padding:26px 28px; border-radius:2px;
+    box-shadow:0 18px 60px rgba(0,0,0,.6), inset 0 0 40px rgba(90,70,30,.18);
+    text-align:left;
+  }
+  #memo-title {
+    font-size:13px; letter-spacing:.08em; font-weight:700; color:#5a4322;
+    border-bottom:1px solid rgba(90,70,30,.35); padding-bottom:10px; margin-bottom:12px;
+  }
+  #memo-body {
+    font-family:-apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+    font-size:14.5px; line-height:1.9; white-space:pre-wrap; letter-spacing:.02em;
+  }
+  #keypad-panel {
+    width:min(84vw, 320px);
+    background:linear-gradient(180deg,#1b2126,#12161a);
+    border:1px solid rgba(120,200,190,.30); border-radius:6px;
+    padding:22px 20px; box-shadow:0 18px 60px rgba(0,0,0,.65);
+  }
+  #keypad-title { font-size:12px; letter-spacing:.14em; color:rgba(150,230,210,.85); }
+  #keypad-sub { margin-top:6px; font-size:12px; color:rgba(180,200,210,.65); letter-spacing:.04em; }
+  #keypad-display {
+    margin:16px 0; display:flex; gap:10px; justify-content:center;
+  }
+  #keypad-display .kd {
+    width:38px; height:46px; border:1px solid rgba(120,200,190,.35); border-radius:3px;
+    display:flex; align-items:center; justify-content:center;
+    font-size:22px; font-weight:700; color:#9fe8d6; background:rgba(120,200,190,.06);
+    letter-spacing:0;
+  }
+  #keypad-display.err .kd { color:#e88; border-color:rgba(230,120,120,.55); }
+  #keypad-grid {
+    display:grid; grid-template-columns:repeat(3,1fr); gap:8px;
+  }
+  .kp-key {
+    pointer-events:auto; -webkit-tap-highlight-color:transparent;
+    padding:14px 0; border-radius:4px; border:1px solid rgba(150,190,200,.25);
+    background:rgba(255,255,255,.04); color:#d6e6ea; font-size:17px; font-weight:600;
+  }
+  .kp-key.wide { grid-column:span 1; font-size:12px; letter-spacing:.05em; color:rgba(210,220,225,.7); }
+  #ending-inner { padding:20px; }
+  #ending-mark { font-size:15px; letter-spacing:.5em; color:rgba(180,200,210,.6); }
+  #ending-clear {
+    margin-top:10px; font-size:44px; font-weight:800; letter-spacing:.14em; color:#eaf4fb;
+    text-shadow:0 0 22px rgba(140,210,230,.55);
+  }
+  #ending-sub {
+    margin-top:18px; font-size:12px; letter-spacing:.3em; color:rgba(150,168,182,.55);
+    border-top:1px dashed rgba(150,168,182,.35); padding-top:14px; display:inline-block;
+  }
+
+  /* --- P4: データ全消去（暫定UI・目立たせすぎない） --- */
+  #btn-erase {
+    position:fixed; left:8px; bottom:8px; z-index:45; pointer-events:auto;
+    -webkit-tap-highlight-color:transparent;
+    font-size:10px; letter-spacing:.05em; color:rgba(150,168,182,.45);
+    background:rgba(20,24,28,.35); border:1px solid rgba(150,168,182,.25);
+    border-radius:3px; padding:5px 8px;
+  }
+
   /* --- 縦持ち警告 --- */
   #orientation {
     position:fixed; inset:0; display:none; z-index:50;
@@ -103,6 +176,52 @@
 
   <div id="blackout"></div>
 
+  <!-- P4: メモ拡大表示 -->
+  <div id="memo-overlay" class="modal-overlay">
+    <div id="memo-paper">
+      <div id="memo-title"></div>
+      <pre id="memo-body"></pre>
+      <div class="modal-hint">タップ / E / Esc で閉じる</div>
+    </div>
+  </div>
+
+  <!-- P4: 隔壁解錠コードのテンキー -->
+  <div id="keypad-overlay" class="modal-overlay">
+    <div id="keypad-panel">
+      <div id="keypad-title">制御室端末</div>
+      <div id="keypad-sub">隔壁解錠コードを入力してください</div>
+      <div id="keypad-display">
+        <span class="kd" data-i="0"></span><span class="kd" data-i="1"></span><span class="kd" data-i="2"></span><span class="kd" data-i="3"></span>
+      </div>
+      <div id="keypad-grid">
+        <button class="kp-key" type="button" data-k="1">1</button>
+        <button class="kp-key" type="button" data-k="2">2</button>
+        <button class="kp-key" type="button" data-k="3">3</button>
+        <button class="kp-key" type="button" data-k="4">4</button>
+        <button class="kp-key" type="button" data-k="5">5</button>
+        <button class="kp-key" type="button" data-k="6">6</button>
+        <button class="kp-key" type="button" data-k="7">7</button>
+        <button class="kp-key" type="button" data-k="8">8</button>
+        <button class="kp-key" type="button" data-k="9">9</button>
+        <button class="kp-key wide" type="button" data-k="clear">CLR</button>
+        <button class="kp-key" type="button" data-k="0">0</button>
+        <button class="kp-key wide" type="button" data-k="back">⌫</button>
+      </div>
+      <div class="modal-hint">Esc で閉じる</div>
+    </div>
+  </div>
+
+  <!-- P4: エリア1クリア（次エリアはP5未実装のため仮画面） -->
+  <div id="ending-overlay" class="modal-overlay">
+    <div id="ending-inner">
+      <div id="ending-mark">AREA 1</div>
+      <div id="ending-clear">CLEAR</div>
+      <div id="ending-sub">— to be continued —</div>
+    </div>
+  </div>
+
+  <button id="btn-erase" type="button">データ全消去</button>
+
   <div id="orientation">
     <div class="inner">
       <span class="icon">⟳</span>
@@ -122,6 +241,7 @@
   <script src="js/game.js"></script>
   <script src="js/enemy_model.js"></script>
   <script src="js/enemy_ai.js"></script>
+  <script src="js/progress.js"></script>
   <script src="js/test.js"></script>
 </body>
 </html>
