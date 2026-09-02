@@ -151,16 +151,17 @@
     sg_control: '制御室　カードキー専用',
     sg_control2: '制御室　カードキー専用',
     sg_control3: '制御室　カードキー専用',
-    sg_bulkhead: '開放中は退避不可　開放後12秒で再閉鎖',
+    sg_bulkhead: '手動開放には12秒を要する　開放中は退避不可',
     sg_drain: '排水路　立入禁止'
   };
   /* 所持品表示（docs/notes.md「所持品表示」の正文） */
   var ITEM_TEXT = { fuse: 'ヒューズ', wrench: 'スパナ', card: 'カードキー' };
-  /* 正文に無い最小限の応答（掲示・UI文言の一覧に該当項目が無いものだけ） */
+  /* docs/notes.md「UI文言（v2追加）」の正文（2026-09-03 追認・追加ぶん） */
   var EXTRA_TEXT = {
     drainFlooded: '水が満ちている —— 先に排水しろ',
     needWrench: 'ボルトが固い —— 工具が要る',
-    cardUsed: 'カードキーで解錠した'
+    cardUsed: 'カードキーで解錠した',
+    valveNoPower: 'ポンプが動いていない —— 電源が要る'
   };
   var DOOR_CODE = '2739';
 
@@ -503,6 +504,9 @@
       return true;
     }
     if (role === 'valve') {
+      /* 契約 §4 6b（2026-09-03追加）: 排水は主電源投入後でないとポンプが動かない。
+         ＝裏ルートでも工程1〜3（ヒューズ・配電）は必須になる。 */
+      if (!this.gimmick.power) { this._flash(EXTRA_TEXT.valveNoPower); return true; }
       var idx = t.entry.valve | 0;
       this.valves[idx] = (this.valves[idx] + 1) % VALVE_STEPS;
       sfx('valveTurn', { x: c.x, z: c.z });
@@ -604,6 +608,8 @@
   };
   Progress.prototype._checkPressure = function () {
     if (this.gimmick.drained) return;
+    /* 通電していなければポンプが回らない＝針が緑域でも排水はされない（契約 §4 6b） */
+    if (!this.gimmick.power) return;
     if (this.pressureZone() !== 'green') return;
     this.gimmick.drained = true;
     sfx('gaugeOk', {});

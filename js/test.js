@@ -2938,9 +2938,28 @@
     t.ok(pr.pressureZone() === 'red', '圧力計: 全開（振り切れ）は赤域', pr.pressureZone());
     var sol = solveValves(g);
     t.ok(!!sol, '圧力計: 緑域に入る組み合わせがある', JSON.stringify(sol));
-    /* 赤に振れたら戻せる（巡回するので戻せること自体を確かめる） */
+    /* 未通電ではポンプが動かない（契約 §4 6b・2026-09-03追加） */
     var v0 = gimmickOf(g, 'valve', 0);
+    var vsAll = [gimmickOf(g, 'valve', 0), gimmickOf(g, 'valve', 1), gimmickOf(g, 'valve', 2)];
+    pr.gimmick.power = false;
+    pr.gimmick.drained = false;
     pr.valves = [0, 0, 0];
+    var hv = interactAt(g, v0.col, v0.row);
+    t.ok(hv === true, 'バルブ(未通電): 「調べる」は消費される（応答のみ）');
+    t.ok(pr.valves[0] === 0, 'バルブ(未通電): バルブが回らない', pr.valves[0]);
+    t.ok(pr._flashMsg === ESCAPE.PROGRESS_EXTRA_TEXT.valveNoPower,
+      'バルブ(未通電): 「' + ESCAPE.PROGRESS_EXTRA_TEXT.valveNoPower + '」で応答', pr._flashMsg);
+    pr._flashT = 0; pr._flashMsg = '';
+    /* 針だけ緑域に置いても、通電していなければ排水されない */
+    pr.valves = solveValves(g).slice();
+    pr._checkPressure();
+    t.ok(pr.pressureZone() === 'green', 'バルブ(未通電): 針は緑域に置いてある（前提）', pr.pressure().toFixed(3));
+    t.ok(pr.gimmick.drained === false, 'バルブ(未通電): 針が緑域でも排水フラグは立たない');
+    /* 通電すれば同じ操作で通る */
+    pr.gimmick.power = true;
+    pr.valves = [0, 0, 0];
+
+    /* 赤に振れたら戻せる（巡回するので戻せること自体を確かめる） */
     pr.gimmick.drained = false;
     for (var i = 0; i < P.valveSteps; i++) interactAt(g, v0.col, v0.row);
     t.ok(pr.valves[0] === 0, 'バルブ: 回し切ると元の位置へ戻せる（巡回）', pr.valves[0]);
@@ -2957,7 +2976,7 @@
     for (var vi = 0; vi < 3; vi++) {
       for (var n = 0; n < sol[vi]; n++) interactAt(g, vs[vi].col, vs[vi].row);
     }
-    t.ok(pr.gimmick.drained === true, 'バルブ: 緑域に合わせると排水フラグが立つ');
+    t.ok(pr.gimmick.drained === true, 'バルブ: 通電後に緑域へ合わせると排水フラグが立つ');
     var sp = g.map.meta.spawn;
     place(g, sp.col, sp.row, 0);
     sim(g, 2);
@@ -3025,6 +3044,27 @@
     sim(g, 1);
     t.ok(g.map.isBlocked(gate.col, gate.row) === true, '排水路: 初期状態では入口が塞がっている');
 
+    /* 裏ルートの短絡不可（契約 §4 6b・2026-09-03追加）:
+       工程1〜3（ヒューズ→配電）を飛ばすと、スパナがあってもポンプが動かず排水できない。 */
+    pr.items.wrench = true;
+    var vsD = [gimmickOf(g, 'valve', 0), gimmickOf(g, 'valve', 1), gimmickOf(g, 'valve', 2)];
+    var solD = solveValves(g).slice();
+    pr.valves = [0, 0, 0];
+    for (var sv = 0; sv < 3; sv++) {
+      for (var sn = 0; sn < solD[sv]; sn++) interactAt(g, vsD[sv].col, vsD[sv].row);
+    }
+    t.ok(pr.gimmick.power === false, '裏ルート短絡: 通電していない（前提）');
+    t.ok(pr.valves.join(',') === '0,0,0', '裏ルート短絡: 未通電ではバルブが1目盛りも動かない', pr.valves.join(','));
+    t.ok(pr.gimmick.drained === false, '裏ルート短絡: 未通電では排水できない');
+    interactAt(g, grate.col, grate.row);
+    t.ok(pr.gimmick.grating === false, '裏ルート短絡: 未通電のままグレーチングは外せない');
+    t.ok(g.map.isBlocked(gate.col, gate.row) === true, '裏ルート短絡: 排水路の入口は塞がったまま');
+    var ep2Pre = g.map.meta.exitPad2;
+    t.ok(!g.map.floodFrom(g.map.meta.spawn.col, g.map.meta.spawn.row)[ep2Pre.col + ',' + ep2Pre.row],
+      '裏ルート短絡: 工程1〜3未達では裏ルートの出口へ到達できない（実経路で封鎖）');
+    pr._flashT = 0; pr._flashMsg = '';
+    pr.items.wrench = false;
+
     /* スパナ無し */
     interactAt(g, grate.col, grate.row);
     t.ok(pr.gimmick.grating === false, '排水路: スパナが無いと外せない');
@@ -3038,7 +3078,8 @@
     t.ok(pr._flashMsg === EX.drainFlooded, '排水路: 水が満ちている旨で応答', pr._flashMsg);
     pr._flashT = 0; pr._flashMsg = '';
 
-    /* スパナ＋排水済み */
+    /* スパナ＋排水済み（工程3まで済んでいる前提の状態を作る） */
+    pr.gimmick.power = true;
     pr.gimmick.drained = true;
     var apg = adjacentTo(g.map, grate.col, grate.row);
     place(g, apg.col, apg.row, apg.yawDeg);
@@ -3142,6 +3183,8 @@
       seenAgain + '/' + tried);
     t.ok(ST.sg_breaker === '投入順序　① 循環　② 照明　③ 隔壁',
       '掲示: 主電源盤の投入順序が正文どおり', ST.sg_breaker);
+    t.ok(ST.sg_bulkhead === '手動開放には12秒を要する　開放中は退避不可',
+      '掲示: 隔壁前が訂正後の正文どおり（再閉鎖は実装しない）', ST.sg_bulkhead);
     g.reset();
     localStorage.removeItem(SAVE_KEY);
   }
