@@ -46,6 +46,10 @@
     this.scene.add(this.world.group);
 
     this.player = new ESCAPE.Player(this.map);
+    /* P4.8 アリアドネ方式: ロープ → 地図 → ヘッドライト の順に作る（Progress が参照する） */
+    this.rope = ESCAPE.Rope ? new ESCAPE.Rope(this) : null;
+    this.minimap = ESCAPE.Minimap ? new ESCAPE.Minimap(this) : null;
+    this.headlight = ESCAPE.Headlight ? new ESCAPE.Headlight(this) : null;
     this.progress = ESCAPE.Progress ? new ESCAPE.Progress(this) : { flags: {} };
     /* 起動時1回だけ: セーブがあればチェックポイント位置・仕掛け進行を復元する
        （g.reset() は機械テストの製品初期状態復帰であり、ここでは呼ばない＝
@@ -138,19 +142,21 @@
     if (!frozen) this.player.applyLook(look.dx, look.dy, ESCAPE.Input.LOOK_SENS);
 
     // 2) 移動
+    /* P4.8: ロープの張り判定は「移動前の座標」を必要とする。ここで1回だけ控える。 */
+    var prevX = this.player.x, prevZ = this.player.z;
     if (!frozen) {
-      /* P4.7: 排水路（meta.crawl）は「しゃがみ専用・走行不可」（契約 §4 6b）。
-         天井1.15mの管の中なので立ち上がれず、走るボタンも効かない。 */
-      var crawl = !!(this.map.isCrawl && this.map.isCrawl(this.player.col(), this.player.row()));
       this.player.step(dt, {
         moveX: input.moveX,
         moveY: input.moveY,
-        run: crawl ? false : input.isRunning(),
-        crouch: crawl ? true : input.crouchOn
+        run: input.isRunning(),
+        crouch: input.crouchOn
       });
     } else {
       this.player.speed = 0;
     }
+    /* 2') ロープ（契約 §4「余裕0で前進不可」）。移動制限を判断するのはここだけ＝
+       以降のモジュールはプレイヤー位置を書き換えない（上書き事故の防止）。 */
+    if (this.rope) this.rope.update(dt, prevX, prevZ);
 
     // 3) 調べる（ロッカー・板・牢の格子はP3b／メモ・仕掛け・出口はP4が先に受ける）
     var n = input.consumeInteract();
@@ -172,12 +178,18 @@
     if (this.stealth) this.stealth.step(dt);
     if (this.ai) this.ai.step(dt);
     if (this.progress) this.progress.step(dt);
+    /* P4.8: ロープの明滅と fog of war の記録（地図は「変わった時だけ」描き直す） */
+    if (this.rope) this.rope.step(dt);
+    if (this.minimap) this.minimap.step(dt);
 
     /* 蛍光灯のチラつき（ゲーム内時刻駆動＝__pumpでも同じ絵になる） */
     if (this.world && this.world.update) this.world.update(this.simTime);
     /* 5) 音響ディレクタ＋恐怖演出（P4.5）。世界の更新後＝明滅レベルが確定してから */
     if (ESCAPE.audio && ESCAPE.audio.step) ESCAPE.audio.step(dt);
     this.syncCamera();
+    /* 6) ヘッドライト（契約 §4）。カメラが確定してから前に置く。
+       点灯判定を持つのはこのモジュールだけで、敵AIは sightRange() で読むだけ。 */
+    if (this.headlight) this.headlight.step(dt);
   };
 
   /** カメラ揺れの一時受け（毎フレームの生成を避ける） */
@@ -233,14 +245,14 @@
              (st.inLocker() ? 'ロッカー内' : '—') +
              (this.cinematic && this.cinematic.active()
                ? ('  演出 ' + this.cinematic.mode + '/' + this.cinematic.stage) : '')) : '') +
-      (this.progress && this.progress.gimmick ? ('\n仕掛け 電源' + (this.progress.gimmick.power ? '○' : '×') +
-             ' コード' + (this.progress.gimmick.code ? '○' : '×') +
-             ' 排水' + (this.progress.gimmick.drained ? '○' : '×') +
-             ' 隔壁' + (this.progress.gimmick.doorOpen ? '開' :
-               (this.progress.gimmick.opening > 0 ? this.progress.gimmick.opening.toFixed(1) : '×')) +
-             '\n所持 ' + (this.progress.items.fuse ? 'ヒューズ ' : '') +
-               (this.progress.items.wrench ? 'スパナ ' : '') + (this.progress.items.card ? 'カードキー ' : '') +
-             '  CP:' + (this.progress.checkpoint || '—')) : '');
+      (this.progress && this.progress.gimmick ? ('\n鍵' + (this.progress.gimmick.key ? '○' : '×') +
+             '  隔壁' + (this.progress.gimmick.doorOpen ? '開' : '施錠') +
+             '  CP:' + (this.progress.checkpoint || '—')) : '') +
+      (this.rope ? ('\nロープ ' + this.rope.used.toFixed(0) + '/' + this.rope.L.toFixed(0) + 'm  余裕 ' +
+             this.rope.slack().toFixed(0) + 'm' + (this.rope.isAttached() ? '' : ' [外れている]') +
+             (this.rope.taut ? '  張った' : '')) : '') +
+      (this.minimap ? ('  踏破 ' + this.minimap.exploredCount) : '') +
+      (this.headlight ? ('  ライト' + (this.headlight.on ? '点' : '消')) : '');
   };
 
   /** 製品初期状態へ完全復帰（runAll の後始末にも使う） */
@@ -259,6 +271,10 @@
     this._last = (global.performance ? performance.now() : Date.now());
     /* P3b/P4: 進行状態・音イベント・ステルス・敵AI も製品初期状態へ戻す
        （progress → stealth → ai の順。ai.reset は新しい map/world を参照する） */
+    /* P4.8: ロープ・地図・ヘッドライトも新しい map を掴み直して初期状態へ */
+    if (this.rope) this.rope.reset();
+    if (this.minimap) this.minimap.reset();
+    if (this.headlight) this.headlight.reset();
     if (this.progress) this.progress.reset(); else this.progress = { flags: {} };
     if (ESCAPE.noise) ESCAPE.noise.reset();
     if (this.stealth) this.stealth.reset();

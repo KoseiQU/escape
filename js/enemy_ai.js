@@ -36,6 +36,9 @@
     sightLit: 12.0,           // 明所の発見距離(m)
     sightDark: 5.0,           // 暗所の発見距離(m)
     crouchFactor: 0.40,       // しゃがみ中の倍率
+    /* P4.8（契約 §4「ヘッドライト」）: 点灯中は発見距離が伸びる。
+       消灯して忍ぶか、点灯して急ぐかの駆け引きの要。P7で調整する。 */
+    headlightSightMul: 1.50,
     lumDark: 0.030,           // これ以下の輝度は「暗所」
     lumLit: 0.170,            // これ以上の輝度は「明所」（間は線形）
                               // area1実測: 歩行可能マスの輝度中央値0.073・p90=0.53。
@@ -349,6 +352,10 @@
     var k = clamp((lum - T.lumDark) / (T.lumLit - T.lumDark), 0, 1);
     var base = T.sightDark + (T.sightLit - T.sightDark) * k;
     if (p.crouching) base *= T.crouchFactor;
+    /* P4.8: ヘッドライト点灯中は見つかりやすい。点灯判定の持ち主は
+       ESCAPE.Headlight ただ1つで、ここは**読むだけ**（毎フレーム上書きの衝突を作らない）。 */
+    var hl = this.game.headlight;
+    if (hl && hl.on) base *= T.headlightSightMul;
     return base;
   };
 
@@ -1142,6 +1149,9 @@
     J.phase = 'grab'; J.t = 0; J.pry = 0;
     J.reset = (this.captures >= this.T.captureLimit);
     this.game.player.speed = 0;
+    /* P4.8（契約 §4「捕獲時」）: 掴まれた瞬間にロープ端が床に落ちて結び目になる。
+       復帰後は自分の敷いたロープを辿って結び目まで戻り「拾って結ぶ」で再接続する。 */
+    if (this.game.rope) this.game.rope.dropKnot();
     /* 契約 §4「捕獲時に耳元の音＋暗転」 */
     sfx('capture', {});
     /* P4.6: 捕獲シネマティック（毎回）。3回目は「食われる」に差し替わる。
@@ -1193,7 +1203,9 @@
     }
   };
 
-  /** 演出が終わった後の分岐: 通常は房へ、3回目はゲームオーバー画面へ */
+  /** 演出が終わった後の分岐（2026-09-03 P4.8 改訂・ユーザー決定）:
+   *  通常は**スタート地点（ロープの固定結び目の傍）で目覚める**。3回目はゲームオーバー画面へ。
+   *  旧「牢送り（拘束室の房で目覚めて格子をこじ開ける）」は失効＝この経路には現れない。 */
   Stealth.prototype._afterCine = function () {
     var J = this.jail, g = this.game;
     this.fade = 1;
@@ -1204,9 +1216,26 @@
       this._syncDom();
       return;
     }
-    this._toCell();
+    this._toStart();
     if (g.ai) g.ai.afterJail();
-    J.phase = 'locked';
+    J.phase = 'wake';
+  };
+
+  /** P4.8: スタート地点へ戻す（進行状態＝鍵・地図の踏破・読んだメモは保持） */
+  Stealth.prototype._toStart = function () {
+    var map = this.map, meta = map.meta || {}, p = this.game.player;
+    var sp = meta.spawn || { col: 1, row: 1, yawDeg: 0 };
+    var J = this.jail;
+    J.col = sp.col; J.row = sp.row; J.dir = null;
+    var c = map.cellCenter(sp.col, sp.row);
+    p.x = c.x; p.z = c.z;
+    p.y = map.floorYAt(c.x, c.z);
+    p.pitch = 0;
+    p.crouching = false;
+    p.eyeHeight = ESCAPE.Player.EYE_STAND;
+    p.speed = 0;
+    p.yaw = (sp.yawDeg || 0) * Math.PI / 180;
+    this.game.input.reset();
   };
 
   /** ゲームオーバー画面から「エリア最初から」再開する（既存のリセット経路を流用） */
@@ -1236,7 +1265,11 @@
     el.addEventListener('mousedown', tap);
   };
 
-  /** 拘束室の房へ運ぶ（進行状態・所持はそのまま） */
+  /** 【P4.8 失効】拘束室の房へ運ぶ（旧・牢送り）。
+   *  2026-09-03 のユーザー決定で復帰先はスタート地点になったため、この関数と
+   *  jail.phase 'locked'/'black'、_confineToCell / _pry / _breakGrate / 格子メッシュは
+   *  **到達不能**になった。拘束室は「場所として残す」契約なので造形と房は残っている。
+   *  コードは記録として残すが、通常経路からは呼ばれない。 */
   Stealth.prototype._toCell = function () {
     var map = this.map, meta = map.meta || {}, p = this.game.player;
     var jc = meta.jailCell || (meta.cellOpenings && meta.cellOpenings[0]) ||

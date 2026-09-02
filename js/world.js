@@ -63,6 +63,7 @@
     pump:     { f: [0.80, 0.88, 0.90], w: [0.84, 0.92, 0.95] },
     control:  { f: [0.84, 0.89, 1.04], w: [0.86, 0.92, 1.07] },   /* 観察室＝青白 */
     office:   { f: [1.00, 0.95, 0.86], w: [1.03, 0.98, 0.88] },   /* 記録室＝古い書類の色 */
+    director: { f: [1.02, 0.92, 0.78], w: [1.05, 0.95, 0.80] },   /* 所長室＝木質の暖色 */
     cellroom: { f: [0.80, 0.79, 0.76], w: [0.82, 0.81, 0.77] },   /* 拘束室＝彩度を抜いた灰 */
     lmA:      { f: [1.02, 0.94, 0.80], w: [1.06, 0.97, 0.82] },   /* 中央長廊下＝アンバー */
     lmB:      { f: [0.88, 0.94, 1.04], w: [0.90, 0.97, 1.08] },   /* 縦の長廊下＝冷たい白青 */
@@ -105,6 +106,10 @@
   function atlasUV(i, j, n) {
     var s = 1 / n;
     return function (u, v) { return [(i + u) * s, (n - 1 - j + v) * s]; };
+  }
+  /** nx x ny アトラス版（P4.8 区画銘板は 3x2） */
+  function atlasUVR(i, j, nx, ny) {
+    return function (u, v) { return [(i + u) / nx, (ny - 1 - j + v) / ny]; };
   }
   /** 一定色（自発光面用） */
   function flat(rgb) { return function () { return rgb; }; }
@@ -662,7 +667,7 @@
     var B = {
       floor: new Builder(), ceil: new Builder(),
       wall: new Builder(), wall2: new Builder(), wall3: new Builder(),
-      litter: new Builder(), poster: new Builder(), sign: new Builder(),
+      litter: new Builder(), poster: new Builder(), sign: new Builder(), zonesign: new Builder(),
       metal: new Builder(), dark: new Builder(), lamp: new Builder(),
       screen: new Builder(), paper: new Builder(), sheet: new Builder(),
       fluid: new Builder(), board: new Builder(), monitors: new Builder(),
@@ -869,6 +874,7 @@
     /* ---- 壁付け・天井付けの造作（モニタ壁・ホワイトボード・標識・手術灯） ---- */
     this._wallKit(B, shader, planeShader);
     this._signs(B, shader, planeShader);
+    this._regionSigns(B, shader, planeShader);
     this._ceilKit(B, shader);
 
     /* ---- メッシュ化 ---- */
@@ -887,14 +893,14 @@
     var MATS = {
       floor: opaque('floor'), ceil: opaque('ceiling'),
       wall: opaque('wall'), wall2: opaque('wall2'), wall3: opaque('wall3'),
-      litter: decal('litter'), poster: decal('poster'), sign: decal('sign'),
+      litter: decal('litter'), poster: decal('poster'), sign: decal('sign'), zonesign: decal('zonesign'),
       metal: opaque('metal'), dark: opaque('metal'), lamp: opaque('lamp'),
       screen: opaque('screen'), paper: opaque('paper'), sheet: opaque('sheet'),
       fluid: opaque('tankfluid'), board: opaque('board'), monitors: opaque('monitors'),
       water: decal('water'), glass: decal('glass'), hatch: decal('hatch'), blood: decal('blood')
     };
     var order = ['floor', 'ceil', 'wall', 'wall2', 'wall3', 'metal', 'dark', 'lamp', 'poster',
-      'screen', 'paper', 'sheet', 'fluid', 'board', 'monitors', 'sign',
+      'screen', 'paper', 'sheet', 'fluid', 'board', 'monitors', 'sign', 'zonesign',
       'hatch', 'blood', 'litter', 'water', 'glass'];
     var tris = 0, groups = 0;
     for (var m = 0; m < order.length; m++) {
@@ -1010,8 +1016,23 @@
         var c = planeShader(key, [1.35, 1.32, 1.24], dir.n)(x, y, z);
         return [Math.min(1, c[0] + 0.12), Math.min(1, c[1] + 0.12), Math.min(1, c[2] + 0.11)];
       });
+      /* P4.8 契約「メモの見分け」: 本物のメモは画鋲で留めてある（四隅の小さな金属）。
+         近接すると縁が淡く光る（その光は Progress._updateNoteGlow が出す）。 */
+      var pin = shader(key, [2.10, 2.02, 1.70]);
+      for (var pk = 0; pk < 4; pk++) {
+        var pu = ((pk & 1) ? 1 : -1) * (pw * 0.40);
+        var pv = ((pk & 2) ? 1 : -1) * (ph * 0.40);
+        B.metal.box(
+          fx + dir.n[0] * 0.045 + ((along === 'z') ? 0 : pu),
+          py + pv,
+          fz + dir.n[2] * 0.045 + ((along === 'z') ? pu : 0),
+          (along === 'z') ? 0.035 : 0.055, 0.055, (along === 'z') ? 0.055 : 0.035, 3, pin);
+      }
+    } else if (tile === TILE.GIMMICK && this._gimmickRoleAt(cc, rr) === 'safe') {
+      /* P4.8 所長室の金庫（唯一の鍵の在り処）。厚い鋼扉＋ダイヤル＋レバー把手 */
+      this._safe(B, cc, rr, dir, shader, key);
     } else if (tile === TILE.GIMMICK) {
-      /* 仕掛け端末: 筐体＋発光画面＋レバー */
+      /* 仕掛け端末: 筐体＋発光画面＋レバー（P4.8 で失効した仕掛けの造形もこれで残る） */
       var by = 1.24;
       var dw = (along === 'z') ? 0.16 : 1.10, dd = (along === 'z') ? 1.10 : 0.16;
       B.metal.box(fx + dir.n[0] * 0.08, by, fz + dir.n[2] * 0.08, dw, 0.92, dd, 0.9, sh);
@@ -1054,8 +1075,10 @@
     var o, u;
     if (along === 'z') { o = [fx, py - ph / 2, cz + off + pw / 2 * dir.n[0]]; u = [0, 0, -pw * dir.n[0]]; }
     else { o = [cx + off - pw / 2 * dir.n[2], py - ph / 2, fz]; u = [pw * dir.n[2], 0, 0]; }
+    /* P4.8 契約「メモの見分け」: 飾りの貼り紙は彩度と明度を落として沈める。
+       本物のメモ（NOTEタイル）は明るい紙＋画鋲＋近接の淡い光で見分けがつく。 */
     B.poster.gridP(o, u, [0, ph, 0], [0, 1], [0, 1], 1, 1,
-      planeShader(key, [0.98, 0.97, 0.94], dir.n),
+      planeShader(key, [0.60, 0.61, 0.62], dir.n),
       function (ss, tt) { return [u0 + ss * 0.5, v0 + (1 - tt) * 0.5]; });
   };
 
@@ -1097,7 +1120,8 @@
     rcA:      [0.24, 0.82, 0.80], rcB: [0.72, 0.46, 0.96],
     labA:     [0.42, 0.76, 0.92], labB: [0.42, 0.76, 0.92], specimen: [0.94, 0.78, 0.30],
     machine:  [0.34, 0.90, 0.62], pump: [0.30, 0.68, 0.88], control: [0.60, 0.56, 0.94],
-    cellroom: [0.88, 0.24, 0.20], hall: [0.94, 0.90, 0.60], office: [0.92, 0.80, 0.44]
+    cellroom: [0.88, 0.24, 0.20], hall: [0.94, 0.90, 0.60], office: [0.92, 0.80, 0.44],
+    director: [0.96, 0.72, 0.30]
   };
 
   /**
@@ -1168,6 +1192,59 @@
   };
 
   /* ---------------- 個別の造形 ---------------- */
+
+  /** meta.gimmicks のそのマスの役割（P4.8: 'safe' / 'bulkhead' / undefined） */
+  World.prototype._gimmickRoleAt = function (col, row) {
+    if (!this._gimRole) {
+      this._gimRole = Object.create(null);
+      var list = (this.map.meta && this.map.meta.gimmicks) || [];
+      for (var i = 0; i < list.length; i++) this._gimRole[list[i].col + ',' + list[i].row] = list[i].role;
+    }
+    return this._gimRole[col + ',' + row];
+  };
+
+  /** P4.8 金庫（所長室・東端の壁）。壁からの突出は0.20mに収める（プレイヤー半径0.32m未満）。
+   *  面が欠けないよう箱だけで組む（tube は端が開いていて正面から見ると穴になる）。 */
+  World.prototype._safe = function (B, cc, rr, dir, shader, key) {
+    var T = this.map.tileSize;
+    var cx = cc * T + T / 2, cz = rr * T + T / 2;
+    var fx = cx + dir.n[0] * T * 0.5, fz = cz + dir.n[2] * T * 0.5;
+    var along = (dir.dc !== 0) ? 'z' : 'x';
+    var y0 = 1.20;
+    var shBody = shader(key, [1.20, 1.24, 1.28]);
+    var shDoor = shader(key, [1.70, 1.68, 1.62]);
+    var shTrim = shader(key, [2.60, 2.20, 1.30]);   /* 真鍮のダイヤルと把手 */
+    var shDark = shader(key, [0.55, 0.57, 0.60]);
+    /** 壁面から off だけ手前、横 a・縦 b にずらした箱 */
+    function put(bld, off, a, b, w, h, d, uvS, sh) {
+      bld.box(fx + dir.n[0] * off + ((along === 'z') ? 0 : a),
+        y0 + b,
+        fz + dir.n[2] * off + ((along === 'z') ? a : 0),
+        (along === 'z') ? d : w, h, (along === 'z') ? w : d, uvS, sh);
+    }
+    /* 埋め込みの筐体（枠） */
+    put(B.dark, 0.02, 0, 0, 1.22, 1.22, 0.12, 0.9, shDark);
+    /* 鋼の扉 */
+    put(B.metal, 0.085, 0, 0, 1.00, 1.00, 0.09, 0.7, shDoor);
+    /* 扉の段（面取り） */
+    put(B.metal, 0.125, 0, 0, 0.84, 0.84, 0.05, 0.8, shBody);
+    /* ダイヤル: 台座 → 目盛環 → 中央のハブ → 十字のスポーク */
+    put(B.metal, 0.150, 0, 0, 0.44, 0.44, 0.04, 1.0, shBody);
+    for (var k = 0; k < 12; k++) {
+      var a2 = k / 12 * Math.PI * 2;
+      put(B.dark, 0.170, Math.cos(a2) * 0.185, Math.sin(a2) * 0.185, 0.035, 0.035, 0.02, 2, shDark);
+    }
+    put(B.metal, 0.185, 0, 0, 0.26, 0.26, 0.05, 1.4, shTrim);
+    put(B.metal, 0.200, 0, 0, 0.40, 0.062, 0.03, 1.6, shTrim);
+    put(B.metal, 0.200, 0, 0, 0.062, 0.40, 0.03, 1.6, shTrim);
+    /* レバー把手（縦棒＋上下の受け） */
+    put(B.metal, 0.150, 0.40, 0, 0.075, 0.46, 0.075, 1.8, shTrim);
+    put(B.metal, 0.115, 0.40, 0.25, 0.10, 0.08, 0.10, 2, shBody);
+    put(B.metal, 0.115, 0.40, -0.25, 0.10, 0.08, 0.10, 2, shBody);
+    /* 蝶番 */
+    put(B.dark, 0.105, -0.46, 0.36, 0.13, 0.16, 0.09, 2, shBody);
+    put(B.dark, 0.105, -0.46, -0.36, 0.13, 0.16, 0.09, 2, shBody);
+  };
 
   World.prototype._locker = function (B, cc, rr, dir, sh, shDim) {
     var T = this.map.tileSize;
@@ -1647,6 +1724,37 @@
         (along === 'z') ? 0.03 : 1.30, 0.44, (along === 'z') ? 1.30 : 0.03, 1.2, shD);
       facePanel(B.sign, fx + m[0] * 0.036, 2.06, fz + m[2] * 0.036, m, 1.16, 0.34,
         planeShader(key, [1.45, 1.42, 1.32], m), atlasUV(1, 1, 2));
+      setYBias(0);
+    }
+  };
+
+  /**
+   * P4.8 区画銘板（DESIGN.md §4「地図」／docs/notes.md「区画名」）。
+   * col,row は実体マス、dir はそれを読む側。表記は `A　受入区画` 形式で
+   * zonesign テクスチャに焼き込んである（3x2 アトラス、A..F）。
+   * 板は壁から0.06mしか出ないのでプレイヤーに干渉しない。
+   */
+  World.prototype._regionSigns = function (B, shader, planeShader) {
+    var map = this.map, T = map.tileSize;
+    var list = (map.meta && map.meta.regionSigns) || [];
+    var ORDER = { A: 0, B: 1, C: 2, D: 3, E: 4, F: 5 };
+    for (var i = 0; i < list.length; i++) {
+      var k = list[i];
+      var idx = ORDER[k.zone];
+      if (idx === undefined) continue;
+      var m = FACE_VEC[k.dir] || FACE_VEC.n;
+      var nc = k.col + (m[0] | 0), nr = k.row + (m[2] | 0);
+      var key = this._ownerOf(nc, nr);
+      setYBias(map.cellFloorY(nc, nr));
+      var cx = k.col * T + T / 2, cz = k.row * T + T / 2;
+      var fx = cx + m[0] * (T * 0.5), fz = cz + m[2] * (T * 0.5);
+      var along = (m[0] !== 0) ? 'z' : 'x';
+      var shD = shader(key, [0.62, 0.66, 0.70]);
+      /* 金属の額縁 → 銘板面。銘板は迷路の錨なので明るめに焼く */
+      B.metal.box(fx + m[0] * 0.018, 1.66, fz + m[2] * 0.018,
+        (along === 'z') ? 0.04 : 1.02, 1.02, (along === 'z') ? 1.02 : 0.04, 1.1, shD);
+      facePanel(B.zonesign, fx + m[0] * 0.052, 1.66, fz + m[2] * 0.052, m, 0.92, 0.92,
+        planeShader(key, [1.55, 1.52, 1.44], m), atlasUVR(idx % 3, (idx / 3) | 0, 3, 2));
       setYBias(0);
     }
   };

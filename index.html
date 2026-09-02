@@ -32,11 +32,40 @@
     font-size:11px; color:rgba(150,168,182,.6); white-space:nowrap;
   }
   body.touch #hint { display:none; }
-  /* --- ステルスHUD（P3b。捕獲回数は簡素に） --- */
+  /* --- ステルスHUD（P3b。捕獲回数は簡素に）。P4.8: 右上はミニマップが使うので下へ逃がす --- */
   #status {
-    position:absolute; right:12px; top:10px; font-size:12px; letter-spacing:.08em;
+    position:absolute; right:12px; top:calc(min(22vw, 210px) + 16px);
+    font-size:12px; letter-spacing:.08em;
     color:rgba(196,168,168,.78); text-shadow:0 1px 3px rgba(0,0,0,.85);
   }
+  /* --- P4.8: 目的表示（画面上部1行・正文は docs/notes.md「目的表示」） --- */
+  #objective {
+    position:absolute; left:50%; top:12px; transform:translateX(-50%);
+    max-width:56vw; font-size:13px; letter-spacing:.10em; text-align:center;
+    color:rgba(224,236,246,.92); text-shadow:0 1px 5px rgba(0,0,0,.95);
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  }
+  #objective.taut { color:#f2c9c9; text-shadow:0 0 12px rgba(200,70,70,.7), 0 1px 5px rgba(0,0,0,.95); }
+  /* --- P4.8: fog of war ミニマップ（右上・画面幅22%・半透明。タップで全画面） --- */
+  #minimap-wrap {
+    position:absolute; right:12px; top:10px; z-index:20; pointer-events:auto;
+    width:22vw; max-width:210px; min-width:118px;
+    border:1px solid rgba(150,180,200,.28); border-radius:3px;
+    background:rgba(4,6,9,.55); padding:2px; line-height:0;
+    -webkit-tap-highlight-color:transparent;
+  }
+  #minimap-wrap.full {
+    right:50%; top:50%; transform:translate(50%,-50%);
+    width:min(86vh, 86vw); max-width:none; background:rgba(3,5,7,.94);
+    border-color:rgba(180,210,230,.5); padding:6px;
+  }
+  #minimap { display:block; width:100%; height:auto; opacity:.86; }
+  #minimap-wrap.full #minimap { opacity:1; }
+  #minimap-label {
+    display:none; position:absolute; left:0; right:0; top:-24px; text-align:center;
+    font-size:12px; letter-spacing:.4em; color:rgba(190,214,232,.75); line-height:1.2;
+  }
+  #minimap-wrap.full #minimap-label { display:block; }
   #prompt {
     position:absolute; left:50%; bottom:118px; transform:translateX(-50%);
     font-size:13px; letter-spacing:.06em; color:rgba(222,232,240,.92);
@@ -117,33 +146,6 @@
     font-family:-apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
     font-size:14.5px; line-height:1.9; white-space:pre-wrap; letter-spacing:.02em;
   }
-  #keypad-panel {
-    width:min(84vw, 320px);
-    background:linear-gradient(180deg,#1b2126,#12161a);
-    border:1px solid rgba(120,200,190,.30); border-radius:6px;
-    padding:22px 20px; box-shadow:0 18px 60px rgba(0,0,0,.65);
-  }
-  #keypad-title { font-size:12px; letter-spacing:.14em; color:rgba(150,230,210,.85); }
-  #keypad-sub { margin-top:6px; font-size:12px; color:rgba(180,200,210,.65); letter-spacing:.04em; }
-  #keypad-display {
-    margin:16px 0; display:flex; gap:10px; justify-content:center;
-  }
-  #keypad-display .kd {
-    width:38px; height:46px; border:1px solid rgba(120,200,190,.35); border-radius:3px;
-    display:flex; align-items:center; justify-content:center;
-    font-size:22px; font-weight:700; color:#9fe8d6; background:rgba(120,200,190,.06);
-    letter-spacing:0;
-  }
-  #keypad-display.err .kd { color:#e88; border-color:rgba(230,120,120,.55); }
-  #keypad-grid {
-    display:grid; grid-template-columns:repeat(3,1fr); gap:8px;
-  }
-  .kp-key {
-    pointer-events:auto; -webkit-tap-highlight-color:transparent;
-    padding:14px 0; border-radius:4px; border:1px solid rgba(150,190,200,.25);
-    background:rgba(255,255,255,.04); color:#d6e6ea; font-size:17px; font-weight:600;
-  }
-  .kp-key.wide { grid-column:span 1; font-size:12px; letter-spacing:.05em; color:rgba(210,220,225,.7); }
   #ending-inner { padding:20px; }
   #ending-mark { font-size:15px; letter-spacing:.5em; color:rgba(180,200,210,.6); }
   #ending-clear {
@@ -175,73 +177,11 @@
     border-top:1px solid rgba(150,110,110,.22); padding-top:16px; display:inline-block;
   }
 
-  /* --- P4.7: 所持品表示（画面隅に小さく・取得済みのみ点灯） --- */
-  #inventory {
-    position:absolute; right:12px; bottom:104px; display:flex; gap:8px;
-    font-size:11px; letter-spacing:.10em;
-  }
-  #inventory .inv {
-    padding:3px 7px; border-radius:3px;
-    border:1px solid rgba(150,168,182,.20); background:rgba(16,20,24,.42);
-    color:rgba(150,168,182,.34);
-  }
-  #inventory .inv.on {
-    border-color:rgba(190,225,245,.62); background:rgba(60,92,110,.42);
-    color:#dceaf4; text-shadow:0 0 8px rgba(150,210,240,.55);
-  }
-  /* --- P4.7: 圧力計（循環ポンプ室のバルブ近くでだけ出す） --- */
-  #gauge {
-    position:absolute; left:50%; top:14%; transform:translateX(-50%); display:none;
-    width:170px; padding:10px 12px 8px; text-align:center;
-    background:rgba(12,16,20,.72); border:1px solid rgba(140,180,200,.32); border-radius:5px;
-  }
-  #gauge.show { display:block; }
-  #gauge-label { font-size:11px; letter-spacing:.20em; color:rgba(180,210,224,.82); }
-  #gauge-dial {
-    position:relative; margin:8px auto 0; width:140px; height:70px; overflow:hidden;
-    border-top-left-radius:70px; border-top-right-radius:70px;
-    background:conic-gradient(from 270deg at 50% 100%,
-      #7a2020 0deg, #7a2020 14.4deg, #6b5a18 14.4deg, #6b5a18 79.2deg,
-      #1f7a3a 79.2deg, #1f7a3a 100.8deg, #6b5a18 100.8deg, #6b5a18 140.4deg,
-      #7a2020 140.4deg, #7a2020 180deg);
-    border:1px solid rgba(150,180,196,.35); border-bottom:none;
-  }
-  #gauge-needle {
-    position:absolute; left:50%; top:100%; width:3px; height:60px;
-    background:linear-gradient(180deg,#f2f6f8,#9fb3c0);
-    transform-origin:50% 100%; transform:translate(-50%,-100%) rotate(0deg);
-    box-shadow:0 0 6px rgba(220,240,255,.6);
-  }
-  #gauge.green #gauge-label { color:#8fe8b0; }
-  #gauge.red #gauge-label { color:#e89090; }
-  /* --- P4.7: 隔壁開放中の残り秒 --- */
-  #opening {
-    position:absolute; left:50%; top:22%; transform:translateX(-50%); display:none;
-    font-size:19px; font-weight:700; letter-spacing:.16em; color:#f0d9d9;
-    text-shadow:0 0 16px rgba(190,60,60,.75), 0 2px 5px rgba(0,0,0,.9);
-  }
-  #opening.show { display:block; }
+  /* P4.8: 所持品表示・圧力計・隔壁開放の残り秒は失効（アリアドネ方式で仕掛けが1本化されたため）。 */
   /* --- P4.7: 処置室の漆黒化（無影灯が落ちる演出＋残留の闇） --- */
   #fx-dark {
     position:fixed; inset:0; z-index:33; pointer-events:none; opacity:0; background:#000;
   }
-  /* --- P4.7: 3系統ブレーカー --- */
-  #breaker-panel {
-    width:min(88vw, 360px);
-    background:linear-gradient(180deg,#20262b,#141a1e);
-    border:1px solid rgba(200,170,120,.30); border-radius:6px;
-    padding:20px 18px; box-shadow:0 18px 60px rgba(0,0,0,.65);
-  }
-  #breaker-title { font-size:12px; letter-spacing:.16em; color:rgba(228,196,140,.88); }
-  #breaker-msg { margin-top:8px; min-height:16px; font-size:12px; letter-spacing:.06em; color:#e8a0a0; }
-  #breaker-grid { margin-top:12px; display:grid; grid-template-columns:1fr; gap:8px; }
-  .bk-key {
-    pointer-events:auto; -webkit-tap-highlight-color:transparent;
-    padding:12px 0; border-radius:4px; border:1px solid rgba(200,170,120,.28);
-    background:rgba(255,255,255,.04); color:#e6dccb; font-size:14px; letter-spacing:.06em;
-  }
-  .bk-key.on { background:rgba(120,200,140,.28); border-color:rgba(150,235,180,.7); color:#eafbf0; }
-
   /* --- P4: データ全消去（暫定UI・目立たせすぎない） --- */
   #btn-erase {
     position:fixed; left:8px; bottom:8px; z-index:45; pointer-events:auto;
@@ -271,19 +211,15 @@
     <div id="crosshair"></div>
     <div id="debug"></div>
     <div id="status"></div>
+    <div id="objective"></div>
     <div id="prompt"></div>
     <div id="hint">WASD 移動 / Shift 走る / Ctrl しゃがむ / E 調べる / 画面クリックで視点</div>
     <div id="stick-base"><div id="stick-knob"></div></div>
-    <div id="inventory">
-      <span class="inv" id="inv-fuse">ヒューズ</span>
-      <span class="inv" id="inv-wrench">スパナ</span>
-      <span class="inv" id="inv-card">カードキー</span>
+    <!-- P4.8: fog of war ミニマップ。タップで全画面（もう一度タップで閉じる） -->
+    <div id="minimap-wrap">
+      <div id="minimap-label">地図</div>
+      <canvas id="minimap" width="220" height="220"></canvas>
     </div>
-    <div id="gauge">
-      <div id="gauge-label">排気圧</div>
-      <div id="gauge-dial"><div id="gauge-needle"></div></div>
-    </div>
-    <div id="opening"></div>
     <div id="buttons">
       <button class="ctrl-btn" id="btn-crouch" type="button">しゃがむ</button>
       <button class="ctrl-btn" id="btn-run" type="button">走る</button>
@@ -302,46 +238,6 @@
     <div id="memo-paper">
       <div id="memo-title"></div>
       <pre id="memo-body"></pre>
-      <div class="modal-hint">タップ / E / Esc で閉じる</div>
-    </div>
-  </div>
-
-  <!-- P4: 隔壁解錠コードのテンキー -->
-  <div id="keypad-overlay" class="modal-overlay">
-    <div id="keypad-panel">
-      <div id="keypad-title">制御室端末</div>
-      <div id="keypad-sub">隔壁解錠コードを入力してください</div>
-      <div id="keypad-display">
-        <span class="kd" data-i="0"></span><span class="kd" data-i="1"></span><span class="kd" data-i="2"></span><span class="kd" data-i="3"></span>
-      </div>
-      <div id="keypad-grid">
-        <button class="kp-key" type="button" data-k="1">1</button>
-        <button class="kp-key" type="button" data-k="2">2</button>
-        <button class="kp-key" type="button" data-k="3">3</button>
-        <button class="kp-key" type="button" data-k="4">4</button>
-        <button class="kp-key" type="button" data-k="5">5</button>
-        <button class="kp-key" type="button" data-k="6">6</button>
-        <button class="kp-key" type="button" data-k="7">7</button>
-        <button class="kp-key" type="button" data-k="8">8</button>
-        <button class="kp-key" type="button" data-k="9">9</button>
-        <button class="kp-key wide" type="button" data-k="clear">CLR</button>
-        <button class="kp-key" type="button" data-k="0">0</button>
-        <button class="kp-key wide" type="button" data-k="back">⌫</button>
-      </div>
-      <div class="modal-hint">Esc で閉じる</div>
-    </div>
-  </div>
-
-  <!-- P4.7: 主電源盤の3系統ブレーカー（正順は盤の上の掲示にある） -->
-  <div id="breaker-overlay" class="modal-overlay">
-    <div id="breaker-panel">
-      <div id="breaker-title">主電源盤</div>
-      <div id="breaker-msg"></div>
-      <div id="breaker-grid">
-        <button class="bk-key" type="button" data-b="1">ブレーカー①を入れる</button>
-        <button class="bk-key" type="button" data-b="2">ブレーカー②を入れる</button>
-        <button class="bk-key" type="button" data-b="3">ブレーカー③を入れる</button>
-      </div>
       <div class="modal-hint">タップ / E / Esc で閉じる</div>
     </div>
   </div>
@@ -386,6 +282,9 @@
   <script src="js/enemy_model.js"></script>
   <script src="js/capture.js"></script>
   <script src="js/enemy_ai.js"></script>
+  <script src="js/rope.js"></script>
+  <script src="js/minimap.js"></script>
+  <script src="js/headlight.js"></script>
   <script src="js/progress.js"></script>
   <script src="js/audio.js"></script>
   <script src="js/test.js"></script>

@@ -1155,6 +1155,62 @@
     return c;
   }
 
+  /**
+   * P4.8 区画銘板（docs/notes.md「区画名」）。3x2 のアトラスに A〜F の6枚。
+   * 表記は正文どおり `A　受入区画` 形式（大きな英字＋施設名）。
+   * 実際に読めることが「調べて地図に記入する」動線の説得力になるので文字を焼き込む。
+   */
+  var ZONE_PANELS = [
+    ['A', '受入区画', 'RECEIVING'],
+    ['B', '実験区画', 'LABORATORY'],
+    ['C', '検体区画', 'SPECIMEN'],
+    ['D', '拘束区画', 'CONFINEMENT'],
+    ['E', '記録区画', 'ARCHIVE'],
+    ['F', '機械区画', 'UTILITY']
+  ];
+  function texZoneSign() {
+    var S = 256, W = S * 3, H = S * 2, c = makeCanvas(W, H), ctx = c.getContext('2d');
+    var rand = rng(24601);
+    ctx.clearRect(0, 0, W, H);
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    for (var i = 0; i < 6; i++) {
+      var ox = (i % 3) * S, oy = ((i / 3) | 0) * S;
+      var p = ZONE_PANELS[i];
+      /* 琺瑯引きの銘板。縁は金属、地は濃紺灰 */
+      ctx.fillStyle = '#3b444b'; ctx.fillRect(ox + 4, oy + 4, S - 8, S - 8);
+      ctx.fillStyle = '#161c21'; ctx.fillRect(ox + 12, oy + 12, S - 24, S - 24);
+      ctx.strokeStyle = '#8d9aa2'; ctx.lineWidth = 3;
+      ctx.strokeRect(ox + 18, oy + 18, S - 36, S - 36);
+      /* 大きな区画記号 */
+      ctx.fillStyle = '#e8f1f6';
+      ctx.font = 'bold 118px ' + JP;
+      ctx.fillText(p[0], ox + 78, oy + 108);
+      /* 施設名（縦に2行で収める） */
+      ctx.fillStyle = '#cfdde5';
+      ctx.font = 'bold 40px ' + JP;
+      ctx.fillText(p[1].slice(0, 2), ox + 172, oy + 82);
+      ctx.fillText(p[1].slice(2), ox + 172, oy + 128);
+      ctx.fillStyle = '#7f8f98';
+      ctx.font = '17px ' + JP;
+      ctx.fillText(p[2], ox + S / 2, oy + 196);
+      ctx.fillStyle = 'rgba(150,170,182,0.35)';
+      ctx.fillRect(ox + 40, oy + 164, S - 80, 2);
+      /* ビス4本と汚れ */
+      ctx.fillStyle = '#9aa6ad';
+      for (var b = 0; b < 4; b++) {
+        ctx.beginPath();
+        ctx.arc(ox + ((b & 1) ? S - 30 : 30), oy + ((b & 2) ? S - 30 : 30), 6, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.fillStyle = 'rgba(96,66,30,0.30)';
+      for (var q = 0; q < 7; q++) {
+        ctx.fillRect(ox + 16 + rand() * (S - 44), oy + 16 + rand() * (S - 44), 2 + rand() * 9, 5 + rand() * 26);
+      }
+    }
+    grain(ctx, W, H, 9, rand);
+    return c;
+  }
+
   /* ================================================================ */
 
   var BUILDERS = {
@@ -1165,7 +1221,8 @@
     floor: texFloor, ceiling: texCeiling, metal: texMetal,
     lamp: texLamp, screen: texScreen, paper: texPaper, sheet: texSheet,
     water: texWater, glass: texGlass, blood: texBlood, hatch: texHatch,
-    sign: texSign, tankfluid: texTankFluid, board: texBoard, monitors: texMonitors
+    sign: texSign, tankfluid: texTankFluid, board: texBoard, monitors: texMonitors,
+    zonesign: texZoneSign
   };
 
   var cache = Object.create(null);
