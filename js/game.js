@@ -129,13 +129,16 @@
        （敵AI・音イベントは止めない＝メモを読んでいる間に敵が接近する状況を再現できる。
        捕獲そのものは Stealth.hidden() 側で無効化する＝P4） */
     var modal = this.progress && this.progress.modalOpen && this.progress.modalOpen();
+    /* P4.6: 捕獲シネマティック中も同じ「中断安全」に乗せる＝視点・移動を止める。
+       （演出カメラをプレイヤー追従が上書きしないよう、カメラ側も syncCamera の最後で握る） */
+    var frozen = modal || !!(this.cinematic && this.cinematic.blocksInput());
 
     // 1) 視点
     var look = input.consumeLook();
-    if (!modal) this.player.applyLook(look.dx, look.dy, ESCAPE.Input.LOOK_SENS);
+    if (!frozen) this.player.applyLook(look.dx, look.dy, ESCAPE.Input.LOOK_SENS);
 
     // 2) 移動
-    if (!modal) {
+    if (!frozen) {
       this.player.step(dt, {
         moveX: input.moveX,
         moveY: input.moveY,
@@ -187,6 +190,13 @@
     this.camera.rotation.set(p.pitch + s.pitch, p.yaw + s.yaw, s.roll);
     /* 追跡中のFOV微増（契約 §4「恐怖演出（軽量）」）。変化した時だけ行列を作り直す */
     var want = BASE_FOV + ((au && au.fx) ? au.fx.fovAdd : 0);
+    /* P4.6: 捕獲シネマティックは「最後」にカメラを握る（上書き事故の防止）。
+       演出が終われば want は BASE_FOV に戻る＝ FOV も自動で復帰する。 */
+    var cine = this.cinematic;
+    if (cine && cine.active()) {
+      cine.applyCamera(this.camera);
+      if (cine.fov > 0) want = cine.fov;
+    }
     if (Math.abs(this.camera.fov - want) > 0.0008) {
       this.camera.fov = want;
       this.camera.updateProjectionMatrix();
@@ -217,7 +227,9 @@
              Math.hypot(ai.enemy.x - p.x, ai.enemy.z - p.z).toFixed(1) + 'm  視界 ' +
              ai.sightRange(p).toFixed(1) + 'm  ' + (ai.sees ? '発見中' : '未発見')) : '') +
       (st ? ('\n牢 ' + st.jail.phase + '  捕獲' + st.captures + '  ' +
-             (st.inLocker() ? 'ロッカー内' : '—')) : '') +
+             (st.inLocker() ? 'ロッカー内' : '—') +
+             (this.cinematic && this.cinematic.active()
+               ? ('  演出 ' + this.cinematic.mode + '/' + this.cinematic.stage) : '')) : '') +
       (this.progress && this.progress.gimmick ? ('\n仕掛け 電源' + (this.progress.gimmick.power ? '○' : '×') +
              ' コード' + (this.progress.gimmick.code ? '○' : '×') +
              ' 隔壁' + (this.progress.gimmick.doorOpen ? '開' : '×') +

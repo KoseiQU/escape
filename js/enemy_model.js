@@ -63,6 +63,10 @@
   var BODY_MIN = 0.085, BODY_GAIN = 2.10, BODY_MAX = 0.95;
   var FACE_MIN = 0.420, FACE_GAIN = 1.10, FACE_MAX = 0.80;
   var TOOTH_MIN = 0.160, TOOTH_GAIN = 0.95, TOOTH_MAX = 0.55;
+  /* P4.6: 捕獲演出中だけの顔の底上げ。画面いっぱいに迫る顔が闇に沈んでは演出にならない。
+     通常の巡回・追跡では使わない（＝暗がりでの見え方は P3a のまま） */
+  var FACE_MIN_CINE = 0.640, FACE_MAX_CINE = 0.94;
+  var TOOTH_MIN_CINE = 0.330, TOOTH_MAX_CINE = 0.72;
   var VOID_MIN = 0.030, VOID_GAIN = 0.22, VOID_MAX = 0.115;
   var CLOTH_MIN = 0.075, CLOTH_GAIN = 1.90;
   var HAIR_MIN = 0.050, HAIR_GAIN = 1.10, HAIR_MAX = 0.62;
@@ -479,11 +483,73 @@
     return c;
   }
 
+  /**
+   * P4.6: 捕獲演出専用の高解像度頭部テクスチャ（2048）。
+   * 1024版を土台に「2048でしか読めない細部」だけを原寸で重ねる
+   * ＝ 1024を引き伸ばしただけの絵にはならない（毛穴・産毛・毛細血管・濡れの照り）。
+   * 生成コストがあるので最初の捕獲まで作らない（tex('headHi') は遅延評価）。
+   */
+  function texHeadHi() {
+    var S = 2048, c = canvasOf(S, S), x = c.getContext('2d');
+    x.imageSmoothingEnabled = true;
+    x.drawImage(texHead(), 0, 0, S, S);
+    var rand = rngOf(50231);
+    var i, cx, cy;
+
+    /* 毛穴（1px の点。至近距離で皮膚が「樹脂」に見えないための粒） */
+    for (i = 0; i < 13000; i++) {
+      cx = rand() * S; cy = rand() * S;
+      var dk = 0.10 + rand() * 0.22;
+      x.fillStyle = 'rgba(28,30,24,' + dk.toFixed(3) + ')';
+      x.fillRect(cx | 0, cy | 0, 1 + (rand() < 0.18 ? 1 : 0), 1);
+    }
+    /* 産毛・細い皺（短い線） */
+    x.lineWidth = 1;
+    for (i = 0; i < 4200; i++) {
+      cx = rand() * S; cy = rand() * S;
+      var a = rand() * Math.PI, L = 3 + rand() * 11;
+      x.strokeStyle = (rand() < 0.5 ? 'rgba(24,26,22,' : 'rgba(168,166,150,') + (0.05 + rand() * 0.13).toFixed(3) + ')';
+      x.beginPath(); x.moveTo(cx, cy); x.lineTo(cx + Math.cos(a) * L, cy + Math.sin(a) * L); x.stroke();
+    }
+    /* 毛細血管（枝分かれ） */
+    for (i = 0; i < 240; i++) {
+      cx = rand() * S; cy = rand() * S;
+      var an = rand() * Math.PI * 2;
+      x.strokeStyle = 'rgba(' + (rand() < 0.5 ? '104,34,32' : '68,26,44') + ',' + (0.10 + rand() * 0.18).toFixed(3) + ')';
+      x.lineWidth = 0.8 + rand() * 0.9;
+      x.beginPath(); x.moveTo(cx, cy);
+      var px2 = cx, py2 = cy;
+      for (var k = 0; k < 5; k++) {
+        an += (rand() - 0.5) * 1.1;
+        px2 += Math.cos(an) * (5 + rand() * 12); py2 += Math.sin(an) * (5 + rand() * 12);
+        x.lineTo(px2, py2);
+      }
+      x.stroke();
+    }
+    /* 濡れた照り（薄い明るい斑。湿った皮膚＝契約 §4「湿った皮膚の質感」） */
+    for (i = 0; i < 320; i++) {
+      cx = rand() * S; cy = rand() * S;
+      var r2 = 4 + rand() * 26;
+      var g2 = x.createRadialGradient(cx, cy, 0, cx, cy, r2);
+      g2.addColorStop(0, 'rgba(214,216,200,' + (0.05 + rand() * 0.10).toFixed(3) + ')');
+      g2.addColorStop(1, 'rgba(214,216,200,0)');
+      x.fillStyle = g2; x.fillRect(cx - r2, cy - r2, r2 * 2, r2 * 2);
+    }
+    /* 乾いた血の粒（眼窩から頬へ流れる帯の上に散らす） */
+    for (i = 0; i < 900; i++) {
+      cx = S * (0.30 + rand() * 0.40); cy = S * (0.30 + rand() * 0.42);
+      x.fillStyle = 'rgba(' + (rand() < 0.6 ? '72,14,12' : '44,10,12') + ',' + (0.08 + rand() * 0.26).toFixed(3) + ')';
+      x.fillRect(cx | 0, cy | 0, 1 + (rand() < 0.3 ? 1 : 0), 1 + (rand() < 0.5 ? 1 : 0));
+    }
+    return c;
+  }
+
   function tex(name) {
     if (texCache[name]) return texCache[name];
     var t;
     if (name === 'skin') t = toTex(texSkin(), true);
     else if (name === 'head') t = toTex(texHead(), false);
+    else if (name === 'headHi') t = toTex(texHeadHi(), false);
     else if (name === 'cloth') t = toTex(texCloth(), true);
     else throw new Error('unknown enemy texture: ' + name);
     texCache[name] = t;
@@ -1268,6 +1334,9 @@
     this.contacts = [];
     this.disposables = [];
     this.triangles = 0;
+    this.extraTriangles = 0;        /* P4.6: 捕獲演出中だけ足される三角形 */
+    this._countExtra = false;
+    this.detailHi = false;          /* P4.6: 捕獲演出中だけ true（高密度顔＋赤い目） */
     this.skirtReach = 1.0;          /* スカートの到達距離（_build で実測） */
     this.poseT = 0;                 /* 0=直立 1=反転 */
     this.state = 'idle';            /* idle | walk | chase | trans */
@@ -1294,8 +1363,10 @@
     if (name) m.name = name;
     parent.add(m);
     this._track(geo);
-    if (geo.index) this.triangles += geo.index.count / 3;
-    else this.triangles += geo.attributes.position.count / 3;
+    var tri = geo.index ? (geo.index.count / 3) : (geo.attributes.position.count / 3);
+    /* P4.6: 捕獲演出専用パーツは通常時の三角形予算に数えない（演出中だけ足される） */
+    if (this._countExtra) this.extraTriangles += tri;
+    else this.triangles += tri;
     return m;
   };
 
@@ -1616,6 +1687,10 @@
     });
     var skull = this._mesh(sgeo, matHead, headScale, 'skull');
     this.faceMesh = skull;
+    /* P4.6: 高解像度への差し替えから必ず戻れるよう、通常時の実体を保持する */
+    this.headScale = headScale;
+    this._loGeo = sgeo;
+    this._loTex = matHead.map;
 
     /* 口腔（奥行きのある暗い袋）と、1本ずつ植えた歯 */
     this._mesh(oralCavityGeo(), matVoid, headScale, 'oral');
@@ -1814,6 +1889,9 @@
         if (self.transDir > 0 && u < 0.5) self._walkPose(p, t);
         self._transPose(p, u, raw);
       }
+      /* P4.6: 演出側の姿勢上書き口。ここで足さないと applyPose に消される
+         （「Aが設定→Bの毎フレーム更新が上書き」型の事故の防止） */
+      if (self.poseExtra) self.poseExtra(p, u, t);
     });
     this._drape(t, st);
   };
@@ -1911,13 +1989,16 @@
     var mx = Math.max(r, Math.max(g, b)) + 1e-5;
     var tr = 0.55 + 0.45 * (r / mx), tg = 0.55 + 0.45 * (g / mx), tb = 0.55 + 0.45 * (b / mx);
 
+    var cine = this.detailHi;
+    var fmin = cine ? FACE_MIN_CINE : FACE_MIN, fmax = cine ? FACE_MAX_CINE : FACE_MAX;
+    var tmin = cine ? TOOTH_MIN_CINE : TOOTH_MIN, tmax = cine ? TOOTH_MAX_CINE : TOOTH_MAX;
     var kb = clamp(BODY_MIN + lum * BODY_GAIN, BODY_MIN, BODY_MAX);
-    var kf = clamp(FACE_MIN + lum * FACE_GAIN, FACE_MIN, FACE_MAX);
+    var kf = clamp(fmin + lum * FACE_GAIN, fmin, fmax);
     /* 顔の微発光をごく緩く脈打たせる（生きているように見せる） */
     kf *= 0.94 + 0.06 * Math.sin(this.animTime * 0.9);
     var kc = clamp(CLOTH_MIN + lum * CLOTH_GAIN, CLOTH_MIN, 0.92);
     var kh = clamp(HAIR_MIN + lum * HAIR_GAIN, HAIR_MIN, HAIR_MAX);
-    var kt = clamp(TOOTH_MIN + lum * TOOTH_GAIN, TOOTH_MIN, TOOTH_MAX);
+    var kt = clamp(tmin + lum * TOOTH_GAIN, tmin, tmax);
     var kv = clamp(VOID_MIN + lum * VOID_GAIN, VOID_MIN, VOID_MAX);
 
     this.mats.skin.color.setRGB(kb * tr, kb * tg, kb * tb);
@@ -1966,6 +2047,271 @@
     }
     this.disposables.length = 0;
     if (this.group.parent) this.group.parent.remove(this.group);
+  };
+
+  /* ================================================================
+   * P4.6 捕獲演出むけの造形API（契約 §4「捕獲演出と駆け引き」）
+   *
+   *  setDetail('hi'|'normal') … 演出中だけ顔を高密度メッシュ＋2048テクスチャへ差し替え、
+   *                             眼窩の奥に赤い目（微発光）を灯す。normal で必ず元へ戻る。
+   *  createGrabHands()        … 一人称視界に持ち込む敵の手（左右一対・camera空間に置く）
+   *  createMaw()              … 「食われる」用の口（歯列で画面を覆う。開き具合は setOpen(u)）
+   *
+   * 上書き事故の防止: 赤い目・手・口は専用マテリアルを持ち、syncLight は触らない。
+   * ============================================================== */
+
+  /* 通常は 48x46。演出中のみこの密度（契約の三角形予算 +8000 以内に収める実測値。
+     食われる演出では顔＋赤い目＋手＋口が同時に出るので、その合計で 8000 を超えないこと） */
+  var HI_SKULL_RS = 70, HI_SKULL_HS = 66;
+
+  /** 赤い目（眼窩の底に置く芯＋加算合成のハロー）。最初の演出時に1度だけ作る */
+  Enemy.prototype._buildRedEyes = function () {
+    if (this.eyes) return this.eyes;
+    this._countExtra = true;
+    this.matEyeCore = this._track(new THREE.MeshBasicMaterial({
+      color: 0xa8180e, fog: true, depthWrite: true
+    }));
+    this.matEyeGlow = this._track(new THREE.MeshBasicMaterial({
+      color: 0x6e0a05, fog: true, transparent: true, opacity: 0.22,
+      blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide
+    }));
+    this.eyes = new THREE.Group();
+    this.eyes.name = 'redEyes';
+    this.eyes.visible = false;
+    var pt = [0, 0, 0, 0, 0];
+    for (var i = 0; i < SOCK.length; i++) {
+      var s = SOCK[i];
+      /* 眼窩は「真後ろへ」彫ってあるので、その底の点を引いて少しだけ手前へ戻す
+         ＝ 奥から覗いている見え方になり、斜めからは眼窩の縁に隠れる */
+      headSurfaceAtXY(s[0], s[1], 0, pt);
+      var node = new THREE.Group();
+      /* 眼窩の底からほんの数ミリだけ手前。奥に沈めておかないと
+         「顔に貼った赤い丸」になる（契約は“眼窩の奥から覗く微発光”） */
+      node.position.set(pt[0], pt[1], pt[2] - 0.0055);
+      var rr = 0.0072 - i * 0.0005;                 /* 左右非対称（契約 §4） */
+      var core = this._mesh(sphereGeo(rr, 10, 8), this.matEyeCore, node, 'eyeCore');
+      core.renderOrder = 4;
+      var glow = this._mesh(sphereGeo(rr * 1.75, 8, 6), this.matEyeGlow, node, 'eyeGlow');
+      glow.renderOrder = 5;
+      this.eyes.add(node);
+    }
+    this.headScale.add(this.eyes);
+    this._countExtra = false;
+    return this.eyes;
+  };
+
+  /** 捕獲演出中だけの高解像度化。'hi' / 'normal'（true / false も可） */
+  Enemy.prototype.setDetail = function (level) {
+    var hi = (level === 'hi' || level === true);
+    if (hi === this.detailHi) return this.detailHi;
+    if (hi) {
+      if (!this._hiGeo) {
+        var g2 = skullGeo(HI_SKULL_RS, HI_SKULL_HS);
+        /* 焼き込みは通常版と同一の光源設定（＝同じ存在の高精細版に見えること） */
+        bakeShade(g2, {
+          base: [1, 1, 1], amb: 0.26, key: 0.84, fill: 0.10, keyPow: 1.25, occ: g2.userData.occ,
+          keyDir: new THREE.Vector3(0.14, -0.10, -0.99).normalize(),
+          fillDir: new THREE.Vector3(-0.50, -0.34, -0.80).normalize()
+        });
+        this._track(g2);
+        this._hiGeo = g2;
+        this._hiTex = tex('headHi');
+        this._hiTris = (g2.index.count - this._loGeo.index.count) / 3;
+      }
+      this.faceMesh.geometry = this._hiGeo;
+      this.mats.head.map = this._hiTex;
+      this.mats.head.needsUpdate = true;
+      this._buildRedEyes().visible = true;
+    } else {
+      this.faceMesh.geometry = this._loGeo;
+      this.mats.head.map = this._loTex;
+      this.mats.head.needsUpdate = true;
+      if (this.eyes) this.eyes.visible = false;
+    }
+    this.detailHi = hi;
+    return hi;
+  };
+
+  /** 赤い目が出ているか（機械テスト用。演出外で true になってはいけない） */
+  Enemy.prototype.redEyesVisible = function () {
+    return !!(this.eyes && this.eyes.visible && this.detailHi);
+  };
+
+  /** いま描かれている三角形数（演出パーツを含む） */
+  Enemy.prototype.activeTriangles = function () {
+    var n = this.triangles;
+    if (this.detailHi) n += (this._hiTris || 0);
+    if (this.eyes && this.eyes.visible) n += 2 * (10 * 8 * 2 + 8 * 6 * 2);
+    if (this.grabHands && this.grabHands.visible) n += this._handTris || 0;
+    if (this.maw && this.maw.group.visible) n += this._mawTris || 0;
+    return n;
+  };
+
+  /** 赤い目の微発光を脈打たせる（演出中のみ呼ばれる） */
+  Enemy.prototype.pulseEyes = function (t, k) {
+    if (!this.eyes || !this.eyes.visible) return;
+    var a = 0.72 + 0.28 * Math.sin(t * 2.6) * Math.sin(t * 1.13 + 0.6);
+    a *= (k === undefined ? 1 : k);
+    this.matEyeCore.color.setRGB(0.62 * a, 0.055 * a, 0.030 * a);
+    this.matEyeGlow.opacity = 0.10 + 0.16 * a;
+  };
+
+  /** -Y に伸びるパーツを from→to へ向ける（長さも返す） */
+  var _aimA = new THREE.Vector3(), _aimB = new THREE.Vector3(0, -1, 0);
+  function aimNode(node, fx, fy, fz, tx, ty, tz) {
+    node.position.set(fx, fy, fz);
+    _aimA.set(tx - fx, ty - fy, tz - fz);
+    var len = _aimA.length() || 1e-4;
+    _aimA.multiplyScalar(1 / len);
+    node.quaternion.setFromUnitVectors(_aimB, _aimA);
+    return len;
+  }
+
+  /**
+   * 首を掴む手（一人称視界用）。camera 空間（-Z が前方）にそのまま置ける。
+   * 前腕は画面の下隅から入り、手のひらは画面下中央（＝首の位置）で握る。
+   */
+  Enemy.prototype.createGrabHands = function () {
+    if (this.grabHands) return this.grabHands;
+    var self = this;
+    var SKIN2 = [0.86, 0.85, 0.80];
+    this._countExtra = true;
+    var t0 = this.extraTriangles;
+    var root = new THREE.Group();
+    root.name = 'grab-hands';
+    root.visible = false;
+
+    function finger(parent, px, py, pz, rx, ry, rz, len, r0) {
+      var g1 = new THREE.Group();
+      g1.position.set(px, py, pz);
+      g1.rotation.set(rx, ry, rz);
+      parent.add(g1);
+      self._mesh(bakeShade(revolve(len, 5, 2, function (t) { return { r: r0 - 0.004 * t }; }, 1, 0.4),
+        { base: SKIN2, amb: 0.30, key: 0.62 }), self.mats.skin, g1, 'gPhal1');
+      var g2 = new THREE.Group();
+      g2.position.set(0, -len, 0);
+      g2.rotation.x = 1.05;                       /* 第2関節で強く曲げる＝掴んでいる */
+      g1.add(g2);
+      self._mesh(bakeShade(revolve(len * 0.80, 5, 2, function (t) { return { r: r0 * 0.86 - 0.004 * t }; }, 1, 0.4),
+        { base: SKIN2, amb: 0.30, key: 0.62 }), self.mats.skin, g2, 'gPhal2');
+      var g3 = new THREE.Group();
+      g3.position.set(0, -len * 0.80, 0);
+      g3.rotation.x = 0.95;
+      g2.add(g3);
+      self._mesh(bakeShade(revolve(len * 0.58, 4, 1, function (t) { return { r: r0 * 0.70 - 0.004 * t }; }, 1, 0.4),
+        { base: [0.80, 0.78, 0.72], amb: 0.30, key: 0.62 }), self.mats.skin, g3, 'gPhal3');
+      return g1;
+    }
+
+    /* sx = +1 が画面右。前腕は画面の下隅から入り、手は画面下寄りで首を握る。
+       ローカル空間 = camera 空間（-Z が前方）なので、寸法はそのまま画角に効く。 */
+    function hand(sx, name) {
+      var arm = new THREE.Group();
+      arm.name = name;
+      root.add(arm);
+      var hx = sx * 0.190, hy = -0.250, hz = -0.480;   /* 手のひらの位置（画面の下端寄り） */
+      var fore = new THREE.Group();
+      var len = aimNode(fore, sx * 0.620, -0.600, -0.900, hx, hy, hz);
+      arm.add(fore);
+      self._mesh(bakeShade(limbGeo(len, 0.058, 0.047, 0.034, 8, 0.92, -0.012), {
+        base: SKIN2, amb: 0.26, key: 0.66,
+        grad: function (y) { return 0.62 + 0.38 * Math.min(1, (-y) / (len * 0.5) + 0.35); }
+      }), self.mats.skin, fore, 'gForearm');
+      /* 袖の襤褸（前腕の付け根） */
+      self._mesh(bakeShade(revolve(0.18, 8, 3, function (t) {
+        return { r: 0.070 + 0.030 * t };
+      }, 1, 1), { base: [0.40, 0.41, 0.36], amb: 0.34, key: 0.34 }), self.mats.cloth, fore, 'gSleeve');
+      /* 手首から先は arm 直下に置く（＝camera 空間で向きを決められる）。
+         指は内側かつ上へ伸ばす＝首を握り込んだ手の甲がこちらを向く。 */
+      var wr = new THREE.Group();
+      aimNode(wr, hx, hy, hz, hx - sx * 0.45, hy + 0.80, hz + 0.05);
+      wr.scale.setScalar(0.92);
+      arm.add(wr);
+      self._mesh(bakeShade(revolve(0.105, 7, 2, function (t) {
+        return { r: 0.044 - 0.005 * t, sx: 1.50, sz: 0.68 };
+      }, 1, 0.4), { base: SKIN2, amb: 0.30, key: 0.64 }), self.mats.skin, wr, 'gPalm');
+      for (var f = 0; f < 4; f++) {
+        finger(wr, (f - 1.5) * 0.032 * -sx, -0.094, 0.004,
+          0.34 + f * 0.05, (f - 1.5) * 0.10, 0, 0.072 + (1.5 - Math.abs(f - 1.5)) * 0.012, 0.0155);
+      }
+      /* 親指は反対側から回り込む */
+      finger(wr, sx * 0.052, -0.038, 0.028, 0.55, 0, -sx * 1.15, 0.064, 0.0170);
+      return arm;
+    }
+    this.handL = hand(-1, 'grabHandL');
+    this.handR = hand(1, 'grabHandR');
+    this.grabHands = root;
+    this._handTris = this.extraTriangles - t0;
+    this._countExtra = false;
+    return root;
+  };
+
+  /**
+   * 「食われる」用の口。camera 空間に置いて拡大すると歯列が画面を覆う。
+   * 単位系: 口の半幅 = 1.0。上下の顎が u（0..1）で開く。
+   */
+  Enemy.prototype.createMaw = function () {
+    if (this.maw) return this.maw;
+    var self = this;
+    this._countExtra = true;
+    var t0 = this.extraTriangles;
+    var root = new THREE.Group();
+    root.name = 'maw';
+    root.visible = false;
+    var upper = new THREE.Group(); upper.name = 'mawUpper'; root.add(upper);
+    var lower = new THREE.Group(); lower.name = 'mawLower'; root.add(lower);
+
+    /* 喉の闇（奥へすぼまる袋）。手前は開いたまま＝カメラを飲み込む */
+    var gullet = new THREE.Group();
+    root.add(gullet);
+    self._mesh(bakeShade(revolve(2.10, 16, 5, function (t) {
+      return { r: 1.34 * (1 - 0.74 * t * t), sx: 1.0, sz: 0.78 };
+    }, 1, 1, true), { base: [0.06, 0.045, 0.045], amb: 0.30, key: 0.10 }), self.mats.hollow, gullet, 'gullet');
+    gullet.rotation.x = -Math.PI / 2;            /* -Y方向の袋を -Z（奥）へ倒す */
+
+    /* 歯列: 楕円弧に沿って1本ずつ植える（お面の絵ではなく実ジオメトリ） */
+    function row(parent, up, n, seed) {
+      var rr = rngOf(seed);
+      var gum = self._mesh(bakeShade(revolve(0.30, 16, 2, function (t) {
+        return { r: 1.06 - 0.06 * t, sx: 1.0, sz: 0.66 };
+      }, 1, 1, true), { base: [0.30, 0.14, 0.14], amb: 0.34, key: 0.30 }), self.mats.hollow, parent, 'gum');
+      gum.rotation.x = up ? Math.PI : 0;
+      gum.position.y = up ? 0.04 : -0.04;
+      for (var i = 0; i < n; i++) {
+        var a = (i + 0.5) / n * Math.PI - Math.PI / 2;      /* 前方の弧だけ */
+        var len = (0.20 + rr() * 0.20) * (up ? 1.05 : 0.92);
+        var w = 0.055 + rr() * 0.045;
+        var g1 = new THREE.Group();
+        g1.position.set(Math.sin(a) * 1.00, up ? 0.02 : -0.02, -Math.cos(a) * 0.64);
+        g1.rotation.set((up ? 1 : -1) * (0.16 + rr() * 0.22), -a, (rr() - 0.5) * 0.22);
+        parent.add(g1);
+        if (rr() < 0.12) continue;                          /* 欠損（不揃いの歯列） */
+        var geo = revolve(up ? len : -len, 5, 2, function (t) {
+          return { r: w * (1 - 0.72 * t) };
+        }, 1, 0.5);
+        var sh = 0.46 + rr() * rr() * 0.54;
+        bakeShade(geo, { base: [sh, sh * 0.97, sh * 0.84], amb: 0.42, key: 0.52 });
+        self._mesh(geo, self.mats.tooth, g1, 'mawTooth');
+      }
+    }
+    row(upper, true, 15, 4801);
+    row(lower, false, 13, 9109);
+
+    var maw = {
+      group: root,
+      setOpen: function (u) {
+        /* 0=閉じ 1=大きく開く。噛み合わせの回転軸は口の奥（+Z 側） */
+        upper.rotation.x = -0.06 - 0.72 * u;
+        lower.rotation.x = 0.06 + 0.62 * u;
+        upper.position.y = 0.05 + 0.30 * u;
+        lower.position.y = -0.05 - 0.26 * u;
+      }
+    };
+    maw.setOpen(0);
+    this.maw = maw;
+    this._mawTris = this.extraTriangles - t0;
+    this._countExtra = false;
+    return maw;
   };
 
   ESCAPE.Enemy = Enemy;

@@ -495,6 +495,64 @@
     g.ai.enemy.placeCell(col, row, yawDeg === undefined ? 180 : yawDeg, g.map);
     g.ai.path = null; g.ai.goal = null; g.ai.repathT = 0;
   }
+  /** P4.6: 捕獲シネマティック（7〜9秒）が終わって牢/ゲームオーバーに落ち着くまで進める */
+  function simCapture(g, extra) {
+    var dur = (g.cinematic && g.cinematic.totalDur)
+      ? g.cinematic.totalDur(g.stealth.jail.reset ? 'eaten' : 'jail') : 3;
+    var frames = Math.ceil(dur / ESCAPE.FIXED_DT) + 120 + (extra || 0);
+    return simUntil(g, function () {
+      return g.stealth.jail.phase === 'locked' || g.stealth.jail.phase === 'over';
+    }, frames);
+  }
+
+  /** 実際の追跡→接触で捕獲まで持っていく（pre = 事前の捕獲回数） */
+  function startCapture(g, pre) {
+    g.reset();
+    if (pre) g.stealth.captures = pre;
+    var open = findTriple(g.map, false);
+    placeEnemy(g, open.col, open.row, -90);
+    place(g, open.col + 2, open.row, 0);
+    g.player.crouching = false;
+    sim(g, 1);
+    g.player.x = g.ai.enemy.x + 0.55; g.player.z = g.ai.enemy.z;
+    sim(g, 1);
+    return g.stealth.jail.phase === 'grab';
+  }
+
+  /** 演出の段階ごとの所要時間を実測する */
+  function traceCinematic(g, maxFrames) {
+    var cine = g.cinematic;
+    var out = { seq: [], durs: {}, frames: 0, camDrag: null, camGrab: null,
+      handsSeen: false, mawSeen: false, lampsSeen: false, feetSeen: false,
+      redEyesSeen: false, triPeak: 0, fovGrab: 0 };
+    var last = cine.stage, n = 0;
+    for (var i = 0; i < maxFrames; i++) {
+      if (cine.stage !== last) {
+        out.seq.push(last);
+        out.durs[last] = n * ESCAPE.FIXED_DT;
+        last = cine.stage; n = 0;
+        if (last === 'none') break;
+      }
+      var e = g.ai.enemy;
+      if (e.redEyesVisible()) out.redEyesSeen = true;
+      out.triPeak = Math.max(out.triPeak, e.activeTriangles());
+      if (cine.stage === 'grab') {
+        if (e.grabHands && e.grabHands.visible) out.handsSeen = true;
+        out.camGrab = { x: g.camera.position.x, y: g.camera.position.y, z: g.camera.position.z };
+        out.fovGrab = g.camera.fov;
+      }
+      if (cine.stage === 'maw' && e.maw && e.maw.group.visible) out.mawSeen = true;
+      if (cine.stage === 'drag') {
+        if (cine.lamps && cine.lamps.visible) out.lampsSeen = true;
+        if (cine.feet && cine.feet.visible) out.feetSeen = true;
+        out.camDrag = { x: g.camera.position.x, y: g.camera.position.y, z: g.camera.position.z };
+      }
+      g.stepFrame(ESCAPE.FIXED_DT);
+      n++; out.frames++;
+    }
+    return out;
+  }
+
   /** 直線で並ぶ3マス（間が壁 / 間が床）を探す */
   function findTriple(map, wallBetween) {
     var cells = map.walkableCells();
@@ -670,6 +728,13 @@
       t.ok(g.stealth.onInteract(), 'ロッカー: 「調べる」で入れる');
       t.ok(g.stealth.inLocker(), 'ロッカー: 中に入っている');
       t.ok(!ai.canSeePlayer(), '視界: ロッカー内は不可視');
+      /* P4.6: 入る瞬間を見られると敵が開けに来る（駆け引き）。
+         ここは移動ロックの検証なので敵を巡回起点へ退かしてから測る
+         （見られた場合の挙動は testLockerSeen が受け持つ） */
+      var esp0 = g.map.meta.enemySpawn;
+      placeEnemy(g, esp0.col, esp0.row, 180);
+      ai.lockerTarget = null;
+      ai.toPatrol();
       /* 中では移動できない */
       var lx = g.player.x, lz = g.player.z;
       g.input.moveY = 1;
@@ -824,7 +889,7 @@
     t.ok(st.capture() === false, '牢送り: 演出中の再捕獲は無視される');
     t.ok(st.captures === 1, '牢送り: 演出中の再捕獲で回数が増えない', st.captures);
 
-    var toLocked = simUntil(g, function () { return st.jail.phase === 'locked'; }, 240);
+    var toLocked = simCapture(g);
     t.ok(toLocked >= 0, '状態機械: 暗転を経て拘束室で復帰する', st.jail.phase);
     var jc = g.map.meta.jailCell;
     t.ok(g.player.col() === jc.col && g.player.row() === jc.row, '牢送り: 拘束室の房の中で復帰する',
@@ -901,7 +966,7 @@
     g.progress.flags.keepMe = 1;
     for (var i = 0; i < T.captureLimit - 1; i++) {
       t.ok(st.capture(), '捕獲' + (i + 1) + '回目: 牢送りが始まる');
-      var toLocked = simUntil(g, function () { return st.jail.phase === 'locked'; }, 240);
+      var toLocked = simCapture(g);
       t.ok(toLocked >= 0, '捕獲' + (i + 1) + '回目: 拘束室で復帰する', st.jail.phase);
       var guard = 0;
       while (st.jail.phase === 'locked' && guard++ < 12) st.onInteract();
@@ -910,8 +975,11 @@
     t.ok(g.progress.flags.keepMe === 1, '牢送り（3回目未満）は進行状態を保持する');
     t.ok(st.captures === T.captureLimit - 1, '捕獲回数が積み上がる', st.captures);
 
-    /* 3回目 = エリア最初から（チェックポイントは無関係） */
+    /* 3回目 = 食われる → ゲームオーバー画面 → タップでエリア最初から（P4.6） */
     t.ok(st.capture(), '捕獲3回目: 発生する');
+    var over = simCapture(g);
+    t.ok(over >= 0 && st.jail.phase === 'over', '捕獲3回目: ゲームオーバー画面になる', st.jail.phase);
+    t.ok(st.onInteract() === true, '捕獲3回目: 操作でエリア最初から再開できる');
     var done = simUntil(g, function () { return st.jail.phase === 'none'; }, 400);
     t.ok(done >= 0, '捕獲3回目: 暗転を経て復帰する', st.jail.phase);
     t.ok(st.areaResets === 1, '捕獲3回目: エリアがリセットされる', st.areaResets);
@@ -1214,10 +1282,12 @@
     g.ai.state = 'chase';
     sim(g, 5);
     t.ok(g.stealth.captures === 1, 'ハンドル保持中: 捕獲は普通に起きる（無敵ではない）');
-    var toLocked = simUntil(g, function () { return g.stealth.jail.phase === 'locked'; }, 300);
+    var toLocked = simCapture(g);
     t.ok(toLocked >= 0, 'ハンドル保持中に捕獲されても牢送り演出は正常に完了する');
     g.input._keys.KeyE = false;
     t.ok(g.progress.gimmick.doorOpen === false, 'ハンドル保持中断: 隔壁は未開放のまま（3秒に届いていない）');
+    t.near(g.progress.gimmick.handleHold, 0, 1e-6,
+      'ハンドル保持中断: 捕獲演出の間はハンドルが回らない（中断安全）', g.progress.gimmick.handleHold);
     var guard = 0;
     while (g.stealth.jail.phase === 'locked' && guard++ < 12) g.stealth.onInteract();
     t.ok(g.stealth.jail.phase === 'none', 'ハンドル保持中断: 牢から自力脱出できる');
@@ -1304,6 +1374,9 @@
     g.progress.checkpoint = g.map.meta.checkpoints[1].id;
     g.stealth.captures = T.captureLimit - 1;
     t.ok(g.stealth.capture() === true, '3回目の捕獲が発生する（前提）');
+    t.ok(simCapture(g) >= 0 && g.stealth.jail.phase === 'over',
+      '3回目の捕獲: ゲームオーバー画面まで進む', g.stealth.jail.phase);
+    g.stealth.restartArea();
     var done = simUntil(g, function () { return g.stealth.jail.phase === 'none'; }, 400);
     t.ok(done >= 0, '3回目の捕獲: エリアリセットが完了する');
     t.ok(g.stealth.areaResets === 1, 'エリアリセットが記録される');
@@ -1342,7 +1415,9 @@
       'sting', 'chaseRelease', 'capture',
       'lever', 'terminalKey', 'terminalErr', 'terminalOk',
       'handleCreak', 'doorRoar', 'alarm', 'pry', 'grateBreak',
-      'lockerDoor', 'boardCrash', 'paper', 'checkpoint'];
+      'lockerDoor', 'boardCrash', 'paper', 'checkpoint',
+      /* P4.6 捕獲シネマティック（契約 §4「金属の牢扉が閉まる音→鍵の音」「食われる」） */
+      'cellDoor', 'cellLock', 'bite'];
     var missing = [];
     for (var i = 0; i < need.length; i++) if (typeof A.VOICES[need[i]] !== 'function') missing.push(need[i]);
     t.ok(missing.length === 0, '音響: 契約 §4 の全ての音が実装されている', missing.join(' / '));
@@ -1416,6 +1491,14 @@
     gate('enemyClaw', 0.004, 0.05);
     gate('pry', 0.003, 0.03);
     gate('breath', 0.001, 0.01);
+    /* P4.6: 牢扉・鍵・食われる */
+    var cd = gate('cellDoor', 0.020, 0.40);
+    gate('cellLock', 0.008, 0.15);
+    var bt = gate('bite', 0.020, 0.40);
+    if (cd && w) t.ok(cd.peak > w.peak * 2, '音響レンダ: 牢扉の金属音は足音より遥かに大きい',
+      cd.peak.toFixed(3) + ' vs ' + w.peak.toFixed(3));
+    if (bt && st) t.ok(bt.rms > st.rms * 0.8, '音響レンダ: 食われる音は刺し音に匹敵する厚み',
+      bt.rms.toFixed(4) + ' vs ' + st.rms.toFixed(4));
     if (st && w) t.ok(st.peak > w.peak * 2, '音響レンダ: 発見スティングは足音より遥かに大きい',
       st.peak.toFixed(3) + ' vs ' + w.peak.toFixed(3));
     if (lv) t.ok(lv.activeRatio > 0.25, '音響レンダ: レバーは長く響く駆動音', lv.activeRatio.toFixed(3));
@@ -1504,7 +1587,7 @@
     /* 捕獲 */
     g.reset();
     delta('capture', function () { st.capture(); }, '捕獲');
-    simUntil(g, function () { return st.jail.phase === 'locked'; }, 240);
+    simCapture(g);
     /* 格子こじ開け → 破壊 */
     delta('pry', function () { st.onInteract(); }, '格子をこじ開ける');
     delta('grateBreak', function () {
@@ -2026,6 +2109,402 @@
 
   /* ---------------- 実行本体 ---------------- */
 
+
+  /* ================================================================
+   * P4.6: 捕獲シネマティック＋駆け引き強化（契約 DESIGN.md §4「捕獲演出と駆け引き」）
+   * ============================================================== */
+
+  /** 演出の段階遷移と所要時間（契約: 顔アップ0.4 → 首掴み2 → 引きずり3〜4 → 暗転1.5／合計7〜9秒） */
+  function testCaptureCinematic(t, g) {
+    var T = ESCAPE.ENEMY_TUNING, cine = g.cinematic;
+    if (!t.ok(!!cine, '捕獲演出: モジュールが組み込まれている')) return;
+    t.ok(T.cineZoomDur === 0.40, '捕獲演出: 追いつきは0.4秒（契約）', T.cineZoomDur);
+    t.ok(T.cineGrabDur === 2.00, '捕獲演出: 首掴みは2秒（契約）', T.cineGrabDur);
+    t.ok(T.cineDragDur >= 3.0 && T.cineDragDur <= 4.0, '捕獲演出: 引きずりは3〜4秒（契約）', T.cineDragDur);
+    t.ok(T.cineBlackDur === 1.50, '捕獲演出: 暗転は1.5秒（契約）', T.cineBlackDur);
+    var total = cine.totalDur('jail');
+    t.ok(total >= 7.0 && total <= 9.0, '捕獲演出: 合計7〜9秒（契約）', total.toFixed(2) + 's');
+
+    if (!t.ok(startCapture(g), '捕獲演出: 実追跡→接触で捕獲が始まる（前提）', g.stealth.jail.phase)) {
+      g.reset(); return;
+    }
+    t.ok(cine.active() && cine.mode === 'jail', '捕獲演出: 牢送りモードで起動する', cine.mode);
+    t.ok(cine.stage === 'zoom', '捕獲演出: 最初の段階は顔へのズーム', cine.stage);
+    t.ok(g.ai.cine === true, '捕獲演出: 演出中は敵AIの駆動が止まる');
+    var pe = { x: g.player.x, y: g.player.y + g.player.eyeHeight, z: g.player.z };
+
+    var tr = traceCinematic(g, 1200);
+    t.ok(tr.seq.join('>') === 'zoom>grab>drag>black',
+      '捕獲演出: 段階が 顔アップ→首掴み→引きずり→暗転 の順で進む', tr.seq.join('>'));
+    var names = ['zoom', 'grab', 'drag', 'black'];
+    var keys = { zoom: T.cineZoomDur, grab: T.cineGrabDur, drag: T.cineDragDur, black: T.cineBlackDur };
+    for (var i = 0; i < names.length; i++) {
+      var got = tr.durs[names[i]];
+      t.ok(got !== undefined && Math.abs(got - keys[names[i]]) <= 0.05,
+        '捕獲演出: ' + names[i] + ' の所要時間が契約どおり',
+        (got === undefined ? '未到達' : got.toFixed(3)) + 's / ' + keys[names[i]] + 's');
+    }
+    var real = tr.frames * ESCAPE.FIXED_DT;
+    t.ok(real >= 7.0 && real <= 9.0, '捕獲演出: 実測の合計が7〜9秒', real.toFixed(2) + 's');
+
+    t.ok(tr.handsSeen, '捕獲演出: 首掴みで敵の手が一人称視界に入る');
+    t.ok(tr.lampsSeen, '捕獲演出: 引きずりで天井灯が流れる');
+    t.ok(tr.feetSeen, '捕獲演出: 引きずりで自分の足が見える');
+    t.ok(tr.camGrab !== null && Math.hypot(tr.camGrab.x - pe.x, tr.camGrab.z - pe.z) > 0.12,
+      '捕獲演出: 首掴みのカメラはプレイヤー位置から離れて敵の顔へ寄る');
+    t.ok(Math.abs(tr.fovGrab - T.cineZoomFov) < 0.01, '捕獲演出: ズーム後のFOVが演出値になる', tr.fovGrab);
+    t.ok(tr.camDrag !== null && tr.camDrag.y < 0.6,
+      '捕獲演出: 引きずりのカメラは床すれすれ', tr.camDrag ? tr.camDrag.y.toFixed(2) : '—');
+
+    /* 暗転しきって既存の牢システムへ接続される */
+    t.ok(g.stealth.jail.phase === 'locked', '捕獲演出: 暗転の後は牢（locked）へ接続する', g.stealth.jail.phase);
+    t.near(g.stealth.fade, 1, 0.06, '捕獲演出: 牢に着いた瞬間は暗転しきっている');
+    var jc = g.map.meta.jailCell;
+    t.ok(g.player.col() === jc.col && g.player.row() === jc.row,
+      '捕獲演出: 既存の第4房で目が覚める', g.player.col() + ',' + g.player.row());
+    t.ok(!cine.active(), '捕獲演出: 演出が終わっている');
+    t.ok(g.ai.cine === false, '捕獲演出: 敵AIの駆動が戻る');
+    /* 房から自力脱出できる（既存経路が生きている） */
+    var guard = 0;
+    while (g.stealth.jail.phase === 'locked' && guard++ < 12) g.stealth.onInteract();
+    t.ok(g.stealth.jail.phase === 'none', '捕獲演出: 牢からこじ開けて脱出できる', guard + '回');
+    g.reset();
+  }
+
+  /** 捕獲時限定の高解像度顔＋赤い目（契約: 通常時は絶対に出さない） */
+  function testCaptureFaceDetail(t, g) {
+    g.reset();
+    var e = g.ai.enemy;
+    t.ok(e.detailHi === false, '高解像度顔: 通常時は差し替わっていない');
+    t.ok(e.redEyesVisible() === false, '赤い目: 通常時は出ない');
+    var baseTri = e.activeTriangles();
+    t.ok(baseTri === e.triangles, '赤い目: 通常時の三角形数に演出ぶんが乗らない', baseTri);
+    var loGeo = e.faceMesh.geometry, loTex = e.mats.head.map;
+
+    if (!t.ok(startCapture(g), '高解像度顔: 捕獲が始まる（前提）')) { g.reset(); return; }
+    sim(g, 6);
+    t.ok(e.detailHi === true, '高解像度顔: 演出中は高密度メッシュへ差し替わる');
+    t.ok(e.faceMesh.geometry !== loGeo, '高解像度顔: 顔メッシュの実体が入れ替わっている');
+    t.ok(e.faceMesh.geometry.index.count > loGeo.index.count,
+      '高解像度顔: 演出用の顔の方が高密度',
+      (e.faceMesh.geometry.index.count / 3) + ' vs ' + (loGeo.index.count / 3));
+    t.ok(e.mats.head.map !== loTex, '高解像度顔: 頭部テクスチャも高解像度へ差し替わる');
+    t.ok(e.mats.head.map.image.width >= 2048, '高解像度顔: 2048以上のテクスチャ',
+      e.mats.head.map.image.width);
+    t.ok(e.redEyesVisible() === true, '赤い目: 演出中は眼窩の奥に灯る');
+    var add = e.activeTriangles() - e.triangles;
+    t.ok(add > 0 && add <= 8000, '高解像度顔: 演出中の追加三角形は+8000以内（契約）', '+' + add);
+
+    var tr = traceCinematic(g, 1200);
+    t.ok(tr.redEyesSeen, '赤い目: 演出中に実際に表示されている');
+    t.ok(tr.triPeak - e.triangles <= 8000, '高解像度顔: 演出中のピークでも+8000以内',
+      '+' + (tr.triPeak - e.triangles));
+    t.ok(e.detailHi === false, '高解像度顔: 演出後は通常の顔へ戻る');
+    t.ok(e.redEyesVisible() === false, '赤い目: 演出後に残らない（契約）');
+    t.ok(e.faceMesh.geometry === loGeo, '高解像度顔: 顔メッシュが元の実体に戻る');
+    t.ok(e.mats.head.map === loTex, '高解像度顔: 頭部テクスチャが元に戻る');
+
+    /* 演出の途中で reset しても残らない */
+    startCapture(g);
+    sim(g, 30);
+    t.ok(e.redEyesVisible() === true, '赤い目: 途中中断の前提（表示中）');
+    g.reset();
+    t.ok(e.detailHi === false && e.redEyesVisible() === false,
+      '赤い目: 演出途中のリセットでも残らない');
+    t.ok(e.activeTriangles() === e.triangles, '高解像度顔: リセット後の三角形数が通常時に戻る');
+    g.reset();
+  }
+
+  /** 連打は揺れを増すだけで結果を変えない（契約） */
+  function testCaptureMash(t, g) {
+    var T = ESCAPE.ENEMY_TUNING;
+    function run(mash) {
+      startCapture(g);
+      var frames = Math.ceil((T.cineZoomDur + T.cineGrabDur * 0.5) / ESCAPE.FIXED_DT);
+      for (var i = 0; i < frames; i++) {
+        if (i === 3) for (var k = 0; k < mash; k++) g.stealth.onInteract();
+        g.stepFrame(ESCAPE.FIXED_DT);
+      }
+      /* 揺れは「顔を見る基準姿勢」からのズレで測る */
+      var d = g.camera.quaternion.angleTo(g.cinematic.q1);
+      var out = { dev: d, mash: g.cinematic.mash, stage: g.cinematic.stage };
+      simCapture(g);
+      out.phase = g.stealth.jail.phase;
+      out.captures = g.stealth.captures;
+      out.cell = g.player.col() + ',' + g.player.row();
+      return out;
+    }
+    var a = run(0), b = run(12);
+    t.ok(a.stage === 'grab' && b.stage === 'grab', '連打: 首掴みの最中で比較している', a.stage + '/' + b.stage);
+    t.ok(b.mash > a.mash, '連打: 連打が演出に届いている', a.mash + ' -> ' + b.mash);
+    t.ok(b.dev > a.dev * 1.15, '連打: 揺れが強まる',
+      a.dev.toFixed(4) + ' -> ' + b.dev.toFixed(4));
+    t.ok(a.phase === b.phase && a.captures === b.captures && a.cell === b.cell,
+      '連打: 結果（牢送り先・捕獲回数）は変わらない',
+      a.phase + '/' + a.cell + ' vs ' + b.phase + '/' + b.cell);
+    g.reset();
+  }
+
+  /** 3回目は食われる → GAME OVER（正文）→ エリア最初から */
+  function testEatenGameOver(t, g) {
+    var T = ESCAPE.ENEMY_TUNING, cine = g.cinematic, st = g.stealth;
+    if (!t.ok(startCapture(g, T.captureLimit - 1), '食われる: 3回目の捕獲が始まる（前提）')) { g.reset(); return; }
+    t.ok(cine.mode === 'eaten', '食われる: 3回目は食われる演出に差し替わる', cine.mode);
+    var tr = traceCinematic(g, 1200);
+    t.ok(tr.seq.join('>') === 'zoom>grab>maw>black',
+      '食われる: 顔アップ→首掴み→口→暗転 の順で進む', tr.seq.join('>'));
+    t.ok(tr.mawSeen, '食われる: 歯列（口）が画面に出る');
+    t.ok(tr.triPeak - g.ai.enemy.triangles <= 8000,
+      '食われる: 顔＋赤い目＋手＋口を同時に出しても追加三角形は+8000以内（契約）',
+      '+' + (tr.triPeak - g.ai.enemy.triangles));
+    t.ok(tr.redEyesSeen, '食われる: 赤い目が出ている');
+    t.ok(st.jail.phase === 'over', '食われる: ゲームオーバー状態になる', st.jail.phase);
+
+    /* 正文（docs/notes.md「回収完了」節）が一字一句そのまま出る */
+    var ov = document.getElementById('gameover-overlay');
+    t.ok(!!ov && ov.classList.contains('show'), 'ゲームオーバー: 画面が表示される');
+    t.ok(document.getElementById('gameover-title').textContent === '回収完了',
+      'ゲームオーバー: 見出しが正文どおり', document.getElementById('gameover-title').textContent);
+    t.ok(document.getElementById('gameover-sub').textContent === '移送対象 No.7 —— 拘束区画へ',
+      'ゲームオーバー: 副題が正文どおり', document.getElementById('gameover-sub').textContent);
+    t.ok(document.getElementById('gameover-hint').textContent === 'タップで最初から',
+      'ゲームオーバー: 操作案内が正文どおり', document.getElementById('gameover-hint').textContent);
+
+    /* 待っても勝手に進まない（入力待ち） */
+    sim(g, 180);
+    t.ok(st.jail.phase === 'over', 'ゲームオーバー: 入力があるまで待ち続ける', st.jail.phase);
+    t.near(st.fade, 1, 1e-9, 'ゲームオーバー: 暗転したまま');
+
+    /* タップ/E/クリック → エリア最初から（既存のリセット経路） */
+    g.progress.flags.eatTest = 1;
+    t.ok(st.onInteract() === true, 'ゲームオーバー: 操作を受け付ける');
+    t.ok(st.areaResets >= 1, 'ゲームオーバー: エリアリセットが走る', st.areaResets);
+    t.ok(st.captures === 0, 'ゲームオーバー: 捕獲回数が戻る', st.captures);
+    t.ok(!g.progress.flags.eatTest, 'ゲームオーバー: エリア最初からの扱いになる');
+    t.ok(!ov.classList.contains('show'), 'ゲームオーバー: 画面が閉じる');
+    var sp = g.map.meta.spawn;
+    t.ok(g.player.col() === sp.col && g.player.row() === sp.row,
+      'ゲームオーバー: エリア最初のスポーンへ戻る', g.player.col() + ',' + g.player.row());
+    var done = simUntil(g, function () { return st.jail.phase === 'none'; }, 300);
+    t.ok(done >= 0, 'ゲームオーバー: 明転して操作可能に戻る', st.jail.phase);
+    t.ok(g.ai.state === 'patrol' && g.ai.form === 'stand', 'ゲームオーバー: 敵も初期状態へ戻る', g.ai.state);
+    t.ok(g.ai.enemy.redEyesVisible() === false, 'ゲームオーバー: 赤い目が残らない');
+    g.reset();
+    try { localStorage.removeItem(SAVE_KEY); } catch (e) { /* 無効環境は対象外 */ }
+  }
+
+  /** 演出中の割り込み（再捕獲・音イベント・runAllのreset）で状態が壊れない */
+  function testCaptureInterrupt(t, g) {
+    var st = g.stealth, ai = g.ai, cine = g.cinematic;
+    if (!t.ok(startCapture(g), '演出割り込み: 捕獲が始まる（前提）')) { g.reset(); return; }
+    sim(g, 20);
+    var ex = ai.enemy.x, ez = ai.enemy.z;
+    t.ok(st.capture() === false, '演出割り込み: 演出中の再捕獲は無視される');
+    t.ok(st.captures === 1, '演出割り込み: 再捕獲で回数が増えない', st.captures);
+    /* 音イベントが飛んでも敵は演出から抜けない */
+    ESCAPE.noise.emit(ai.enemy.x + 3, ai.enemy.z + 1, 30, 'test');
+    sim(g, 10);
+    t.ok(ai.state === 'caught', '演出割り込み: 音イベントで状態が動かない', ai.state);
+    t.ok(cine.active(), '演出割り込み: 演出は続いている', cine.stage);
+    /* プレイヤーは動かない（中断安全） */
+    var px = g.player.x, pz = g.player.z;
+    g.input.moveY = 1;
+    sim(g, 30);
+    g.input.reset();
+    t.near(Math.hypot(g.player.x - px, g.player.z - pz), 0, 1e-9, '演出割り込み: 操作しても動かない');
+    t.ok(st.onInteract() === true, '演出割り込み: 演出中の「調べる」は握り潰される');
+    t.ok(st.jail.pry === 0, '演出割り込み: こじ開けは進まない', st.jail.pry);
+
+    /* 演出の途中で reset（runAll と同じ経路） */
+    g.reset();
+    t.ok(!cine.active() && cine.stage === 'none', '演出割り込み: リセットで演出が解除される', cine.stage);
+    t.ok(st.jail.phase === 'none' && st.fade === 0, '演出割り込み: 暗転が消える', st.jail.phase);
+    t.ok(ai.cine === false, '演出割り込み: 敵AIの駆動が戻る');
+    t.ok(ai.enemy.redEyesVisible() === false, '演出割り込み: 赤い目が残らない');
+    t.near(g.camera.fov, 75, 1e-6, '演出割り込み: カメラのFOVが基準値へ戻る', g.camera.fov);
+    var ov = document.getElementById('gameover-overlay');
+    t.ok(!ov.classList.contains('show'), '演出割り込み: ゲームオーバー画面が残らない');
+    /* 演出後のカメラがプレイヤー追従に戻る */
+    sim(g, 2);
+    t.near(g.camera.position.x, g.player.x, 1e-6, '演出割り込み: カメラがプレイヤー追従へ戻る');
+
+    /* ゲームオーバー画面の途中で reset しても壊れない */
+    startCapture(g, ESCAPE.ENEMY_TUNING.captureLimit - 1);
+    simCapture(g);
+    t.ok(st.jail.phase === 'over', '演出割り込み: ゲームオーバー中である（前提）', st.jail.phase);
+    g.reset();
+    t.ok(st.jail.phase === 'none' && !ov.classList.contains('show'),
+      '演出割り込み: ゲームオーバー中のリセットで完全復帰する', st.jail.phase);
+    t.ok(ex !== undefined && ez !== undefined, '演出割り込み: 検証が最後まで走った');
+    g.reset();
+    try { localStorage.removeItem(SAVE_KEY); } catch (e2) { /* 無効環境は対象外 */ }
+  }
+
+  /** 音 → 反転形態に落ちて疾走（契約 §4「音→敵が飛んでくる」。歩く調査は廃止） */
+  function testNoiseSprint(t, g) {
+    g.reset();
+    var ai = g.ai, T = ESCAPE.ENEMY_TUNING;
+    t.ok(T.investigateSpeed >= T.chaseSpeed * 0.90,
+      '音→疾走: 調査速度が追跡並みに引き上げられている',
+      T.investigateSpeed + ' / ' + T.chaseSpeed);
+    t.ok(T.investigateSpeed > T.patrolSpeed * 2.5,
+      '音→疾走: 歩く調査（旧仕様）ではない', T.investigateSpeed + ' vs 巡回' + T.patrolSpeed);
+
+    /* 遠くで音を鳴らす（見えない位置） */
+    var e = ai.enemy;
+    var cells = g.map.walkableCells(), spot = null;
+    for (var i = 0; i < cells.length && !spot; i++) {
+      var c = g.map.cellCenter(cells[i].col, cells[i].row);
+      var d = Math.hypot(c.x - e.x, c.z - e.z);
+      if (d < 10 || d > 16) continue;
+      if (!ai.blockedLine(e.x, e.z, c.x, c.z)) continue;
+      spot = { col: cells[i].col, row: cells[i].row, x: c.x, z: c.z };
+    }
+    if (!t.ok(!!spot, '音→疾走: 検証に使える音源マスがある')) { g.reset(); return; }
+    /* プレイヤーは音源とは無関係の遠方に置く（発見されないこと） */
+    var sp = g.map.meta.spawn;
+    place(g, sp.col, sp.row, 0);
+    ESCAPE.noise.emit(spot.x, spot.z, 40, 'test');
+    sim(g, 1);
+    t.ok(ai.state === 'investigate', '音→疾走: 音で調査状態になる', ai.state);
+    t.ok(ai.form === 'crawl', '音→疾走: その場で反転形態へ落ちる（契約）', ai.form);
+    var toCrawl = simUntil(g, function () { return ai.enemy.state !== 'trans'; }, 240);
+    t.ok(toCrawl >= 0, '音→疾走: 形態遷移が完走する', ai.enemy.state);
+    t.near(ai.enemy.poseT, 1, 1e-9, '音→疾走: 反転形態になりきる');
+
+    /* 遷移後の実速度を測る */
+    var x0 = ai.enemy.x, z0 = ai.enemy.z, N = 45;
+    sim(g, N);
+    var v = Math.hypot(ai.enemy.x - x0, ai.enemy.z - z0) / (N * ESCAPE.FIXED_DT);
+    t.ok(v > T.patrolSpeed * 1.8, '音→疾走: 音源へ疾走する（巡回より遥かに速い）',
+      v.toFixed(2) + ' m/s');
+    t.ok(ai.state === 'investigate' || ai.state === 'search',
+      '音→疾走: 音源へ向かっている', ai.state);
+
+    /* 到着 → 探索8秒 → 直立へ戻り巡回（契約） */
+    var toSearch = simUntil(g, function () { return ai.state === 'search'; }, 900);
+    t.ok(toSearch >= 0, '音→疾走: 到着後は音源周辺の探索へ移る', ai.state);
+    var toPatrol = simUntil(g, function () { return ai.state === 'patrol'; },
+      Math.round(T.searchDur / ESCAPE.FIXED_DT) + 900);
+    t.ok(toPatrol >= 0, '音→疾走: 探索の後は巡回へ戻る', ai.state);
+    var back = simUntil(g, function () { return ai.form === 'stand' && ai.enemy.poseT < 1e-6; }, 300);
+    t.ok(back >= 0, '音→疾走: 巡回では直立へ戻る', 'poseT=' + ai.enemy.poseT.toFixed(3));
+    g.reset();
+  }
+
+  /** ロッカーの駆け引き（契約 §4「見た＝開けて引きずり出す / 見られていなければ安全」） */
+  function testLockerSeen(t, g) {
+    var T = ESCAPE.ENEMY_TUNING;
+    var D = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+
+    /* 隣接マスから入れるロッカーを探す */
+    function lockerWithSide() {
+      var lockers = g.map.meta.lockers || [];
+      for (var i = 0; i < lockers.length; i++) {
+        for (var d = 0; d < 4; d++) {
+          var nc = lockers[i].col + D[d][0], nr = lockers[i].row + D[d][1];
+          if (g.map.isWalkable(nc, nr) && !g.map.isBlocked(nc, nr)) {
+            return { lk: lockers[i], side: { col: nc, row: nr } };
+          }
+        }
+      }
+      return null;
+    }
+    /* プレイヤー位置(px,pz)を見通せる敵の立ち位置 */
+    function watchSpot(px, pz, maxD) {
+      var cells = g.map.walkableCells();
+      for (var i = 0; i < cells.length; i++) {
+        var c = g.map.cellCenter(cells[i].col, cells[i].row);
+        var d = Math.hypot(c.x - px, c.z - pz);
+        if (d < 2.4 || d > maxD) continue;
+        if (g.ai.blockedLine(c.x, c.z, px, pz)) continue;
+        return cells[i];
+      }
+      return null;
+    }
+    function faceLocker(lk, side) {
+      place(g, side.col, side.row, 0);
+      g.player.yaw = Math.atan2(-(lk.col - side.col), -(lk.row - side.row));
+      g.player.crouching = false;
+    }
+
+    g.reset();
+    var found = lockerWithSide();
+    if (!t.ok(!!found, 'ロッカー: 検証に使えるロッカーがある')) { g.reset(); return; }
+    var lk = found.lk, side = found.side;
+    var sc = g.map.cellCenter(side.col, side.row);
+
+    /* --- ケースA: 見られずに入る → 安全 --- */
+    g.reset();
+    var far = g.map.meta.enemySpawn;
+    placeEnemy(g, far.col, far.row, 180);
+    faceLocker(lk, side);
+    t.ok(g.stealth.onInteract(), 'ロッカー（安全）: 入れる');
+    t.ok(g.stealth.inLocker(), 'ロッカー（安全）: 隠れている');
+    t.ok(g.stealth.lockerSeen === false, 'ロッカー（安全）: 入る瞬間を見られていない');
+    t.ok(g.ai.state !== 'locker', 'ロッカー（安全）: 敵はロッカーへ来ない', g.ai.state);
+    sim(g, 600);
+    t.ok(g.stealth.captures === 0, 'ロッカー（安全）: 見られずに入れば捕まらない（契約）', g.stealth.captures);
+    t.ok(g.stealth.inLocker(), 'ロッカー（安全）: 隠れたままでいられる');
+
+    /* --- ケースB: 入る瞬間を見られる → 開けられて引きずり出される --- */
+    g.reset();
+    var spot = watchSpot(sc.x, sc.z, 4.2);
+    if (!t.ok(!!spot, 'ロッカー（見られる）: 敵の見張り位置が取れる')) { g.reset(); return; }
+    placeEnemy(g, spot.col, spot.row, 0);
+    faceLocker(lk, side);
+    var ec = g.map.cellCenter(spot.col, spot.row);
+    g.ai.enemy.facing = Math.atan2(-(sc.x - ec.x), -(sc.z - ec.z));
+    g.ai.state = 'patrol'; g.ai.stateTime = 0;
+    if (!t.ok(g.ai.canSeePlayer(), 'ロッカー（見られる）: 敵から見えている（前提）',
+      'd=' + Math.hypot(sc.x - ec.x, sc.z - ec.z).toFixed(2) + ' 視界' + g.ai.sightRange().toFixed(2))) {
+      g.reset(); return;
+    }
+    t.ok(g.stealth.onInteract(), 'ロッカー（見られる）: 入れる');
+    t.ok(g.stealth.lockerSeen === true, 'ロッカー（見られる）: 入る瞬間を見られた判定になる');
+    t.ok(g.ai.state === 'locker', 'ロッカー（見られる）: 敵がそのロッカーへ向かう', g.ai.state);
+    t.ok(g.ai.lockerTarget.col === lk.col && g.ai.lockerTarget.row === lk.row,
+      'ロッカー（見られる）: 対象は入られたロッカー');
+    var caught = simUntil(g, function () { return g.stealth.captures > 0; }, 1400);
+    t.ok(caught >= 0, 'ロッカー（見られる）: 開けて引きずり出される（捕獲）',
+      'ai=' + g.ai.state + ' opens=' + g.ai.lockerOpens);
+    t.ok(g.stealth.lockerCaptures === 1, 'ロッカー（見られる）: ロッカーからの捕獲として記録される',
+      g.stealth.lockerCaptures);
+    t.ok(!g.stealth.inLocker(), 'ロッカー（見られる）: ロッカーから引きずり出されている');
+    t.ok(g.cinematic.active() || g.stealth.jail.phase !== 'none',
+      'ロッカー（見られる）: 捕獲シネマティックへ繋がる', g.stealth.jail.phase);
+    simCapture(g);
+    t.ok(g.stealth.jail.phase === 'locked', 'ロッカー（見られる）: 牢送りまで通る', g.stealth.jail.phase);
+
+    /* --- 探索中の「覗き」: 近くのロッカーを1つ開ける --- */
+    g.reset();
+    t.ok(T.lockerPeekChance > 0 && T.lockerPeekChance <= 1,
+      'ロッカー覗き: 確率が調整定数にある', T.lockerPeekChance);
+    var near = watchSpot(g.map.cellCenter(lk.col, lk.row).x, g.map.cellCenter(lk.col, lk.row).z, 7.0);
+    if (near) {
+      placeEnemy(g, near.col, near.row, 0);
+      place(g, g.map.meta.spawn.col, g.map.meta.spawn.row, 0);
+      var lcc = g.map.cellCenter(lk.col, lk.row);
+      var peeked = -1, wasHunt = false;
+      /* 覗きは確率なので、毎回ロッカーの近くへ置き直して何度か試す
+         （試行のたびに敵が巡回で離れると対象が見つからなくなるため） */
+      for (var k = 0; k < 10 && peeked < 0; k++) {
+        placeEnemy(g, near.col, near.row, 0);
+        g.ai.lastSeen = { x: lcc.x, z: lcc.z };
+        g.ai.toSearch();
+        g.ai.peekDone = false;
+        peeked = simUntil(g, function () {
+          if (g.ai.state === 'locker') wasHunt = true;
+          return g.ai.lockerOpens > 0;
+        }, 600);
+      }
+      t.ok(peeked >= 0, 'ロッカー覗き: 探索中に近くのロッカーを開けて覗く', g.ai.lockerOpens);
+      t.ok(wasHunt, 'ロッカー覗き: 覗きに行く状態を経由する');
+      t.ok(g.stealth.captures === 0, 'ロッカー覗き: 覗きだけでは捕獲しない', g.stealth.captures);
+    }
+    g.reset();
+  }
+
   function runAll(opts) {
     var g = ESCAPE.game;
     var t = new Runner();
@@ -2060,7 +2539,10 @@
       testAreaResetKeepsGimmick,
       /* P4.5: 音響＋恐怖演出 */
       testAudioContract, testAudioRender, testAudioSpatial, testAudioHooks, testAudioLocked, testAudioVoiceCap,
-      testAudioSettings, testAudioDirector, testAudioAmbience, testFearFx, testPatrolPause
+      testAudioSettings, testAudioDirector, testAudioAmbience, testFearFx, testPatrolPause,
+      /* P4.6: 捕獲シネマティック＋駆け引き強化 */
+      testCaptureCinematic, testCaptureFaceDetail, testCaptureMash, testEatenGameOver,
+      testCaptureInterrupt, testNoiseSprint, testLockerSeen
     ];
     for (var i = 0; i < suites.length; i++) {
       try {
@@ -2101,6 +2583,23 @@
       t.ok(g.stealth.fade === 0 && !g.stealth.inLocker(), '復帰: 暗転もロッカーも解除');
       t.ok(upAll, '復帰: 倒した板が元に戻る');
       t.ok(ESCAPE.noise.pending.length === 0, '復帰: 音イベントのキューが空', ESCAPE.noise.pending.length);
+    }
+    /* P4.6: 捕獲シネマティック・高解像度顔・赤い目・ゲームオーバー画面も初期状態へ */
+    if (g.cinematic) {
+      t.ok(!g.cinematic.active() && g.cinematic.stage === 'none',
+        '復帰: 捕獲シネマティックが動いていない', g.cinematic.stage);
+      t.near(g.cinematic.fade, 0, 1e-9, '復帰: 演出の暗転がゼロ');
+      t.ok(g.cinematic.mash === 0, '復帰: 連打の蓄積がゼロ', g.cinematic.mash);
+      t.ok(g.ai.cine === false, '復帰: 敵AIが演出から戻っている');
+      t.ok(g.ai.enemy.detailHi === false, '復帰: 顔が通常解像度へ戻っている');
+      t.ok(g.ai.enemy.redEyesVisible() === false, '復帰: 赤い目が残っていない');
+      t.ok(g.ai.enemy.activeTriangles() === g.ai.enemy.triangles,
+        '復帰: 演出ぶんの三角形が残っていない',
+        g.ai.enemy.activeTriangles() + ' vs ' + g.ai.enemy.triangles);
+      t.ok(g.ai.lockerOpens === 0 && g.ai.lockerTarget === null,
+        '復帰: ロッカー狩りの状態が初期化', g.ai.lockerOpens);
+      var gov = document.getElementById('gameover-overlay');
+      t.ok(!!gov && !gov.classList.contains('show'), '復帰: ゲームオーバー画面が閉じている');
     }
     /* P4: 進行状態(仕掛け・メモ・モーダル)も製品初期状態へ戻ること */
     if (g.progress) {

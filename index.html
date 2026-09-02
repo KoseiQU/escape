@@ -155,6 +155,26 @@
     border-top:1px dashed rgba(150,168,182,.35); padding-top:14px; display:inline-block;
   }
 
+  /* --- P4.6: ゲームオーバー（3回目の捕獲＝食われる）。正文は docs/notes.md「回収完了」節 --- */
+  #gameover-overlay {
+    position:fixed; inset:0; z-index:70; display:none;
+    background:radial-gradient(ellipse at 50% 45%, rgba(26,6,6,.96) 0%, rgba(4,4,5,.99) 62%, #000 100%);
+    align-items:center; justify-content:center; text-align:center; pointer-events:auto;
+  }
+  #gameover-overlay.show { display:flex; }
+  #gameover-title {
+    font-size:46px; font-weight:800; letter-spacing:.30em; color:#d8c3c3;
+    text-shadow:0 0 26px rgba(150,30,30,.55), 0 2px 6px rgba(0,0,0,.9);
+    padding-left:.30em;
+  }
+  #gameover-sub {
+    margin-top:20px; font-size:13px; letter-spacing:.22em; color:rgba(190,160,160,.62);
+  }
+  #gameover-hint {
+    margin-top:44px; font-size:11px; letter-spacing:.30em; color:rgba(160,140,140,.42);
+    border-top:1px solid rgba(150,110,110,.22); padding-top:16px; display:inline-block;
+  }
+
   /* --- P4: データ全消去（暫定UI・目立たせすぎない） --- */
   #btn-erase {
     position:fixed; left:8px; bottom:8px; z-index:45; pointer-events:auto;
@@ -243,6 +263,15 @@
     </div>
   </div>
 
+  <!-- P4.6: 3回目の捕獲（食われる）のゲームオーバー。文言は docs/notes.md「回収完了」節の正文 -->
+  <div id="gameover-overlay">
+    <div id="gameover-inner">
+      <div id="gameover-title">回収完了</div>
+      <div id="gameover-sub">移送対象 No.7 —— 拘束区画へ</div>
+      <div id="gameover-hint">タップで最初から</div>
+    </div>
+  </div>
+
   <button id="btn-erase" type="button">データ全消去</button>
 
   <div id="orientation">
@@ -263,6 +292,7 @@
   <script src="js/world.js"></script>
   <script src="js/game.js"></script>
   <script src="js/enemy_model.js"></script>
+  <script src="js/capture.js"></script>
   <script src="js/enemy_ai.js"></script>
   <script src="js/progress.js"></script>
   <script src="js/audio.js"></script>

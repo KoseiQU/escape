@@ -663,6 +663,83 @@
       return 0.7;
     },
 
+    /* ---------------- P4.6 捕獲シネマティック ---------------- */
+
+    /** 牢の鉄扉が閉まる（重い金属の一撃＋長い共鳴） */
+    cellDoor: function (ctx, dest, t0, p) {
+      var lv = (p.level === undefined) ? 1 : p.level;
+      /* 蝶番の軋み → 叩きつけ */
+      var n0 = noiseSrc(ctx, 0.5);
+      var f0 = bq(ctx, 'bandpass', 620, 6);
+      f0.frequency.linearRampToValueAtTime(1250, t0 + 0.24);
+      chain([n0, f0, swell(ctx, t0, 0.26 * lv, 0.04, 0.12, 0.12), dest]);
+      startStop(n0, t0, 0.34);
+      var tb = t0 + 0.28;
+      var o = osc(ctx, 'sine', 96);
+      o.frequency.exponentialRampToValueAtTime(34, tb + 0.32);
+      chain([o, hit(ctx, tb, 0.86 * lv, 0.004, 0.34), dest]);
+      startStop(o, tb, 0.44);
+      var n1 = noiseSrc(ctx, 1.2);
+      chain([n1, bq(ctx, 'bandpass', 2100, 2.2), hit(ctx, tb, 0.44 * lv, 0.002, 0.10), dest]);
+      startStop(n1, tb, 0.16);
+      /* 鉄格子の共鳴（長く残る） */
+      var res = [118, 214, 447, 903];
+      for (var i = 0; i < res.length; i++) {
+        var n2 = noiseSrc(ctx, 0.7 + i * 0.2);
+        chain([n2, bq(ctx, 'bandpass', res[i], 22),
+          hit(ctx, tb, 0.30 * lv / (i + 1), 0.003, 1.5 - i * 0.24), dest]);
+        startStop(n2, tb, 1.7);
+      }
+      return 2.0;
+    },
+
+    /** 鍵をかける（差し込み → 二段の回転） */
+    cellLock: function (ctx, dest, t0, p) {
+      var lv = (p.level === undefined) ? 1 : p.level;
+      /* 鍵を差し込む擦れ */
+      var n = noiseSrc(ctx, 1.5);
+      chain([n, bq(ctx, 'bandpass', 3100, 3), swell(ctx, t0, 0.20 * lv, 0.02, 0.06, 0.10), dest]);
+      startStop(n, t0, 0.22);
+      /* かんぬきが2回落ちる */
+      for (var k = 0; k < 2; k++) {
+        var t = t0 + 0.26 + k * 0.34;
+        var o = osc(ctx, 'triangle', 210 - k * 40);
+        o.frequency.exponentialRampToValueAtTime(72, t + 0.10);
+        chain([o, hit(ctx, t, 0.50 * lv, 0.002, 0.11), dest]);
+        startStop(o, t, 0.18);
+        var n2 = noiseSrc(ctx, 1.1);
+        chain([n2, bq(ctx, 'bandpass', 1750 + k * 500, 9),
+          hit(ctx, t, 0.34 * lv, 0.002, 0.16), dest]);
+        startStop(n2, t, 0.24);
+        var n3 = noiseSrc(ctx, 0.8);
+        chain([n3, bq(ctx, 'bandpass', 380, 20), hit(ctx, t, 0.20 * lv, 0.003, 0.55), dest]);
+        startStop(n3, t, 0.65);
+      }
+      return 1.25;
+    },
+
+    /** 食われる: 顎の閉じる衝撃＋肉と骨（3回目の捕獲） */
+    bite: function (ctx, dest, t0, p) {
+      var lv = (p.level === undefined) ? 1 : p.level;
+      /* 湿った咀嚼のうねり */
+      var n = noiseSrc(ctx, 0.45);
+      var f = bq(ctx, 'lowpass', 700, 1.4);
+      f.frequency.exponentialRampToValueAtTime(180, t0 + 0.55);
+      chain([n, f, swell(ctx, t0, 0.62 * lv, 0.01, 0.10, 0.42), dest]);
+      startStop(n, t0, 0.7);
+      /* 噛み合わせの一撃 */
+      var o = osc(ctx, 'sine', 140);
+      o.frequency.exponentialRampToValueAtTime(30, t0 + 0.30);
+      chain([o, hit(ctx, t0, 0.92 * lv, 0.003, 0.30), dest]);
+      startStop(o, t0, 0.42);
+      /* 骨 */
+      VOICES.boneCrack(ctx, dest, t0 + 0.02, { level: 1.0 * lv });
+      VOICES.boneCrack(ctx, dest, t0 + 0.34, { level: 0.7 * lv });
+      /* 途切れる絶叫 */
+      VOICES.scream(ctx, dest, t0, { level: 0.85 * lv, dur: 0.55 });
+      return 1.6;
+    },
+
     /** 資材板を倒す */
     boardCrash: function (ctx, dest, t0, p) {
       var lv = (p.level === undefined) ? 1 : p.level;
@@ -807,7 +884,11 @@
     { key: 'enemyMoan',   name: 'enemyMoan', params: { r: 0.5 }, sec: 3.2 },
     { key: 'enemyClaw',   name: 'enemyClaw', params: { r: 0.5 }, sec: 0.4 },
     { key: 'pry',         name: 'pry', params: { r: 0.5 }, sec: 0.9 },
-    { key: 'breath',      name: 'breath', params: { level: 0.6, exhale: true }, sec: 0.9 }
+    { key: 'breath',      name: 'breath', params: { level: 0.6, exhale: true }, sec: 0.9 },
+    /* P4.6 捕獲シネマティック */
+    { key: 'cellDoor',    name: 'cellDoor', params: {}, sec: 2.4 },
+    { key: 'cellLock',    name: 'cellLock', params: {}, sec: 1.6 },
+    { key: 'bite',        name: 'bite', params: {}, sec: 2.0 }
   ];
 
   var renderCache = Object.create(null);
@@ -1156,6 +1237,44 @@
         this.play('capture', { priority: 1, gain: 1.0 });
         this.fx.shakeImpulse = 1.0;
         this._duck(2.2);
+        break;
+      /* ---- P4.6 捕獲シネマティック（契約 §4「捕獲演出と駆け引き」） ---- */
+      case 'cineStab':             /* 1 追いつき: 大音量の刺し音 */
+        this.play('sting', { priority: 1, gain: 1.0, level: 1.35 });
+        this.play('scream', { priority: 1, gain: 1.0, level: 1.1, when: 0.04 });
+        this._flash(0.80, 0.24);
+        this._noiseFx(0.75, 0.60);
+        this.fx.shakeImpulse = 1.0;
+        this._duck(2.6);
+        break;
+      case 'cineGrab':             /* 2 首掴み */
+        this.play('boneCrack', { priority: 1, gain: 1.0 });
+        this.play('enemyMoan', { priority: 1, gain: 1.0, r: 0.2, when: 0.10 });
+        this.fx.shakeImpulse = 1.0;
+        break;
+      case 'cineStruggle':         /* 2 暴れている間の呻き */
+        this.play('enemyMoan', { gain: 0.95, r: this._rand() });
+        this.fx.shakeImpulse = Math.max(this.fx.shakeImpulse, 0.6);
+        break;
+      case 'cineDrag':             /* 3 引きずられる */
+        this.play('enemyDrag', { gain: 0.95, r: this._rand() });
+        this.play('footstep', { gain: 0.55, mat: 'tile', level: 0.7, r: this._rand(), when: 0.22 });
+        break;
+      case 'cellDoor':             /* 4 牢扉の金属音 */
+        this.play('cellDoor', { priority: 1, gain: 1.0 });
+        this.fx.shakeImpulse = Math.max(this.fx.shakeImpulse, 0.5);
+        break;
+      case 'cellLock':             /* 4 鍵の音 */
+        this.play('cellLock', { priority: 1, gain: 0.95 });
+        break;
+      case 'bite':                 /* 3回目: 食われる */
+        this.play('bite', { priority: 1, gain: 1.0 });
+        this.fx.shakeImpulse = 1.0;
+        this._duck(2.4);
+        break;
+      case 'lockerPeek':           /* ロッカーを開けて覗かれる */
+        this.play('lockerDoor', { x: p.x, z: p.z, gain: 1.0, open: true });
+        this.play('enemyMoan', { x: p.x, z: p.z, bus: 'enemy', gain: 0.9, r: 0.35, when: 0.18, maxDist: 30 });
         break;
       case 'stall':                /* 敵が板に引っかかった */
         this.play('boardCrash', { x: p.x, z: p.z, bus: 'enemy', gain: 0.7, maxDist: 30 });

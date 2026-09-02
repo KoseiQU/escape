@@ -23,9 +23,12 @@
   var ENEMY_TUNING = {
     /* 速度(m/s) */
     patrolSpeed: 1.60,        // 巡回（ゆっくり歩く）
-    investigateSpeed: 2.60,   // 調査（音のした方へ急ぐ）
+    /* P4.6（契約 §4「音→敵が飛んでくる」）: 調査は「歩いて見に行く」を廃止し、
+       その場で反転形態に落ちて音源へ疾走する。追跡よりごく僅かに遅いだけ。 */
+    investigateSpeed: 5.00,   // 調査（音源へ疾走する）
     searchSpeed: 2.20,        // 探索（見失った周辺を探す）
     chaseSpeed: 5.20,         // 追跡（プレイヤー走り4.6より速い）
+    lockerHuntSpeed: 5.00,    // P4.6: 見られたロッカーへ向かう（疾走）
     transMoveScale: 0.15,     // 形態遷移中はほぼ止まる（倒れ込みの見せ場）
 
     /* 視界 */
@@ -60,11 +63,18 @@
     hearMax: 48.0,            // これ以上遠い音は無条件に無視
 
     /* ステルス機構 */
-    boardStallDur: 6.00,      // 板に引っかかって足止めされる時間(s)
+    /* P4.6（契約 §4「板: 足止め時間を延長」）: 6.00 → 9.00。
+       敵が疾走で来るようになったぶん、板1枚で「逃げ切れる」時間を確保する。 */
+    boardStallDur: 9.00,      // 板に引っかかって足止めされる時間(s)
     lockerRange: 2.40,        // ロッカーに「調べる」が届く距離(m)
     lockerYawLimit: 0.95,     // ロッカー内で振り向ける角度(rad)
     boardRange: 2.60,         // 板に「調べる」が届く距離(m)
     interactDot: 0.20,        // 対象が視線の前方にある判定（cos）
+    /* P4.6 ロッカーの駆け引き（契約 §4） */
+    lockerOpenDist: 2.30,     // ロッカーの扉に手が届く距離(m)。隣接マス中心=2m
+    lockerHuntTimeout: 14.0,  // 辿り着けない時に諦める(s)
+    lockerPeekChance: 0.55,   // 探索中に近くのロッカーを1つ覗く確率
+    lockerPeekRadius: 9.0,    // 覗く対象を探す半径(m)
 
     /* 牢送り */
     captureLimit: 3,          // 同一エリアN回目の捕獲でエリア最初から
@@ -82,7 +92,26 @@
     patrolPauseGap: 11.0,     // 停止後、次に止まりうるまでの最短(s)
     patrolPauseVar: 9.0,      // 上記に足す振れ幅(s)
     patrolPauseDur: 2.6,      // 停止の長さ(s)
-    patrolPauseDurVar: 2.2
+    patrolPauseDurVar: 2.2,
+
+    /* ---- P4.6 捕獲シネマティック（契約 §4「捕獲演出と駆け引き」。合計7〜9秒） ---- */
+    cineZoomDur: 0.40,        // 1 追いつき: 顔へ強制ズーム
+    cineGrabDur: 2.00,        // 2 首掴み
+    cineDragDur: 3.50,        // 3 引きずり
+    cineBlackDur: 1.50,       // 4 暗転（牢扉→鍵）
+    cineMawDur: 1.80,         // 3'（3回目）食われる
+    cineEatBlackDur: 1.20,    // 4'（3回目）暗転 → ゲームオーバー画面
+    cineFaceDist: 0.95,       // 捕獲時に敵を据える距離(m)
+    cineZoomEnd: 0.55,        // 顔とカメラの距離(m)
+    cineZoomFov: 46,          // ズーム後のFOV(deg)
+    cineMawDist: 0.30,        // 食われる直前の顔との距離(m)
+    cineDragSpeed: 2.30,      // 引きずられる見かけの速度(m/s)
+    cineDragEye: 0.26,        // 床すれすれの視点高(m)
+    cineDragLead: 2.20,       // 引きずる敵が頭側に立つ距離(m)。見上げた画角の端に入る値
+    cineShake: 0.030,         // 揺れの基準振幅(rad)
+    cineMashGain: 1.10,       // 連打で増える揺れの倍率（結果は変わらない）
+    cineMashMax: 14,          // 連打の効き上限（回）
+    cineFadeIn: 0.34          // 暗転の落ちきり時間(s)
   };
 
   /** 音響フックの共通口。音響モジュールが無くても落ちない */
@@ -249,6 +278,12 @@
     this.alerts = 0;
     this.heard = 0;
     this.sees = false;
+    /* P4.6: 捕獲シネマティックが敵を握っている間は AI を駆動しない
+       （manual は __enemyDebug 専用のまま残す＝役割を混ぜない） */
+    this.cine = false;
+    this.lockerTarget = null;
+    this.lockerOpens = 0;
+    this.peekDone = false;
     /* 巡回のランダム停止（P4.5）。pauseNext は「次に止まりうる巡回累積時間」 */
     this.patrolTime = 0;
     this.pauseT = 0;
@@ -457,6 +492,8 @@
 
   EnemyAI.prototype.toPatrol = function () {
     this.state = 'patrol'; this.stateTime = 0;
+    this.peekDone = false;
+    this.lockerTarget = null;
     this.path = null; this.goal = null; this.repathT = 0;
     this.lostTime = 0; this.arrived = false;
     this.routeIdx = this._nearestRouteIdx();
@@ -466,10 +503,13 @@
   };
   EnemyAI.prototype.toInvestigate = function (x, z) {
     if (this.state === 'chase' || this.state === 'caught') return false;
+    /* 見られたロッカーへ向かっている最中は、他の音では逸れない（駆け引きの筋を通す） */
+    if (this.state === 'locker' && this.lockerTarget && this.lockerTarget.forced) return false;
     this.state = 'investigate'; this.stateTime = 0;
     this.goal = null; this.path = null; this.repathT = 0;
     this.target = { x: x, z: z };
     this.arrived = false; this.lookT = 0;
+    this.peekDone = false;
     this.heard++;
     return true;
   };
@@ -478,6 +518,7 @@
     this.prevState = this.state;
     this.state = 'chase'; this.stateTime = 0;
     this.lostTime = 0;
+    this.peekDone = false;
     var p = this.game.player;
     this.lastSeen = { x: p.x, z: p.z };
     this.path = null; this.goal = null; this.repathT = 0;
@@ -545,7 +586,10 @@
   EnemyAI.prototype._applyForm = function () {
     var e = this.enemy;
     if (e.state === 'trans') return;             /* 遷移アニメ中は一切触らない */
-    var want = (this.state === 'chase') ? 'crawl' : 'stand';
+    /* P4.6: 音を聞いた時点で反転形態に落ちる（契約 §4「その場で反転形態に落ちて疾走」）。
+       探索・ロッカー狩りも警戒中なので反転のまま。巡回へ戻る時だけ直立に起き上がる。 */
+    var s = this.state;
+    var want = (s === 'chase' || s === 'investigate' || s === 'search' || s === 'locker') ? 'crawl' : 'stand';
     if (this.form !== want) {
       e.setForm(want === 'crawl' ? 'crawl' : 'stand', false);
       this.form = want;
@@ -560,7 +604,7 @@
   /* ---------------- 1ステップ ---------------- */
 
   EnemyAI.prototype.step = function (dt) {
-    if (this.manual) return;
+    if (this.manual || this.cine) return;
     var g = this.game, T = this.T, e = this.enemy;
     this.stateTime += dt;
     this._hear();
@@ -579,14 +623,17 @@
 
       case 'investigate':
         if (see) { this.toChase(); break; }
-        if (this.arrived) {
-          this.lookT += dt;
-          this.speed = 0;
-          e.facing = angNorm(this.lookBase + Math.sin(this.lookT * 1.35) * T.lookSweep);
-          if (this.lookT >= T.investigateLook) this.toPatrol();
-        } else if (this._moveTo(dt, this.target.x, this.target.z, T.investigateSpeed)) {
-          this.arrived = true; this.lookT = 0; this.lookBase = e.facing;
+        /* 契約 §4: 音源へ疾走 → 到着したら周辺を探索(searchDur) → 直立へ戻り巡回 */
+        if (this._moveTo(dt, this.target.x, this.target.z, T.investigateSpeed)) {
+          this.arrived = true;
+          this.lastSeen = { x: this.target.x, z: this.target.z };
+          this.toSearch();
         }
+        break;
+
+      case 'locker':
+        if (see) { this.toChase(); break; }
+        this._lockerHuntStep(dt);
         break;
 
       case 'chase':
@@ -603,6 +650,14 @@
       case 'search':
         if (see) { this.toChase(); break; }
         if (this.stateTime >= T.searchDur) { this.toPatrol(); break; }
+        /* 契約 §4「探索中の敵は近くのロッカーを1つ開けて覗く（ランダム）」 */
+        if (!this.peekDone) {
+          this.peekDone = true;
+          if (this.rand() < T.lockerPeekChance) {
+            var pk = this._pickPeekLocker();
+            if (pk) { this.toLockerHunt(pk.col, pk.row, false); break; }
+          }
+        }
         if (!this.goal) this._pickSearchSpot();
         if (this.arrived) {
           this.lookT += dt;
@@ -681,6 +736,77 @@
     this.path = null; this.repathT = 0;
   };
 
+  /* ---------------- P4.6 ロッカーの駆け引き（契約 §4「ロッカーの駆け引き」） ----------------
+   *  forced=true … プレイヤーが入る瞬間を見た＝開けて引きずり出す（捕獲）
+   *  forced=false … 探索中の「覗き」。開けるだけで捕獲はしない
+   */
+  EnemyAI.prototype.toLockerHunt = function (col, row, forced) {
+    if (this.state === 'caught') return false;
+    this.state = 'locker'; this.stateTime = 0;
+    this.path = null; this.goal = null; this.repathT = 0;
+    this.arrived = false;
+    this.lockerTarget = { col: col, row: row, forced: !!forced };
+    return true;
+  };
+
+  /** プレイヤーがロッカーに入る瞬間を見ていた（Stealth.enterLocker から） */
+  EnemyAI.prototype.onLockerSeen = function (col, row) {
+    return this.toLockerHunt(col, row, true);
+  };
+
+  EnemyAI.prototype._lockerHuntStep = function (dt) {
+    var T = this.T, e = this.enemy, map = this.map;
+    var lt = this.lockerTarget;
+    if (!lt) { this.toSearch(); return; }
+    var lc = map.cellCenter(lt.col, lt.row);
+    if (Math.hypot(lc.x - e.x, lc.z - e.z) <= T.lockerOpenDist) { this._openLocker(); return; }
+    if (this.stateTime > T.lockerHuntTimeout) {
+      this.lastSeen = { x: lc.x, z: lc.z };
+      this.toSearch();
+      return;
+    }
+    /* ロッカーのマス自体は実体なので、経路は最寄りの到達可能マスで止まる */
+    this._moveTo(dt, lc.x, lc.z, T.lockerHuntSpeed);
+  };
+
+  EnemyAI.prototype._openLocker = function () {
+    var st = this.game.stealth, lt = this.lockerTarget, map = this.map;
+    var lc = map.cellCenter(lt.col, lt.row);
+    this.speed = 0;
+    this.lockerOpens++;
+    this.enemy.facing = yawOf(lc.x - this.enemy.x, lc.z - this.enemy.z);
+    sfx('lockerPeek', { x: lc.x, z: lc.z });
+    var inside = !!(st && st.locker && st.locker.col === lt.col && st.locker.row === lt.row);
+    if (inside && lt.forced) {
+      /* 契約 §4「見た場合は、そのロッカーを開けて引きずり出す（捕獲）」 */
+      if (st.captureFromLocker()) {
+        this.state = 'caught'; this.stateTime = 0; this.speed = 0; this.path = null;
+        return;
+      }
+    }
+    this.lastSeen = { x: lc.x, z: lc.z };
+    this.lockerTarget = null;
+    this.toSearch();
+  };
+
+  /** 探索中に覗くロッカーを1つ選ぶ。
+   *  契約 §4 は「見られずに入れば安全」を保証しているので、
+   *  覗き（forced=false）の対象からはプレイヤーが今入っているロッカーを外す。 */
+  EnemyAI.prototype._pickPeekLocker = function () {
+    var map = this.map, list = (map.meta && map.meta.lockers) || [];
+    var st = this.game.stealth, e = this.enemy;
+    var best = null, bd = Infinity;
+    for (var i = 0; i < list.length; i++) {
+      var L = list[i];
+      if (st && st.locker && st.locker.col === L.col && st.locker.row === L.row) continue;
+      var c = map.cellCenter(L.col, L.row);
+      var d = Math.hypot(c.x - e.x, c.z - e.z);
+      if (d > this.T.lockerPeekRadius) continue;
+      if (d < bd) { bd = d; best = L; }
+    }
+    return best;
+  };
+
   EnemyAI.prototype.info = function () {
     var e = this.enemy, p = this.game.player;
     return {
@@ -691,7 +817,9 @@
       dist: Math.hypot(p.x - e.x, p.z - e.z),
       sight: this.sightRange(p), lum: this.luminanceAt(p.x, p.z),
       alerts: this.alerts, heard: this.heard, stallT: this.stallT,
-      manual: this.manual
+      manual: this.manual, cine: this.cine, lockerOpens: this.lockerOpens,
+      lockerTarget: this.lockerTarget ? (this.lockerTarget.col + ',' + this.lockerTarget.row +
+        (this.lockerTarget.forced ? ':forced' : ':peek')) : null
     };
   };
 
@@ -713,9 +841,11 @@
     this.dom = {
       status: document.getElementById('status'),
       prompt: document.getElementById('prompt'),
-      blackout: document.getElementById('blackout')
+      blackout: document.getElementById('blackout'),
+      gameover: document.getElementById('gameover-overlay')
     };
     this.reset();
+    this._bindGameOver();
   }
 
   Stealth.prototype.reset = function () {
@@ -743,6 +873,11 @@
     this._domCache = null;
     this._noiseKinds = null;     /* 音地盤の材質索引はマップに紐づくので作り直す */
     this._pryT = 0;              /* 格子こじ開け音の間引き用タイマー */
+    this.cine = null;            /* P4.6: 進行中の捕獲シネマティック */
+    this.lockerSeen = false;     /* 直近のロッカー侵入を見られていたか */
+    this.lockerCaptures = 0;
+    this.restarts = 0;
+    if (this.game.cinematic) this.game.cinematic.reset();
     this._blockBarredCells();
     this._syncDom();
   };
@@ -839,6 +974,10 @@
 
   Stealth.prototype.enterLocker = function (col, row) {
     var p = this.game.player, map = this.map;
+    var ai = this.game.ai;
+    /* 契約 §4「敵がプレイヤーがロッカーに入るのを見た場合は開けて引きずり出す」。
+       判定は「入る瞬間」＝ プレイヤーをまだ隠す前にここで1度だけ取る。 */
+    var seen = !!(ai && !ai.cine && ai.state !== 'caught' && ai.canSeePlayer());
     var c = map.cellCenter(col, row);
     var n = this._lockerDir(col, row);
     /* 目線は扉のすぐ内側（world._locker の箱の中）。扉の割れ目・通気スリットごしに覗く絵になる */
@@ -854,8 +993,19 @@
     p.y = map.floorYAt(p.x, p.z);
     p.yaw = this.locker.faceYaw;
     p.speed = 0;
+    this.locker.seen = seen;
+    this.lockerSeen = seen;
     sfx('lockerIn', { x: c.x, z: c.z });
+    if (seen && ai) ai.onLockerSeen(col, row);
     return true;
+  };
+
+  /** ロッカーごと開けられて引きずり出される（AI._openLocker から） */
+  Stealth.prototype.captureFromLocker = function () {
+    if (!this.locker || this.jail.phase !== 'none') return false;
+    this.exitLocker();
+    this.lockerCaptures++;
+    return this.capture();
   };
 
   Stealth.prototype.exitLocker = function () {
@@ -952,6 +1102,10 @@
   Stealth.prototype.onInteract = function () {
     var J = this.jail;
     if (J.phase === 'locked') { this._pry(this.T.pryPerPress); return true; }
+    /* P4.6: ゲームオーバー画面＝「タップで最初から」（E / 調べる ボタンも同じ経路） */
+    if (J.phase === 'over') { this.restartArea(); return true; }
+    /* P4.6: 演出中の連打は「暴れ」に回す（揺れが増すだけで結果は変わらない） */
+    if (J.phase === 'grab' && this.cine) { this.cine.onInteract(); return true; }
     if (J.phase !== 'none') return true;         /* 暗転演出中は無視（重なり対策） */
     if (this.locker) { this.exitLocker(); return true; }
     var t = this.findTarget();
@@ -964,7 +1118,7 @@
   Stealth.prototype._updatePrompt = function () {
     var J = this.jail, s = '';
     if (J.phase === 'locked') s = '調べる: 格子をこじ開ける  ' + Math.round(J.pry * 100) + '%';
-    else if (J.phase !== 'none') s = '';
+    else if (J.phase !== 'none') s = '';   /* 演出中・ゲームオーバー中はHUDを出さない */
     else if (this.locker) s = '調べる: ロッカーから出る';
     else {
       var t = this.findTarget();
@@ -988,6 +1142,10 @@
     this.game.player.speed = 0;
     /* 契約 §4「捕獲時に耳元の音＋暗転」 */
     sfx('capture', {});
+    /* P4.6: 捕獲シネマティック（毎回）。3回目は「食われる」に差し替わる。
+       演出モジュールが無い環境では従来の短い暗転にフォールバックする。 */
+    var cine = this.game.cinematic;
+    this.cine = (cine && cine.begin(J.reset ? 'eaten' : 'jail')) ? cine : null;
     return true;
   };
 
@@ -995,15 +1153,22 @@
     var J = this.jail, T = this.T, g = this.game, p = g.player;
     J.t += dt;
     if (J.phase === 'grab') {
-      this.fade = clamp(J.t / T.grabDur, 0, 1);
+      /* P4.6: 'grab' は捕獲シネマティックの持ち時間（顔アップ→首掴み→引きずり→暗転）。
+         段階名は演出側（game.cinematic.stage）が持ち、こちらは暗転量だけ受け取る。 */
       p.speed = 0;
-      if (J.t >= T.grabDur) {
-        J.t = 0; J.phase = 'black';
-        this.fade = 1;
-        if (J.reset) this.areaReset();
-        else this._toCell();
-        if (g.ai) g.ai.afterJail();
+      if (this.cine) {
+        this.cine.step(dt);
+        this.fade = this.cine.fade;
+        if (this.cine.done) { this.cine.end(); this.cine = null; this._afterCine(); }
+      } else {
+        this.fade = clamp(J.t / T.grabDur, 0, 1);
+        if (J.t >= T.grabDur) { this.fade = 1; this._afterCine(); }
       }
+    } else if (J.phase === 'over') {
+      /* 3回目＝食われた。ゲームオーバー画面（正文 docs/notes.md「回収完了」節）で
+         タップ / E / クリック待ち。ここでは何も進めない（中断安全） */
+      this.fade = 1;
+      p.speed = 0;
     } else if (J.phase === 'black') {
       this.fade = 1;
       if (J.t >= T.blackDur) {
@@ -1024,6 +1189,49 @@
       this.fade = clamp(1 - J.t / T.wakeDur, 0, 1);
       if (J.t >= T.wakeDur) { J.phase = 'none'; this.fade = 0; }
     }
+  };
+
+  /** 演出が終わった後の分岐: 通常は房へ、3回目はゲームオーバー画面へ */
+  Stealth.prototype._afterCine = function () {
+    var J = this.jail, g = this.game;
+    this.fade = 1;
+    J.t = 0;
+    if (J.reset) {
+      J.phase = 'over';
+      this.game.input.reset();
+      this._syncDom();
+      return;
+    }
+    this._toCell();
+    if (g.ai) g.ai.afterJail();
+    J.phase = 'locked';
+  };
+
+  /** ゲームオーバー画面から「エリア最初から」再開する（既存のリセット経路を流用） */
+  Stealth.prototype.restartArea = function () {
+    var J = this.jail;
+    if (J.phase !== 'over') return false;
+    this.restarts++;
+    if (this.game.cinematic) this.game.cinematic.end();
+    this.areaReset();
+    J.phase = 'wake'; J.t = 0; J.pry = 0; J.reset = false;
+    this.fade = 1;
+    this._syncDom();
+    return true;
+  };
+
+  /** ゲームオーバー画面のタップ（画面のどこでも可） */
+  Stealth.prototype._bindGameOver = function () {
+    var self = this, el = this.dom.gameover;
+    if (!el || el._escBound) return;
+    el._escBound = true;
+    function tap(e) {
+      if (self.jail.phase !== 'over') return;
+      e.preventDefault(); e.stopPropagation();
+      self.restartArea();
+    }
+    el.addEventListener('touchstart', tap, { passive: false });
+    el.addEventListener('mousedown', tap);
   };
 
   /** 拘束室の房へ運ぶ（進行状態・所持はそのまま） */
@@ -1092,6 +1300,7 @@
     this.areaResets++;
     this.captures = 0;
     this.locker = null;
+    this.lockerSeen = false;
     for (var i = 0; i < this.boards.length; i++) {
       this.boards[i].toppled = false;
       this.boards[i].used = false;
@@ -1212,6 +1421,10 @@
       var o = this.fade.toFixed(3);
       if (d.blackout.style.opacity !== o) d.blackout.style.opacity = o;
     }
+    if (d.gameover) {
+      var on = (this.jail.phase === 'over');
+      if (d.gameover.classList.contains('show') !== on) d.gameover.classList.toggle('show', on);
+    }
   };
 
   Stealth.prototype.info = function () {
@@ -1220,7 +1433,9 @@
       locker: this.locker ? (this.locker.col + ',' + this.locker.row) : null,
       boards: this.boards.map(function (b) { return b.col + ',' + b.row + (b.used ? ':used' : (b.toppled ? ':down' : ':up')); }),
       noiseSteps: this.noiseSteps, alarms: this.alarms, topples: this.topples,
-      escapes: this.escapes, areaResets: this.areaResets, prompt: this.prompt
+      escapes: this.escapes, areaResets: this.areaResets, prompt: this.prompt,
+      lockerSeen: this.lockerSeen, lockerCaptures: this.lockerCaptures, restarts: this.restarts,
+      cine: this.cine ? this.cine.stage : null
     };
   };
 
@@ -1234,6 +1449,8 @@
     if (!g || !ESCAPE.Enemy) return;
     g.progress = g.progress || { flags: {} };
     g.ai = new EnemyAI(g);
+    /* P4.6: 捕獲シネマティック。Stealth より先に作る（Stealth.reset が参照する） */
+    if (ESCAPE.CaptureCinematic) g.cinematic = new ESCAPE.CaptureCinematic(g);
     g.stealth = new Stealth(g);
 
     /* 検証フック（機械テスト・E2E用） */
@@ -1265,6 +1482,7 @@
       },
       noise: function (col, row, radius) { return ESCAPE.noise.emitCell(col, row, radius, 'debug'); },
       interact: function () { return ESCAPE.game.stealth.onInteract(); },
+      cine: function () { return ESCAPE.game.cinematic ? ESCAPE.game.cinematic.info() : null; },
       reset: function () { ESCAPE.game.ai.reset(); ESCAPE.game.stealth.reset(); }
     };
   }

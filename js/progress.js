@@ -253,7 +253,11 @@
 
   Progress.prototype._updateHandleHold = function (dt) {
     var g = this.game, input = g.input;
-    var t = !this.modal ? this._findTarget() : null;
+    /* 中断安全（契約 §6）: モーダル中／捕獲演出・牢送り中はハンドルが回らない。
+       P4.6 で演出が7〜9秒に伸び、「掴まれている間もハンドルが回り続けて隔壁が開く」
+       という上書き事故が起きたための明示ガード（同類＝演出中に進む仕掛けを全て止める）。 */
+    var busy = !!this.modal || !!(g.stealth && g.stealth.jail && g.stealth.jail.phase !== 'none');
+    var t = !busy ? this._findTarget() : null;
     var onHandle = !!(t && t.kind === 'gimmick' && t.entry.role === 'handle');
     var active = onHandle && this.gimmick.code && !this.gimmick.doorOpen &&
       input && input.isInteractHeld && input.isInteractHeld();
