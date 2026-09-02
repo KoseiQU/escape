@@ -1365,7 +1365,8 @@
     var A = ESCAPE.Audio, C = global.OfflineAudioContext || global.webkitOfflineAudioContext;
     if (!t.ok(!!C, '音響: OfflineAudioContext が使える環境')) return;
     if (!t.ok(A.ready(), '音響: レンダキャッシュが揃っている（prewarm完了）',
-      A.prewarmError() || Object.keys(A.cache).length + '/' + A.prewarmList.length)) return;
+      (A.prewarmError() || Object.keys(A.cache).length + '/' + A.prewarmList.length) +
+      ' — 事前レンダは約0.25秒かかる。読み込み直後に実行するなら __test.runAllAsync() を使う')) return;
     var c = A.cache;
 
     function gate(key, minRms, minPeak) {
@@ -2155,8 +2156,20 @@
     return out;
   }
 
+  /**
+   * P4.5: 音の数値判定は OfflineAudioContext の事前レンダ（約0.25秒・非同期）に依るため、
+   * ページ読み込み直後に走らせる場合はこちらを使う。完了を待ってから runAll する。
+   */
+  function runAllAsync(opts) {
+    var A = ESCAPE.Audio;
+    var wait = (A && A.prewarm) ? A.prewarm() : null;
+    if (wait && wait.then) return wait.then(function () { return runAll(opts); });
+    return global.Promise ? global.Promise.resolve(runAll(opts)) : runAll(opts);
+  }
+
   global.__test = {
     runAll: runAll,
+    runAllAsync: runAllAsync,
     /** 個別デバッグ用 */
     _place: function (col, row, yawDeg) { place(ESCAPE.game, col, row, yawDeg); ESCAPE.game.syncCamera(); }
   };
