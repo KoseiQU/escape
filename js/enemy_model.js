@@ -2064,38 +2064,133 @@
      食われる演出では顔＋赤い目＋手＋口が同時に出るので、その合計で 8000 を超えないこと） */
   var HI_SKULL_RS = 70, HI_SKULL_HS = 66;
 
-  /** 赤い目（眼窩の底に置く芯＋加算合成のハロー）。最初の演出時に1度だけ作る */
+  /* ---- 赤い目（契約 §4「眼窩の奥から赤い不気味な目が覗く（微発光）」）----
+   *
+   * 差し戻し1回目の失敗: 単色球＋単色ハローは、輪郭の立った「赤いLED」に見えた。
+   * 直し方は3つ。(1) 眼窩の底へさらに沈め、開口の1/3程度まで小さくする。
+   * (2) 発光は縁へ向かって減衰する加算スプライトを3層重ねる（環＝虹彩、中心を
+   *     抜いて瞳の闇を残す）。ベタ塗りの円盤を作らない。
+   * (3) 左右で大きさ・高さ・明るさ・明滅の周期をずらす（左右対称は機械に見える）。
+   */
+
+  /** 半径方向のプロファイルから加算発光用のテクスチャを焼く（キャッシュ・非破棄） */
+  function glowTex(key, prof) {
+    if (texCache[key]) return texCache[key];
+    var S = 64, c = document.createElement('canvas');
+    c.width = c.height = S;
+    var x = c.getContext('2d');
+    var img = x.createImageData(S, S), d = img.data;
+    for (var j = 0; j < S; j++) {
+      for (var i = 0; i < S; i++) {
+        var u = (i + 0.5) / S * 2 - 1, v = (j + 0.5) / S * 2 - 1;
+        var t = Math.sqrt(u * u + v * v);
+        var a = t >= 1 ? 0 : clamp(prof(t), 0, 1);
+        /* 中心は湿った赤橙、外へ行くほど深い暗赤へ（彩度100%のベタにしない） */
+        var w = 1 - Math.min(t, 1);
+        var o = (j * S + i) * 4;
+        d[o] = (138 + 92 * w * w) | 0;
+        d[o + 1] = (9 + 44 * w * w * w) | 0;
+        d[o + 2] = (7 + 30 * w * w * w) | 0;
+        d[o + 3] = (a * 255) | 0;
+      }
+    }
+    x.putImageData(img, 0, 0);
+    var t2 = new THREE.CanvasTexture(c);
+    t2.colorSpace = THREE.SRGBColorSpace;
+    t2.wrapS = t2.wrapT = THREE.ClampToEdgeWrapping;
+    t2.generateMipmaps = true;
+    t2.minFilter = THREE.LinearMipmapLinearFilter;
+    t2.magFilter = THREE.LinearFilter;
+    t2.needsUpdate = true;
+    texCache[key] = t2;
+    return t2;
+  }
+
+  /* 発光の3層。r は「目の見かけの半径 E.r」に対する倍率、o は基準の不透明度。
+     どの層も縁で 0 に落ちるプロファイルにして、円盤の輪郭を作らない。 */
+  var EYE_LAYERS = [
+    /* 眼窩の中へ滲む靄。虹彩の外へ長い尾を引かせ、輪郭を消す */
+    {
+      key: 'eyeHaze', r: 1.85, o: 0.40, ord: 6, prof: function (t) {
+        /* 中心は瞳のために抜く */
+        return Math.pow(1 - t, 2.1) * 0.72 * smooth01((t - 0.06) / 0.12);
+      }
+    },
+    /* 虹彩。瞳（暗赤〜黒の眼球）のまわりを囲む淡い環 */
+    {
+      key: 'eyeIris', r: 1.00, o: 0.86, ord: 7, prof: function (t) {
+        var ring = Math.exp(-Math.pow((t - 0.40) / 0.36, 2));
+        return ring * Math.pow(1 - t, 1.3) * smooth01((t - 0.10) / 0.14);
+      }
+    },
+    /* 濡れた照り。瞳を潰さないよう中心から外して置く小さな点 */
+    { key: 'eyeSpark', r: 0.24, o: 0.30, ord: 8, prof: function (t) { return Math.pow(1 - t, 1.9); } }
+  ];
+
+  /* 左右非対称（契約 §4）。r=見かけの半径（眼窩開口の約1/6＝直径で約1/3）、
+     ball=瞳の球の半径、sink=眼窩の底からの浮かし量、k=明るさ、f*=明滅の周期 */
+  var EYE_SIDE = [
+    { r: 0.0118, ball: 0.19, sink: 0.0024, dy: 0.0011, dx: 0.0004, k: 1.00, f1: 2.27, f2: 1.03, ph: 0.0, fk: 0.10, f3: 0.71 },
+    { r: 0.0099, ball: 0.22, sink: 0.0030, dy: -0.0009, dx: -0.0003, k: 0.80, f1: 3.19, f2: 0.67, ph: 1.9, fk: 0.34, f3: 1.83 }
+  ];
+
+  /** 赤い目（眼窩の底の眼球＋加算合成の3層グロー）。最初の演出時に1度だけ作る */
   Enemy.prototype._buildRedEyes = function () {
     if (this.eyes) return this.eyes;
     this._countExtra = true;
-    this.matEyeCore = this._track(new THREE.MeshBasicMaterial({
-      color: 0xa8180e, fog: true, depthWrite: true
-    }));
-    this.matEyeGlow = this._track(new THREE.MeshBasicMaterial({
-      color: 0x6e0a05, fog: true, transparent: true, opacity: 0.22,
-      blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide
+    var t0 = this.extraTriangles;
+    /* 眼球そのものは「光る玉」ではなく、湿って暗い球。光はグローが担う */
+    this.matEyeBall = this._track(new THREE.MeshBasicMaterial({
+      color: 0x140403, fog: true, depthWrite: true
     }));
     this.eyes = new THREE.Group();
     this.eyes.name = 'redEyes';
     this.eyes.visible = false;
+    this.eyeSprites = [];
     var pt = [0, 0, 0, 0, 0];
+    var spriteTris = 0;
     for (var i = 0; i < SOCK.length; i++) {
-      var s = SOCK[i];
-      /* 眼窩は「真後ろへ」彫ってあるので、その底の点を引いて少しだけ手前へ戻す
-         ＝ 奥から覗いている見え方になり、斜めからは眼窩の縁に隠れる */
+      var s = SOCK[i], E = EYE_SIDE[i];
+      /* 眼窩は「真後ろへ」彫ってあるので、その底の点を引いてほんの少しだけ手前へ。
+         浅いと「顔に貼った赤い丸」になる（契約は“眼窩の奥から覗く微発光”） */
       headSurfaceAtXY(s[0], s[1], 0, pt);
       var node = new THREE.Group();
-      /* 眼窩の底からほんの数ミリだけ手前。奥に沈めておかないと
-         「顔に貼った赤い丸」になる（契約は“眼窩の奥から覗く微発光”） */
-      node.position.set(pt[0], pt[1], pt[2] - 0.0055);
-      var rr = 0.0072 - i * 0.0005;                 /* 左右非対称（契約 §4） */
-      var core = this._mesh(sphereGeo(rr, 10, 8), this.matEyeCore, node, 'eyeCore');
-      core.renderOrder = 4;
-      var glow = this._mesh(sphereGeo(rr * 1.75, 8, 6), this.matEyeGlow, node, 'eyeGlow');
-      glow.renderOrder = 5;
+      node.name = 'eye' + i;
+      node.position.set(pt[0] + E.dx, pt[1] + E.dy, pt[2] - E.sink);
+      /* 瞳＝小さな暗い球。光はグローが担い、これは「抜け」を作るだけ */
+      var bR = E.r * E.ball;
+      var ball = this._mesh(sphereGeo(bR, 18, 12), this.matEyeBall, node, 'eyeBall');
+      ball.renderOrder = 5;
+      var layers = [];
+      for (var L = 0; L < EYE_LAYERS.length; L++) {
+        var cfg = EYE_LAYERS[L];
+        var mat = this._track(new THREE.SpriteMaterial({
+          map: glowTex(cfg.key, cfg.prof), color: 0xffffff, fog: true,
+          transparent: true, opacity: cfg.o * E.k,
+          blending: THREE.AdditiveBlending, depthWrite: false
+        }));
+        var sp = new THREE.Sprite(mat);
+        sp.name = cfg.key;
+        sp.frustumCulled = false;
+        sp.renderOrder = cfg.ord;
+        var rr = E.r * cfg.r;
+        sp.scale.set(rr * 2, rr * 2, 1);
+        /* 発光はすべて瞳の球の手前に置く（球に食われて欠けないように）。
+           照りだけは中心から外し、瞳の闇を潰さない */
+        if (L === 2) sp.position.set((i ? 1 : -1) * E.r * 0.34, E.r * 0.28, -bR * 1.35);
+        else sp.position.set(0, 0, -bR * 1.15);
+        sp.userData.bx = sp.position.x;
+        sp.userData.by = sp.position.y;
+        node.add(sp);
+        layers.push(sp);
+        spriteTris += 2;
+      }
+      this.eyeSprites.push(layers);
       this.eyes.add(node);
     }
     this.headScale.add(this.eyes);
+    this.extraTriangles += spriteTris;
+    this._eyeTris = this.extraTriangles - t0;
     this._countExtra = false;
     return this.eyes;
   };
@@ -2141,19 +2236,38 @@
   Enemy.prototype.activeTriangles = function () {
     var n = this.triangles;
     if (this.detailHi) n += (this._hiTris || 0);
-    if (this.eyes && this.eyes.visible) n += 2 * (10 * 8 * 2 + 8 * 6 * 2);
+    if (this.eyes && this.eyes.visible) n += this._eyeTris || 0;
     if (this.grabHands && this.grabHands.visible) n += this._handTris || 0;
     if (this.maw && this.maw.group.visible) n += this._mawTris || 0;
     return n;
   };
 
-  /** 赤い目の微発光を脈打たせる（演出中のみ呼ばれる） */
+  /** 赤い目の微発光を脈打たせる（演出中のみ呼ばれる）。左右で周期を揃えない */
   Enemy.prototype.pulseEyes = function (t, k) {
-    if (!this.eyes || !this.eyes.visible) return;
-    var a = 0.72 + 0.28 * Math.sin(t * 2.6) * Math.sin(t * 1.13 + 0.6);
-    a *= (k === undefined ? 1 : k);
-    this.matEyeCore.color.setRGB(0.62 * a, 0.055 * a, 0.030 * a);
-    this.matEyeGlow.opacity = 0.10 + 0.16 * a;
+    if (!this.eyes || !this.eyes.visible || !this.eyeSprites) return;
+    var kk = (k === undefined ? 1 : k);
+    var lit = 0;
+    for (var i = 0; i < this.eyeSprites.length; i++) {
+      var E = EYE_SIDE[i];
+      /* 呼吸のような緩い脈（周期が互いに素なので左右が揃わない） */
+      var a = 0.76 + 0.24 * Math.sin(t * E.f1) * Math.sin(t * E.f2 + E.ph);
+      /* 片方だけ不規則に翳る＝明滅（契約 §4「片方がわずかに揺れる」） */
+      if (E.fk) a *= 1 - E.fk * Math.pow(0.5 + 0.5 * Math.sin(t * E.f3 + 1.7), 3);
+      a *= kk;
+      var layers = this.eyeSprites[i];
+      for (var L = 0; L < layers.length; L++) {
+        layers[L].material.opacity = EYE_LAYERS[L].o * E.k * a;
+      }
+      /* 照りだけごく僅かに揺らす（眼球が動いているように見せる。振幅0.4mm） */
+      var sp = layers[2];
+      sp.position.x = sp.userData.bx + Math.sin(t * (E.f1 * 0.61) + E.ph) * 0.0004;
+      sp.position.y = sp.userData.by + Math.sin(t * (E.f2 * 0.83) + 2.1) * 0.0003;
+      lit += a * E.k;
+    }
+    /* 瞳も微かに温まる（真っ黒に沈ませない）。ただし虹彩より必ず暗く保つ＝
+       ここを明るくすると「淡い円盤」に戻る（差し戻しの主因） */
+    var b = clamp(lit * 0.5, 0, 1);
+    this.matEyeBall.color.setRGB(0.0075 + 0.0115 * b, 0.0011 + 0.0013 * b, 0.0009 + 0.0010 * b);
   };
 
   /** -Y に伸びるパーツを from→to へ向ける（長さも返す） */

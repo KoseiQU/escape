@@ -2195,6 +2195,28 @@
     var add = e.activeTriangles() - e.triangles;
     t.ok(add > 0 && add <= 8000, '高解像度顔: 演出中の追加三角形は+8000以内（契約）', '+' + add);
 
+    /* P4.6差し戻し: 「平坦な赤い円盤（LED）」への逆戻り検出。
+       瞳は必ず暗く（sRGBの赤成分 <= 64）、発光は縁で 0 に落ちる加算層で作る。 */
+    var srgb = function (v) { return Math.round(255 * (v <= 0.0031308 ? v * 12.92 : 1.055 * Math.pow(v, 1 / 2.4) - 0.055)); };
+    var ballMax = 0, opMax = 0, edgeMax = 0, k, L, s2;
+    for (k = 0; k < 120; k++) {
+      e.pulseEyes(k * 0.037, 1);
+      ballMax = Math.max(ballMax, srgb(e.matEyeBall.color.r));
+      for (s2 = 0; s2 < e.eyeSprites.length; s2++) {
+        for (L = 0; L < e.eyeSprites[s2].length; L++) {
+          opMax = Math.max(opMax, e.eyeSprites[s2][L].material.opacity);
+        }
+      }
+    }
+    /* 素材の縁（左端の中央）はアルファ0＝輪郭の立った円盤にならない */
+    for (L = 0; L < e.eyeSprites[0].length; L++) {
+      var im = e.eyeSprites[0][L].material.map.image;
+      edgeMax = Math.max(edgeMax, im.getContext('2d').getImageData(0, im.height >> 1, 1, 1).data[3]);
+    }
+    t.ok(ballMax <= 64 && opMax <= 0.95 && edgeMax === 0,
+      '赤い目: 瞳は暗いまま・発光は縁で消える加算層（赤いLED円盤への逆戻り検出）',
+      '瞳' + ballMax + ' / 不透明度' + opMax.toFixed(2) + ' / 縁' + edgeMax);
+
     var tr = traceCinematic(g, 1200);
     t.ok(tr.redEyesSeen, '赤い目: 演出中に実際に表示されている');
     t.ok(tr.triPeak - e.triangles <= 8000, '高解像度顔: 演出中のピークでも+8000以内',
