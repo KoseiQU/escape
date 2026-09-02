@@ -65,6 +65,11 @@
     this._plateaus = this.meta.plateaus || [];
     this._ramps = this.meta.ramps || [];
     this._ceilings = this.meta.ceilings || [];
+    /* P4.7: しゃがみ専用の狭い通路（排水路）。走行禁止・立ち上がり不可・敵は入らない。
+       タイル種別ではなく meta の宣言で持つ（種別は音地盤 NOISE のまま使いたいため）。 */
+    this._crawl = Object.create(null);
+    var cw = this.meta.crawl || [];
+    for (var ci = 0; ci < cw.length; ci++) this._crawl[cw[ci].col + ',' + cw[ci].row] = true;
 
     var rows = def.rows || [];
     this.height = rows.length;
@@ -135,6 +140,11 @@
     if (!this.inBounds(col, row)) return false;
     if (this._blocked && this._blocked[col + ',' + row]) return false;
     return defOf(this.tiles[row * this.width + col]).walkable;
+  };
+
+  /** そのマスがしゃがみ専用の狭い通路か（meta.crawl） */
+  GridMap.prototype.isCrawl = function (col, row) {
+    return !!this._crawl[col + ',' + row];
   };
 
   GridMap.prototype.colOf = function (x) { return Math.floor(x / this.tileSize); };

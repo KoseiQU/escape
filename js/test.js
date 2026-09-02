@@ -553,13 +553,20 @@
     return out;
   }
 
-  /** 直線で並ぶ3マス（間が壁 / 間が床）を探す */
+  /** 直線で並ぶ3マス（間が壁 / 間が床）を探す。
+   *  P4.7: 音地盤・しゃがみ専用通路は「普通の通路」ではないので除く
+   *  （保管庫の硝子片・排水路が row1-2 に増えて先頭に来るようになったため）。 */
   function findTriple(map, wallBetween) {
-    var cells = map.walkableCells();
+    var cells = map.walkableCells(), TILE = ESCAPE.TILE;
+    function plain(c, r) {
+      return map.tileAt(c, r) === TILE.FLOOR && !(map.isCrawl && map.isCrawl(c, r));
+    }
     for (var i = 0; i < cells.length; i++) {
       var c = cells[i];
+      if (!plain(c.col, c.row)) continue;
       var midSolid = map.isSolid(c.col + 1, c.row);
-      if (!map.isWalkable(c.col + 2, c.row)) continue;
+      if (!map.isWalkable(c.col + 2, c.row) || !plain(c.col + 2, c.row)) continue;
+      if (!wallBetween && !plain(c.col + 1, c.row)) continue;
       if (wallBetween ? midSolid : !midSolid) return c;
     }
     return null;
@@ -1077,6 +1084,30 @@
 
   var SAVE_KEY = 'escape.save.area1.v1';
 
+  /* ---- P4.7 v2 の工程ヘルパー ---- */
+  /** role で仕掛けを引く */
+  function gimmickOf(g, role, idx) {
+    var gm = g.map.meta.gimmicks || [], n = 0;
+    for (var i = 0; i < gm.length; i++) {
+      if (gm[i].role !== role) continue;
+      if (idx === undefined || n === idx) return gm[i];
+      n++;
+    }
+    return null;
+  }
+  /** バルブを回して圧力計を緑域に合わせる（総当たり＝実際の操作回数で解ける） */
+  function solveValves(g) {
+    var pr = g.progress, P = ESCAPE.PROGRESS_TUNING;
+    for (var a = 0; a < P.valveSteps; a++) {
+      for (var b = 0; b < P.valveSteps; b++) {
+        for (var c = 0; c < P.valveSteps; c++) {
+          pr.valves = [a, b, c];
+          if (pr.pressureZone() === 'green') return [a, b, c];
+        }
+      }
+    }
+    return null;
+  }
   /** 実際の「調べる」経路（progress→stealth の順）を通す */
   function interactAt(g, col, row) {
     var ap = adjacentTo(g.map, col, row);
@@ -1087,55 +1118,142 @@
     return handled;
   }
 
+  /** P4.7: v2の7工程が「前提未達では進まない」順序制約どおりに繋がること */
   function testGimmickOrderAndNotes(t, g) {
     g.reset();
     localStorage.removeItem(SAVE_KEY);
-    var pr = g.progress, TILE = ESCAPE.TILE, gm = g.map.meta.gimmicks;
-    var lever = null, terminal = null, handle = null;
-    for (var i = 0; i < gm.length; i++) {
-      if (gm[i].role === 'lever') lever = gm[i];
-      if (gm[i].role === 'terminal') terminal = gm[i];
-      if (gm[i].role === 'handle') handle = gm[i];
-    }
+    var pr = g.progress, TILE = ESCAPE.TILE, U = ESCAPE.PROGRESS_UI_TEXT, PL = ESCAPE.PROGRESS_PLACARD;
+    var lever = gimmickOf(g, 'lever'), terminal = gimmickOf(g, 'terminal'), handle = gimmickOf(g, 'handle');
+    var fuse = gimmickOf(g, 'fuse'), wrench = gimmickOf(g, 'wrench'), corpse = gimmickOf(g, 'corpse');
+    var grating = gimmickOf(g, 'grating');
     if (!t.ok(lever && terminal && handle, '仕掛け: lever/terminal/handle の3役が揃っている')) return;
-    t.ok(g.map.tileAt(lever.col, lever.row) === TILE.GIMMICK &&
-      g.map.tileAt(terminal.col, terminal.row) === TILE.GIMMICK &&
-      g.map.tileAt(handle.col, handle.row) === TILE.GIMMICK, '仕掛け: 3タイルとも GIMMICK 種別');
+    if (!t.ok(fuse && wrench && corpse && grating,
+      '仕掛けv2: fuse/wrench/corpse/grating の4役が揃っている')) return;
+    var valves = [gimmickOf(g, 'valve', 0), gimmickOf(g, 'valve', 1), gimmickOf(g, 'valve', 2)];
+    t.ok(!!(valves[0] && valves[1] && valves[2]), '仕掛けv2: バルブが3基ある');
+    var all = g.map.meta.gimmicks, allG = true;
+    for (var ai = 0; ai < all.length; ai++) {
+      if (g.map.tileAt(all[ai].col, all[ai].row) !== TILE.GIMMICK) allG = false;
+    }
+    t.ok(allG, '仕掛け: 全ての仕掛けタイルが GIMMICK 種別', all.length + '個');
 
-    /* 順序違反: 未通電の端末を操作しても進まない（notes.md の掲示で応答） */
+    /* --- 工程1: ヒューズ欠落でレバーは空回りする --- */
+    var h0 = interactAt(g, lever.col, lever.row);
+    t.ok(h0 === true, 'レバー(ヒューズ欠落): 「調べる」は消費される（応答のみ）');
+    t.ok(pr.gimmick.fuseSet === false && pr.gimmick.power === false,
+      'レバー(ヒューズ欠落): 電源は入らない');
+    t.ok(pr._flashMsg === PL.leverIdle, 'レバー(ヒューズ欠落): 「' + PL.leverIdle + '」で応答', pr._flashMsg);
+    t.ok(pr.modal === null, 'レバー(ヒューズ欠落): ブレーカーUIは開かない');
+    pr._flashT = 0; pr._flashMsg = '';
+
+    /* 順序違反: 未通電の端末を操作しても進まない */
     var h1 = interactAt(g, terminal.col, terminal.row);
     t.ok(h1 === true, '端末(未通電): 「調べる」は消費される（応答のみ）');
     t.ok(pr.gimmick.code === false, '端末(未通電): コードは進まない');
     t.ok(pr.modal === null, '端末(未通電): テンキーは開かない');
-    t.ok(pr._flashMsg === ESCAPE.PROGRESS_PLACARD.noPower, '端末(未通電): NO POWER 表示で応答', pr._flashMsg);
+    t.ok(pr._flashMsg === PL.noPower, '端末(未通電): NO POWER 表示で応答', pr._flashMsg);
+    pr._flashT = 0; pr._flashMsg = '';
 
     /* 順序違反: 未解錠のハンドルを回しても進まない */
     var h2 = interactAt(g, handle.col, handle.row);
     t.ok(h2 === true, 'ハンドル(未解錠): 「調べる」は消費される（応答のみ）');
     t.ok(pr.gimmick.doorOpen === false, 'ハンドル(未解錠): 隔壁は開かない');
-    t.ok(pr._flashMsg === ESCAPE.PROGRESS_PLACARD.bulkhead, 'ハンドル(未解錠): 隔壁の掲示で応答', pr._flashMsg);
-    pr._flashT = 0; pr._flashMsg = ''; /* この応答表示を次の検証まで持ち越さない */
+    t.ok(pr._flashMsg === PL.bulkhead, 'ハンドル(未解錠): 隔壁の掲示で応答', pr._flashMsg);
+    pr._flashT = 0; pr._flashMsg = '';
 
-    /* 仕掛け1: レバー投入 → 大きな音（大半径）＋ 端末が起動 */
-    var noiseBefore = ESCAPE.noise.count;
-    var ap1 = adjacentTo(g.map, lever.col, lever.row);
-    place(g, ap1.col, ap1.row, ap1.yawDeg);
-    t.ok(pr._findTarget() && pr._findTarget().entry.role === 'lever', 'レバー: 「調べる」対象として検出される');
-    sim(g, 1); // プロンプトDOMは step() 側で更新される
-    t.ok(g.progress.dom.prompt.textContent === ESCAPE.PROGRESS_UI_TEXT.lever,
-      'レバー: プロンプト文言「' + ESCAPE.PROGRESS_UI_TEXT.lever + '」', g.progress.dom.prompt.textContent);
-    var h3 = interactAt(g, lever.col, lever.row);
-    t.ok(h3 === true && pr.gimmick.power === true, 'レバー: 投入で電源が入る');
-    t.ok(ESCAPE.noise.count > noiseBefore, 'レバー: 駆動音イベントが発火する');
-    t.ok(ESCAPE.noise.last && ESCAPE.noise.last.radius >= 40, 'レバー: 駆動音は大半径', ESCAPE.noise.last && ESCAPE.noise.last.radius);
+    /* --- 工程2: 保管庫でヒューズとスパナを回収 --- */
+    var apF = adjacentTo(g.map, fuse.col, fuse.row);
+    place(g, apF.col, apF.row, apF.yawDeg);
+    sim(g, 1);
+    t.ok(g.progress.dom.prompt.textContent === U.fuseTake,
+      'ヒューズ: プロンプト文言「' + U.fuseTake + '」', g.progress.dom.prompt.textContent);
+    interactAt(g, fuse.col, fuse.row);
+    t.ok(pr.items.fuse === true, '保管庫: ヒューズを取得できる');
+    interactAt(g, wrench.col, wrench.row);
+    t.ok(pr.items.wrench === true, '保管庫: スパナを取得できる');
+    var apW = adjacentTo(g.map, wrench.col, wrench.row);
+    place(g, apW.col, apW.row, apW.yawDeg);
+    sim(g, 1);
+    t.ok(pr._findTarget() === null || pr._findTarget().entry.role !== 'wrench',
+      '保管庫: 取得済みのスパナは「調べる」対象から消える');
+
+    /* --- 工程3: ヒューズ装着 → 3系統ブレーカー --- */
+    var apL = adjacentTo(g.map, lever.col, lever.row);
+    place(g, apL.col, apL.row, apL.yawDeg);
+    sim(g, 1);
+    t.ok(g.progress.dom.prompt.textContent === U.fuseSet,
+      '主電源盤: ヒューズ所持時のプロンプトは「' + U.fuseSet + '」', g.progress.dom.prompt.textContent);
+    interactAt(g, lever.col, lever.row);
+    t.ok(pr.gimmick.fuseSet === true && pr.items.fuse === false,
+      '主電源盤: ヒューズを装着すると所持から外れる');
+    place(g, apL.col, apL.row, apL.yawDeg);
+    sim(g, 1);
+    t.ok(g.progress.dom.prompt.textContent === U.lever,
+      '主電源盤: 装着後のプロンプトは「' + U.lever + '」', g.progress.dom.prompt.textContent);
+    interactAt(g, lever.col, lever.row);
+    t.ok(pr.modal === 'breaker', '主電源盤: 装着後は3系統ブレーカーUIが開く');
+    var bkKeys = document.querySelectorAll('#breaker-grid .bk-key');
+    t.ok(bkKeys.length === 3, 'ブレーカーUI: ボタンが3つある', bkKeys.length);
+    t.ok(bkKeys[0].textContent === U.breaker1 && bkKeys[1].textContent === U.breaker2 &&
+      bkKeys[2].textContent === U.breaker3, 'ブレーカーUI: 文言が docs/notes.md の正文どおり');
+
+    /* 誤順: 火花＋大音（敵が飛んでくる） */
+    ESCAPE.noise.reset();
+    var nb = ESCAPE.noise.count;
+    pr._bkPress(2);
+    t.ok(pr.breakerSeq.length === 0, 'ブレーカー(誤順): 投入は無効になり最初からやり直し');
+    t.ok(pr.gimmick.power === false, 'ブレーカー(誤順): 電源は入らない');
+    t.ok(pr._flashMsg === PL.sparks, 'ブレーカー(誤順): 「' + PL.sparks + '」で応答', pr._flashMsg);
+    t.ok(ESCAPE.noise.count > nb, 'ブレーカー(誤順): 音イベントが発火する');
+    t.ok(ESCAPE.noise.last && ESCAPE.noise.last.radius >= 40,
+      'ブレーカー(誤順): 大音（大半径）', ESCAPE.noise.last && ESCAPE.noise.last.radius);
+    pr._flashT = 0; pr._flashMsg = '';
+
+    /* 正順: ①循環 ②照明 ③隔壁 */
+    ESCAPE.noise.reset();
+    var nb2 = ESCAPE.noise.count;
+    pr._bkPress(1);
+    t.ok(pr.gimmick.power === false, 'ブレーカー(正順): ①だけでは電源は入らない');
+    pr._bkPress(2);
+    t.ok(pr.gimmick.power === false, 'ブレーカー(正順): ②までは電源は入らない');
+    pr._bkPress(3);
+    t.ok(pr.gimmick.power === true, 'ブレーカー(正順): ①②③で電源が入る');
+    t.ok(pr.modal === null, 'ブレーカー(正順): UIが自動的に閉じる');
+    t.ok(ESCAPE.noise.count > nb2, 'ブレーカー(正順): 駆動音イベントが発火する');
+    t.ok(ESCAPE.noise.last && ESCAPE.noise.last.radius >= 40,
+      'ブレーカー(正順): 駆動音は大半径', ESCAPE.noise.last && ESCAPE.noise.last.radius);
     ESCAPE.noise.reset();
 
-    /* 仕掛け2: 端末 → テンキーが開く。誤入力は弾かれ、正しいコードで解錠 */
+    /* --- 工程4: 制御室はカードキーが要る --- */
+    var ctrl = null, gates = g.map.meta.gates || [];
+    for (var gi = 0; gi < gates.length; gi++) if (gates[gi].kind === 'door') { ctrl = gates[gi]; break; }
+    if (t.ok(!!ctrl, '制御室: 施錠される扉が定義されている')) {
+      t.ok(g.map.isBlocked(ctrl.col, ctrl.row) === true, '制御室: カードキー未所持では扉が塞がっている');
+      var apc = adjacentTo(g.map, ctrl.col, ctrl.row);
+      place(g, apc.col, apc.row, apc.yawDeg);
+      var hd = g.progress.onInteract();
+      t.ok(hd === true, '制御室: 扉の「調べる」は消費される');
+      t.ok(pr._flashMsg === PL.locked, '制御室: 「' + PL.locked + '」で応答', pr._flashMsg);
+      t.ok(pr.gimmick.cardUsed === false, '制御室: カードキー無しでは解錠されない');
+      pr._flashT = 0; pr._flashMsg = '';
+    }
+    interactAt(g, corpse.col, corpse.row);
+    t.ok(pr.items.card === true, '処置室: 遺体の胸ポケットからカードキーを取得できる');
+    if (ctrl) {
+      var apc2 = adjacentTo(g.map, ctrl.col, ctrl.row);
+      place(g, apc2.col, apc2.row, apc2.yawDeg);
+      g.progress.onInteract();
+      t.ok(pr.gimmick.cardUsed === true, '制御室: カードキーで解錠される');
+      sim(g, 1);
+      t.ok(g.map.isBlocked(ctrl.col, ctrl.row) === false, '制御室: 解錠後は扉が通れる');
+    }
+
+    /* --- 工程5: 端末（段階表示） --- */
     var h4 = interactAt(g, terminal.col, terminal.row);
     t.ok(h4 === true && pr.modal === 'keypad', '端末(通電後): 「調べる」でテンキーが開く');
     var kpSub = document.getElementById('keypad-sub');
-    t.ok(!!kpSub && kpSub.textContent === ESCAPE.PROGRESS_PLACARD.codePrompt,
-      'テンキー: 見出しが「' + ESCAPE.PROGRESS_PLACARD.codePrompt + '」のまま', kpSub && kpSub.textContent);
+    t.ok(!!kpSub && kpSub.textContent === PL.codePrompt,
+      'テンキー: 見出しが「' + PL.codePrompt + '」のまま', kpSub && kpSub.textContent);
     pr._kpPress('1'); pr._kpPress('1'); pr._kpPress('1'); pr._kpPress('1');
     t.ok(pr.keypadDigits === '1111' && pr.keypadErr === true, 'テンキー: 誤入力(1111)は弾かれる');
     t.ok(pr.gimmick.code === false, 'テンキー: 誤入力ではコードは進まない');
@@ -1145,9 +1263,39 @@
     pr._kpPress('2'); pr._kpPress('7'); pr._kpPress('3'); pr._kpPress('9');
     t.ok(pr.gimmick.code === true, 'テンキー: 正しいコード(2739)で解錠される');
     t.ok(pr.modal === null, 'テンキー: 正しいコードでテンキーが自動的に閉じる');
+    t.ok(pr._flashMsg === PL.pressureBad,
+      '端末: コード正解・排気圧未調整では「' + PL.pressureBad + '」', pr._flashMsg);
+    t.ok(pr.unlocked() === false, '端末: 排気圧が緑域でないうちは隔壁は解錠されない');
+    pr._flashT = 0; pr._flashMsg = '';
 
-    /* 仕掛け3: ハンドルは長押し3秒。短い保持では解放されない・離すと戻る */
+    /* 順序違反: 排気圧が未調整のうちはハンドルは回らない */
     var ap3 = adjacentTo(g.map, handle.col, handle.row);
+    place(g, ap3.col, ap3.row, ap3.yawDeg);
+    g.input._keys.KeyE = true;
+    sim(g, 60);
+    g.input._keys.KeyE = false;
+    t.near(pr.gimmick.handleHold, 0, 1e-6, 'ハンドル(排気圧異常): 長押しでも回らない');
+
+    /* --- 工程6: バルブで圧力計を緑域へ --- */
+    var sol = solveValves(g);
+    if (t.ok(!!sol, 'バルブ: 緑域に入る組み合わせが存在する', JSON.stringify(sol))) {
+      pr.valves = [0, 0, 0];
+      t.ok(pr.gimmick.drained === false, 'バルブ: 初期状態では排水されていない');
+      var turns = 0;
+      for (var vi = 0; vi < 3; vi++) {
+        for (var n = 0; n < sol[vi]; n++) { interactAt(g, valves[vi].col, valves[vi].row); turns++; }
+      }
+      t.ok(turns > 0, 'バルブ: 実際に「調べる」で回した', turns + '回');
+      t.ok(pr.pressureZone() === 'green', 'バルブ: 針が緑域に入る', pr.pressure().toFixed(3));
+      t.ok(pr.gimmick.drained === true, 'バルブ: 緑域で排水路の水が抜ける（排水フラグ）');
+      t.ok(pr.unlocked() === true, '端末: コード＋排気圧の両方で隔壁が解錠される');
+    }
+    var h5 = interactAt(g, terminal.col, terminal.row);
+    t.ok(h5 === true && pr._flashMsg === PL.unlocked,
+      '端末: 排気圧正常で「' + PL.unlocked + '」', pr._flashMsg);
+    pr._flashT = 0; pr._flashMsg = '';
+
+    /* --- 工程7: ハンドル長押し3秒 → 12秒の開放 --- */
     place(g, ap3.col, ap3.row, ap3.yawDeg);
     g.input._keys.KeyE = true;
     sim(g, 60); // 1s
@@ -1160,19 +1308,26 @@
 
     var noiseBefore2 = ESCAPE.noise.count;
     g.input._keys.KeyE = true;
-    var opened = simUntil(g, function () { return pr.gimmick.doorOpen; },
+    var started = simUntil(g, function () { return pr.gimmick.opening > 0; },
       Math.ceil(4.0 / ESCAPE.FIXED_DT));
     g.input._keys.KeyE = false;
-    t.ok(opened >= 0, 'ハンドル: 3秒の長押しで隔壁が開く', 'frames=' + opened);
+    t.ok(started >= 0, 'ハンドル: 3秒の長押しで隔壁の開放が始まる', 'frames=' + started);
     t.ok(ESCAPE.noise.count > noiseBefore2, 'ハンドル: 回している間も音が鳴り続ける（複数回発火）',
       ESCAPE.noise.count - noiseBefore2);
     ESCAPE.noise.reset();
 
-    /* EXIT到達でクリア（隔壁が開いていない状態では発火しない前提を上のフラグで担保済み） */
+    /* EXIT到達でクリア（隔壁が開ききってから） */
     var ep = g.map.meta.exitPad;
     place(g, ep.col, ep.row, 0);
     sim(g, 3);
+    t.ok(pr.cleared === false, 'EXIT到達: 開放中（12秒）はまだクリアにならない');
+    simUntil(g, function () { return pr.gimmick.doorOpen; },
+      Math.ceil(14.0 / ESCAPE.FIXED_DT));
+    t.ok(pr.gimmick.doorOpen === true, '隔壁: 12秒後に開ききる');
+    place(g, ep.col, ep.row, 0);
+    sim(g, 3);
     t.ok(pr.cleared === true, 'EXIT到達: クリア扱いになる');
+    t.ok(pr.clearedBy === 'main', 'EXIT到達: 正規ルートのクリアとして記録される', pr.clearedBy);
     t.ok(pr.modal === 'ending', 'EXIT到達: クリア表示（暫定画面）が開く');
 
     g.reset();
@@ -1182,7 +1337,7 @@
   function testMemoNotes(t, g) {
     g.reset();
     var notes = g.map.meta.notes || [];
-    t.ok(notes.length === 6, 'メモ: area1に6枚配置されている', notes.length);
+    t.ok(notes.length === 9, 'メモ: area1に9枚配置されている（v2でmemo7〜9を追加）', notes.length);
     var seenMemoTitles = {};
     for (var i = 0; i < notes.length; i++) {
       var n = notes[i];
@@ -1202,7 +1357,7 @@
       var h2 = g.progress.onInteract();
       t.ok(h2 === true && g.progress.modal === null, 'メモ ' + n.id + ': 「調べる」で閉じる');
     }
-    t.ok(Object.keys(seenMemoTitles).length === 6, 'メモ: memo1〜6が重複なく1枚ずつ対応している',
+    t.ok(Object.keys(seenMemoTitles).length === 9, 'メモ: memo1〜9が重複なく1枚ずつ対応している',
       Object.keys(seenMemoTitles).length);
     g.reset();
   }
@@ -1268,6 +1423,7 @@
     for (var i = 0; i < gm.length; i++) if (gm[i].role === 'handle') handle = gm[i];
     g.progress.gimmick.power = true;
     g.progress.gimmick.code = true;
+    g.progress.gimmick.drained = true;   /* P4.7: 解錠は「コード＋排気圧」の両方 */
     var ap = adjacentTo(g.map, handle.col, handle.row);
     if (!t.ok(!!ap, 'ハンドルに近づける')) return;
     place(g, ap.col, ap.row, ap.yawDeg);
@@ -1322,6 +1478,10 @@
     var cp = cps[1] || cps[0];
     g.progress.gimmick.power = true;
     g.progress.gimmick.code = true;
+    g.progress.gimmick.drained = true;
+    g.progress.items.wrench = true;
+    g.progress.items.card = true;
+    g.progress.valves = [1, 2, 3];
     g.progress.checkpoint = cp.id;
     g.progress.save();
 
@@ -1330,6 +1490,11 @@
     var parsed = JSON.parse(raw);
     t.ok(parsed.gimmick.power === true && parsed.gimmick.code === true && parsed.gimmick.doorOpen === false,
       'セーブ内容: 仕掛け進行が記録される');
+    t.ok(parsed.gimmick.drained === true, 'セーブ内容: 排水フラグが記録される');
+    t.ok(parsed.items && parsed.items.wrench === true && parsed.items.card === true &&
+      parsed.items.fuse === false, 'セーブ内容: 所持品が記録される', JSON.stringify(parsed.items));
+    t.ok(parsed.valves && parsed.valves.join(',') === '1,2,3', 'セーブ内容: バルブの角度が記録される',
+      parsed.valves && parsed.valves.join(','));
 
     /* 「リロード」を模す: 同じインスタンスをメモリ上だけ初期状態へ戻してから load() する
        （実際のリロードは新しい Progress を作るが、DOM二重結線を避けるため経路のみ共有） */
@@ -1339,6 +1504,12 @@
     t.ok(loaded === true, 'load(): セーブから復元できる');
     t.ok(g.progress.gimmick.power === true && g.progress.gimmick.code === true,
       'load(): 仕掛け進行が復元される');
+    t.ok(g.progress.gimmick.drained === true, 'load(): 排水フラグが復元される');
+    t.ok(g.progress.items.wrench === true && g.progress.items.card === true &&
+      g.progress.items.fuse === false, 'load(): 所持品が復元される',
+      JSON.stringify(g.progress.items));
+    t.ok(g.progress.valves.join(',') === '1,2,3', 'load(): バルブの角度が復元される',
+      g.progress.valves.join(','));
     t.ok(g.progress.checkpoint === cp.id, 'load(): チェックポイントが復元される');
     t.ok(g.player.col() === cp.col && g.player.row() === cp.row,
       'load(): プレイヤーがチェックポイント位置へ復元される', g.player.col() + ',' + g.player.row());
@@ -1371,6 +1542,9 @@
     var T = ESCAPE.ENEMY_TUNING;
     g.progress.gimmick.power = true;
     g.progress.gimmick.code = true;
+    g.progress.gimmick.drained = true;
+    g.progress.items.wrench = true;
+    g.progress.items.card = true;
     g.progress.checkpoint = g.map.meta.checkpoints[1].id;
     g.stealth.captures = T.captureLimit - 1;
     t.ok(g.stealth.capture() === true, '3回目の捕獲が発生する（前提）');
@@ -1382,6 +1556,10 @@
     t.ok(g.stealth.areaResets === 1, 'エリアリセットが記録される');
     t.ok(g.progress.gimmick.power === true && g.progress.gimmick.code === true,
       'エリアリセット: 仕掛け進行(電源/コード)は保持される（契約 §4）');
+    t.ok(g.progress.gimmick.drained === true,
+      'エリアリセット: 排水フラグは保持される（契約 §4 P4.7）');
+    t.ok(g.progress.items.wrench === true && g.progress.items.card === true,
+      'エリアリセット: 所持品は保持される（契約 §4 P4.7）', JSON.stringify(g.progress.items));
     t.ok(g.progress.checkpoint === null, 'エリアリセット: チェックポイントは巻き戻る');
     var sp = g.map.meta.spawn;
     t.ok(g.player.col() === sp.col && g.player.row() === sp.row, 'エリアリセット: 位置はエリア最初へ戻る');
@@ -1662,7 +1840,37 @@
       else if (gm[k].role === 'terminal') term = gm[k];
       else if (gm[k].role === 'handle') handle = gm[k];
     }
-    delta('lever', function () { interactAt(g, lever.col, lever.row); }, 'レバー投入');
+    var corpseG = gimmickOf(g, 'corpse'), wrenchG = gimmickOf(g, 'wrench');
+    var valveG = gimmickOf(g, 'valve', 0), gratingG = gimmickOf(g, 'grating');
+    /* P4.7: v2 では「ヒューズ装着 → 3系統ブレーカー正順」で通電する */
+    g.progress.items.fuse = true;
+    interactAt(g, lever.col, lever.row);           /* ヒューズ装着 */
+    delta('lever', function () {
+      interactAt(g, lever.col, lever.row);         /* ブレーカーUIを開く */
+      g.progress._bkPress(1); g.progress._bkPress(2); g.progress._bkPress(3);
+    }, 'ブレーカー正順の投入');
+    delta('spark', function () {
+      g.progress.gimmick.power = false;            /* 誤順の応答だけ確かめる */
+      g.progress._openBreaker();
+      g.progress._bkPress(3);
+      g.progress.gimmick.power = true;
+      g.progress._closeModal();
+    }, 'ブレーカー誤順の火花');
+    delta('pickup', function () {
+      g.progress.items.card = false;
+      interactAt(g, corpseG.col, corpseG.row);
+      g.progress.items.wrench = false;
+      interactAt(g, wrenchG.col, wrenchG.row);
+    }, '所持品の取得');
+    delta('valveTurn', function () { interactAt(g, valveG.col, valveG.row); }, 'バルブを回す');
+    delta('gaugeOk', function () {
+      var sol = solveValves(g);
+      g.progress.valves = [sol[0], sol[1], sol[2] > 0 ? sol[2] - 1 : sol[2] + 1];
+      g.progress.gimmick.drained = false;
+      g.progress.valves = [sol[0], sol[1], sol[2]];
+      g.progress._checkPressure();
+    }, '圧力計が緑域に入る');
+    delta('grateOff', function () { interactAt(g, gratingG.col, gratingG.row); }, 'グレーチングを外す');
     delta('terminalKey', function () {
       interactAt(g, term.col, term.row);
       g.progress._kpPress('1');
@@ -1681,10 +1889,12 @@
       sim(g, 20);
     }, 'ハンドルを回す');
     delta('doorRoar', function () {
-      simUntil(g, function () { return g.progress.gimmick.doorOpen; },
+      simUntil(g, function () { return g.progress.gimmick.opening > 0; },
         Math.ceil(3.2 / ESCAPE.FIXED_DT) + 60);
       g.input._interactHeld = false;
-    }, '隔壁の開放');
+    }, '隔壁の開放開始（轟音）');
+    simUntil(g, function () { return g.progress.gimmick.doorOpen; },
+      Math.ceil(14.0 / ESCAPE.FIXED_DT));
     t.ok(g.progress.gimmick.doorOpen === true, '音響フック: 隔壁が実際に開いている（前提）');
 
     /* メモ・チェックポイント */
@@ -2527,6 +2737,415 @@
     g.reset();
   }
 
+  /* ================================================================
+   * P4.7: エリア1 脱出フロー v2（契約 DESIGN.md §4「エリア1 脱出フロー v2」 / §6）
+   * ============================================================== */
+
+  /** 増築後も §3 の迷路数値基準を満たし、v2の配置が参照整合すること */
+  function testArea1V2Contract(t) {
+    var map = ESCAPE.Maps.load('area1'), TILE = ESCAPE.TILE, meta = map.meta;
+
+    /* 新しい部屋・通路 */
+    var store = null, pump = null, drain = null;
+    var rs = meta.regions || [];
+    for (var i = 0; i < rs.length; i++) {
+      if (rs[i].id === 'store') store = rs[i];
+      if (rs[i].id === 'pump') pump = rs[i];
+      if (rs[i].id === 'drain') drain = rs[i];
+    }
+    t.ok(!!store, 'v2: 保管庫の区画が定義されている');
+    t.ok(!!pump, 'v2: 循環ポンプ室の区画が定義されている');
+    t.ok(!!drain, 'v2: 排水路の区画が定義されている');
+    t.ok(!!store && store.c1 <= 27 && store.r1 <= 27, 'v2: 保管庫は北西にある',
+      store && (store.c0 + '-' + store.c1 + ' / ' + store.r0 + '-' + store.r1));
+
+    /* 保管庫の床は全面が音地盤（硝子片） */
+    var noiseAt = Object.create(null), nl = meta.noise || [];
+    for (var n = 0; n < nl.length; n++) noiseAt[nl[n].col + ',' + nl[n].row] = nl[n];
+    var storeFloor = 0, storeGlass = 0;
+    for (var c = store.c0; c <= store.c1; c++) {
+      for (var r = store.r0; r <= store.r1; r++) {
+        if (map.tileAt(c, r) !== TILE.NOISE) continue;
+        storeFloor++;
+        if (noiseAt[c + ',' + r] && noiseAt[c + ',' + r].kind === 'glass') storeGlass++;
+      }
+    }
+    t.ok(storeFloor >= 16, 'v2: 保管庫に十分な広さがある', storeFloor + 'マス');
+    t.ok(storeGlass === storeFloor, 'v2: 保管庫の床は全面がガラス片の音地盤',
+      storeGlass + '/' + storeFloor);
+
+    /* 排水路 */
+    var crawl = meta.crawl || [];
+    t.ok(crawl.length >= 12, 'v2: 排水路が十分な長さを持つ', crawl.length + 'マス');
+    var crawlBad = [];
+    for (var k = 0; k < crawl.length; k++) {
+      var cw = crawl[k];
+      if (!map.isWalkable(cw.col, cw.row)) crawlBad.push(cw.col + ',' + cw.row + ':歩行不可');
+      if (map.ceilHAt(cw.col, cw.row) > 1.4) crawlBad.push(cw.col + ',' + cw.row + ':天井が高い');
+      if (!map.isCrawl(cw.col, cw.row)) crawlBad.push(cw.col + ',' + cw.row + ':crawl未登録');
+      if (!noiseAt[cw.col + ',' + cw.row]) crawlBad.push(cw.col + ',' + cw.row + ':音地盤でない');
+    }
+    t.ok(crawlBad.length === 0, 'v2: 排水路は全マスが低天井・水音の音地盤', crawlBad.slice(0, 5).join(' / '));
+    t.ok(map.ceilHAt(crawl[0].col, crawl[0].row) < ESCAPE.Player.EYE_STAND,
+      'v2: 排水路の天井は立った目線より低い（立ち上がれない）',
+      map.ceilHAt(crawl[0].col, crawl[0].row).toFixed(2) + 'm');
+
+    /* 裏ルートの出口 */
+    var ep2 = meta.exitPad2;
+    if (t.ok(!!ep2, 'v2: 裏ルートの出口(exitPad2)が定義されている')) {
+      t.ok(map.tileAt(ep2.col, ep2.row) === TILE.EXIT, 'v2: exitPad2 は EXIT 種別');
+      var seen = map.floodFrom(meta.spawn.col, meta.spawn.row);
+      t.ok(!!seen[ep2.col + ',' + ep2.row], 'v2: exitPad2 はスポーンから到達可能（静的データ上）');
+      t.ok(!(ep2.col === meta.exitPad.col && ep2.row === meta.exitPad.row),
+        'v2: 裏ルートの出口は正規ルートの隙間と別マス');
+      /* 隔壁の向こう側＝隔壁と同じ最北の行にあり、隔壁前の前室とは繋がっていない */
+      t.ok(ep2.row <= meta.door.row + 1, 'v2: 裏ルートの出口は隔壁と同じ最北帯にある',
+        'row=' + ep2.row + ' door.row=' + meta.door.row);
+      var touchesAnte = map.isWalkable(ep2.col - 1, ep2.row) && map.isWalkable(ep2.col + 1, ep2.row);
+      t.ok(!touchesAnte, 'v2: 裏ルートの出口は隔壁前の前室から直接は入れない');
+    }
+
+    /* ゲート（施錠） */
+    var gates = meta.gates || [], gbad = [];
+    for (var gi = 0; gi < gates.length; gi++) {
+      var gt = gates[gi];
+      if (!map.isWalkable(gt.col, gt.row)) gbad.push(gt.id + ':歩行不可');
+      if (!gt.requires) gbad.push(gt.id + ':要求フラグなし');
+    }
+    t.ok(gates.length >= 3, 'v2: 施錠（制御室2枚＋グレーチング）が定義されている', gates.length);
+    t.ok(gbad.length === 0, 'v2: 施錠マスはデータ上は歩行可能（runtimeで塞ぐ）', gbad.join(' / '));
+
+    /* 掲示（正文） */
+    var signs = meta.signs || [], sbad = [];
+    for (var si = 0; si < signs.length; si++) {
+      var sg = signs[si];
+      if (!ESCAPE.PROGRESS_SIGN_TEXT[sg.id]) sbad.push(sg.id + ':本文なし');
+      if (!map.isSolid(sg.col, sg.row)) sbad.push(sg.id + ':実体マスでない');
+    }
+    t.ok(signs.length >= 5, 'v2: 掲示が5枚以上ある', signs.length);
+    t.ok(sbad.length === 0, 'v2: 掲示は全て実体マスに貼られ本文が正文にある', sbad.join(' / '));
+
+    /* 増築後も §3 の数値基準（testArea1Contract と同じ観点を増築後に再検証） */
+    var cells = map.walkableCells();
+    t.ok(cells.length >= 900, 'v2増築後: 歩行可能900マス以上', cells.length + 'マス');
+    var junctions = 0, deadends = 0;
+    for (var j = 0; j < cells.length; j++) {
+      var d = 0, cc = cells[j].col, rr = cells[j].row;
+      if (map.isWalkable(cc + 1, rr)) d++;
+      if (map.isWalkable(cc - 1, rr)) d++;
+      if (map.isWalkable(cc, rr + 1)) d++;
+      if (map.isWalkable(cc, rr - 1)) d++;
+      if (d >= 3) junctions++;
+      if (d === 1) deadends++;
+    }
+    t.ok(junctions >= 35, 'v2増築後: 分岐交差点35箇所以上', junctions + '箇所');
+    t.ok(deadends >= 12, 'v2増築後: 行き止まり12箇所以上', deadends + '箇所');
+    t.ok(map.heightSeams().length === 0, 'v2増築後: 床高さの不連続がゼロ');
+    t.ok(map.validate().length === 0, 'v2増築後: マップ定義の静的検証', map.validate().join(' / '));
+  }
+
+  /** 所持品UIと、牢送りのエリアリセットでも所持品が残ること */
+  function testInventoryHud(t, g) {
+    g.reset();
+    localStorage.removeItem(SAVE_KEY);
+    var pr = g.progress, IT = ESCAPE.PROGRESS_ITEM_TEXT;
+    var inv = document.getElementById('inventory');
+    if (!t.ok(!!inv, '所持品UI: 画面隅に表示枠がある')) return;
+    var f = document.getElementById('inv-fuse'), w = document.getElementById('inv-wrench'),
+      c = document.getElementById('inv-card');
+    t.ok(!!f && !!w && !!c, '所持品UI: ヒューズ/スパナ/カードキーの3枠がある');
+    t.ok(f.textContent === IT.fuse && w.textContent === IT.wrench && c.textContent === IT.card,
+      '所持品UI: 文言が docs/notes.md の正文どおり',
+      f.textContent + '/' + w.textContent + '/' + c.textContent);
+    t.ok(!f.classList.contains('on') && !w.classList.contains('on') && !c.classList.contains('on'),
+      '所持品UI: 未取得のものは点灯しない');
+    var wr = gimmickOf(g, 'wrench');
+    interactAt(g, wr.col, wr.row);
+    sim(g, 1);
+    t.ok(w.classList.contains('on'), '所持品UI: 取得したスパナが点灯する');
+    t.ok(!f.classList.contains('on'), '所持品UI: 未取得のヒューズは点灯しないまま');
+    g.reset();
+    localStorage.removeItem(SAVE_KEY);
+  }
+
+  /** 制御室の施錠と、カードキー取得時の無影灯の演出 */
+  function testCardKeyLightsOut(t, g) {
+    g.reset();
+    localStorage.removeItem(SAVE_KEY);
+    var pr = g.progress, P = ESCAPE.PROGRESS_TUNING;
+    var gates = g.map.meta.gates || [], doors = [];
+    for (var i = 0; i < gates.length; i++) if (gates[i].kind === 'door') doors.push(gates[i]);
+    t.ok(doors.length === 3, '制御室: 入口3箇所が全て施錠される', doors.length);
+    sim(g, 1);
+    var blocked = 0;
+    for (var d = 0; d < doors.length; d++) if (g.map.isBlocked(doors[d].col, doors[d].row)) blocked++;
+    t.ok(blocked === doors.length, '制御室: 初期状態では全ての入口が塞がっている', blocked + '/' + doors.length);
+    /* 端末（制御室の中）へ入れない */
+    var term = gimmickOf(g, 'terminal');
+    var seen = g.map.floodFrom(g.map.meta.spawn.col, g.map.meta.spawn.row);
+    var reach = seen[(term.col + 1) + ',' + term.row] || seen[(term.col - 1) + ',' + term.row] ||
+      seen[term.col + ',' + (term.row + 1)] || seen[term.col + ',' + (term.row - 1)];
+    t.ok(!reach, '制御室: カードキー未所持では端末まで辿り着けない（実経路で封鎖されている）');
+
+    /* 遺体からカードキー → 無影灯が落ちて漆黒化＋呻きが近づく */
+    var corpse = gimmickOf(g, 'corpse');
+    var au = ESCAPE.audio;
+    var moan0 = (au.events && au.events.moanNear) || 0;
+    var burst0 = (au.events && au.events.lampBurst) || 0;
+    t.near(pr.darkLevel, 0, 1e-9, '処置室: 取得前は暗転していない');
+    interactAt(g, corpse.col, corpse.row);
+    t.ok(pr.items.card === true, '処置室: カードキーを取得できる');
+    t.ok((au.events.lampBurst || 0) > burst0, '処置室: 無影灯が落ちる音が鳴る');
+    sim(g, 30);
+    t.ok(pr.darkLevel > 0.85, '処置室: 取得直後に画面が漆黒になる', pr.darkLevel.toFixed(3));
+    var peak = simUntil(g, function () { return (au.events.moanNear || 0) >= moan0 + 2; },
+      Math.ceil((P.lightsOutDur + 1) / ESCAPE.FIXED_DT));
+    t.ok(peak >= 0, '処置室: 敵の呻きが繰り返し近づいてくる（スクリプト演出）',
+      ((au.events.moanNear || 0) - moan0) + '回');
+    t.ok(g.stealth.captures === 0, '処置室: 演出中に実際の捕獲は起きない');
+    sim(g, Math.ceil((P.lightsOutDur + 0.5) / ESCAPE.FIXED_DT));
+    t.ok(pr.darkRoom === true, '処置室: 演出後は部屋が暗いままになる');
+    t.ok(pr.darkLevel > 0.4, '処置室: 部屋に留まる間は漆黒が残る', pr.darkLevel.toFixed(3));
+    /* 部屋を出れば戻る */
+    var sp = g.map.meta.spawn;
+    place(g, sp.col, sp.row, 0);
+    sim(g, 180);
+    t.ok(pr.darkLevel < 0.05, '処置室: 部屋を出れば視界が戻る', pr.darkLevel.toFixed(3));
+
+    /* 解錠して通れるようになる */
+    var apc = adjacentTo(g.map, doors[0].col, doors[0].row);
+    place(g, apc.col, apc.row, apc.yawDeg);
+    g.progress.onInteract();
+    sim(g, 1);
+    var open2 = 0;
+    for (var d2 = 0; d2 < doors.length; d2++) if (!g.map.isBlocked(doors[d2].col, doors[d2].row)) open2++;
+    t.ok(open2 === doors.length, '制御室: 解錠すると入口が両方とも開く', open2 + '/' + doors.length);
+    g.reset();
+    localStorage.removeItem(SAVE_KEY);
+  }
+
+  /** 圧力計と3バルブ（緑域・赤域・戻せること） */
+  function testValveGauge(t, g) {
+    g.reset();
+    localStorage.removeItem(SAVE_KEY);
+    var pr = g.progress, P = ESCAPE.PROGRESS_TUNING;
+    t.ok(pr.valves.length === 3, '圧力計: バルブは3つ', pr.valves.length);
+    pr.valves = [0, 0, 0];
+    t.near(pr.pressure(), 0, 1e-9, '圧力計: 全閉では針が最小');
+    t.ok(pr.pressureZone() === 'red', '圧力計: 全閉は赤域', pr.pressureZone());
+    pr.valves = [4, 4, 4];
+    t.near(pr.pressure(), 1, 1e-9, '圧力計: 全開では針が最大');
+    t.ok(pr.pressureZone() === 'red', '圧力計: 全開（振り切れ）は赤域', pr.pressureZone());
+    var sol = solveValves(g);
+    t.ok(!!sol, '圧力計: 緑域に入る組み合わせがある', JSON.stringify(sol));
+    /* 赤に振れたら戻せる（巡回するので戻せること自体を確かめる） */
+    var v0 = gimmickOf(g, 'valve', 0);
+    pr.valves = [0, 0, 0];
+    pr.gimmick.drained = false;
+    for (var i = 0; i < P.valveSteps; i++) interactAt(g, v0.col, v0.row);
+    t.ok(pr.valves[0] === 0, 'バルブ: 回し切ると元の位置へ戻せる（巡回）', pr.valves[0]);
+
+    /* 実操作で緑域 → 排水フラグ */
+    pr.valves = [0, 0, 0];
+    pr.gimmick.drained = false;
+    var gauge = document.getElementById('gauge');
+    var vs = [gimmickOf(g, 'valve', 0), gimmickOf(g, 'valve', 1), gimmickOf(g, 'valve', 2)];
+    var ap = adjacentTo(g.map, vs[0].col, vs[0].row);
+    place(g, ap.col, ap.row, ap.yawDeg);
+    sim(g, 1);
+    t.ok(!!gauge && gauge.classList.contains('show'), '圧力計: ポンプ室にいる間だけ表示される');
+    for (var vi = 0; vi < 3; vi++) {
+      for (var n = 0; n < sol[vi]; n++) interactAt(g, vs[vi].col, vs[vi].row);
+    }
+    t.ok(pr.gimmick.drained === true, 'バルブ: 緑域に合わせると排水フラグが立つ');
+    var sp = g.map.meta.spawn;
+    place(g, sp.col, sp.row, 0);
+    sim(g, 2);
+    t.ok(!gauge.classList.contains('show'), '圧力計: ポンプ室から離れると消える');
+    g.reset();
+    localStorage.removeItem(SAVE_KEY);
+  }
+
+  /** 12秒の隔壁開放とクライマックスの追走 */
+  function testBulkheadTimer(t, g) {
+    g.reset();
+    localStorage.removeItem(SAVE_KEY);
+    var pr = g.progress, P = ESCAPE.PROGRESS_TUNING;
+    t.near(P.bulkheadOpenSeconds, 12, 1e-9, '隔壁: 開放にかかる時間は12秒（契約 §4 6a）');
+    pr.gimmick.power = true; pr.gimmick.code = true; pr.gimmick.drained = true;
+    var handle = gimmickOf(g, 'handle');
+    var ap = adjacentTo(g.map, handle.col, handle.row);
+    place(g, ap.col, ap.row, ap.yawDeg);
+    ESCAPE.noise.reset();
+    g.input._keys.KeyE = true;
+    var started = simUntil(g, function () { return pr.gimmick.opening > 0; },
+      Math.ceil(4.0 / ESCAPE.FIXED_DT));
+    g.input._keys.KeyE = false;
+    if (!t.ok(started >= 0, '隔壁: 長押し3秒で開放が始まる', 'frames=' + started)) return;
+    /* 最大半径の音イベントで敵が疾走してくる */
+    var big = null, pend = ESCAPE.noise.pending;
+    for (var i = 0; i < pend.length; i++) {
+      if (pend[i].kind === 'bulkhead') big = pend[i];
+    }
+    if (!big && ESCAPE.noise.last && ESCAPE.noise.last.kind === 'bulkhead') big = ESCAPE.noise.last;
+    t.ok(!!big, '隔壁: 開放開始で音イベントが出る');
+    t.ok(!!big && big.radius >= ESCAPE.ENEMY_TUNING.hearMax,
+      '隔壁: 音イベントは最大半径（敵が殺到する）', big && big.radius);
+    /* 残り秒の表示 */
+    var opening = document.getElementById('opening');
+    sim(g, 30);
+    t.ok(!!opening && opening.classList.contains('show'), '隔壁: 開放中は残り秒が表示される');
+    t.ok(/^隔壁開放中　残り\d+秒$/.test(opening.textContent),
+      '隔壁: 表示が正文「隔壁開放中　残り{SEC}秒」の形', opening.textContent);
+    var half = pr.gimmick.opening;
+    t.ok(half > 0 && half < P.bulkheadOpenSeconds, '隔壁: 残り時間が減っていく', half.toFixed(2));
+    t.ok(pr.gimmick.doorOpen === false, '隔壁: 12秒経つまでは開ききらない');
+    /* 開放中に EXIT に立ってもクリアにならない */
+    var ep = g.map.meta.exitPad;
+    place(g, ep.col, ep.row, 0);
+    sim(g, 3);
+    t.ok(pr.cleared === false, '隔壁: 開放中に隙間へ立ってもまだ抜けられない');
+    var done = simUntil(g, function () { return pr.gimmick.doorOpen; },
+      Math.ceil(14.0 / ESCAPE.FIXED_DT));
+    t.ok(done >= 0, '隔壁: 12秒で開ききる', 'frames=' + done);
+    if (!opening._show) t.ok(!opening.classList.contains('show'), '隔壁: 開ききると残り秒表示が消える');
+    g.reset();
+    localStorage.removeItem(SAVE_KEY);
+  }
+
+  /** 裏ルート（排水路）: スパナ＋排水済みでのみ通れる・走れない・立ち上がれない */
+  function testDrainRoute(t, g) {
+    g.reset();
+    localStorage.removeItem(SAVE_KEY);
+    var pr = g.progress, EX = ESCAPE.PROGRESS_EXTRA_TEXT, U = ESCAPE.PROGRESS_UI_TEXT;
+    var grate = gimmickOf(g, 'grating');
+    var gate = null, gates = g.map.meta.gates || [];
+    for (var i = 0; i < gates.length; i++) if (gates[i].kind === 'grate') gate = gates[i];
+    if (!t.ok(!!gate && !!grate, '排水路: グレーチングが定義されている')) return;
+    sim(g, 1);
+    t.ok(g.map.isBlocked(gate.col, gate.row) === true, '排水路: 初期状態では入口が塞がっている');
+
+    /* スパナ無し */
+    interactAt(g, grate.col, grate.row);
+    t.ok(pr.gimmick.grating === false, '排水路: スパナが無いと外せない');
+    t.ok(pr._flashMsg === EX.needWrench, '排水路: 工具が要る旨で応答', pr._flashMsg);
+    pr._flashT = 0; pr._flashMsg = '';
+
+    /* スパナはあるが未排水 */
+    pr.items.wrench = true;
+    interactAt(g, grate.col, grate.row);
+    t.ok(pr.gimmick.grating === false, '排水路: 排水されていないと外せない');
+    t.ok(pr._flashMsg === EX.drainFlooded, '排水路: 水が満ちている旨で応答', pr._flashMsg);
+    pr._flashT = 0; pr._flashMsg = '';
+
+    /* スパナ＋排水済み */
+    pr.gimmick.drained = true;
+    var apg = adjacentTo(g.map, grate.col, grate.row);
+    place(g, apg.col, apg.row, apg.yawDeg);
+    sim(g, 1);
+    t.ok(g.progress.dom.prompt.textContent === U.grating,
+      '排水路: プロンプト文言「' + U.grating + '」', g.progress.dom.prompt.textContent);
+    interactAt(g, grate.col, grate.row);
+    t.ok(pr.gimmick.grating === true, '排水路: スパナ＋排水済みで外せる');
+    sim(g, 1);
+    t.ok(g.map.isBlocked(gate.col, gate.row) === false, '排水路: 外すと入口が通れる');
+
+    /* 中に入ると走れない・立ち上がれない */
+    var cw = g.map.meta.crawl[Math.floor(g.map.meta.crawl.length / 2)];
+    place(g, cw.col, cw.row, 0);
+    g.input.crouchOn = false;
+    g.input._keyRun = true;
+    g.input.moveY = 1;
+    sim(g, 60);
+    t.ok(g.player.crouching === true, '排水路: 中では必ずしゃがみになる（立ち上がれない）');
+    t.ok(g.player.mode === 'crouch', '排水路: 走行ボタンが効かない', g.player.mode);
+    t.ok(g.player.speed <= ESCAPE.Player.SPEED_CROUCH + 1e-6,
+      '排水路: 速度はしゃがみ速度を超えない', g.player.speed.toFixed(3));
+    t.ok(g.player.eyeHeight < g.map.ceilHAt(g.player.col(), g.player.row()),
+      '排水路: 目線が天井より低い', g.player.eyeHeight.toFixed(2));
+    g.input.reset();
+    /* 走れる普通の通路と比べる */
+    var open = findTriple(g.map, false);
+    place(g, open.col, open.row, -90);
+    g.input._keyRun = true; g.input.moveY = 1;
+    sim(g, 40);
+    t.ok(g.player.mode === 'run', '排水路の外では走れる（対照）', g.player.mode);
+    g.input.reset();
+
+    /* 敵は排水路に入らない */
+    var pathIn = false;
+    g.ai.path = null;
+    place(g, cw.col, cw.row, 0);
+    placeEnemy(g, g.map.meta.enemySpawn.col, g.map.meta.enemySpawn.row, 180);
+    g.ai.toChase();
+    sim(g, 120);
+    var pth = g.ai.path || [];
+    for (var q = 0; q < pth.length; q++) if (g.map.isCrawl(pth[q].col, pth[q].row)) pathIn = true;
+    t.ok(!pathIn, '排水路: 敵の経路は排水路を通らない（追走を回避できる）');
+
+    /* 裏ルートで隔壁を開けずにクリアできる */
+    g.reset();
+    localStorage.removeItem(SAVE_KEY);
+    var ep2 = g.map.meta.exitPad2;
+    place(g, ep2.col, ep2.row, 0);
+    sim(g, 3);
+    t.ok(g.progress.cleared === true, '裏ルート: 隔壁を開けずに脱出できる');
+    t.ok(g.progress.gimmick.doorOpen === false, '裏ルート: 隔壁は閉じたまま');
+    t.ok(g.progress.clearedBy === 'drain', '裏ルート: 裏ルートのクリアとして記録される',
+      g.progress.clearedBy);
+    g.reset();
+    localStorage.removeItem(SAVE_KEY);
+  }
+
+  /** 掲示（正文）が近づくと読めること */
+  function testSignTexts(t, g) {
+    g.reset();
+    var signs = g.map.meta.signs || [], ST = ESCAPE.PROGRESS_SIGN_TEXT;
+    var shown = 0, checked = 0;
+    for (var i = 0; i < signs.length; i++) {
+      var sg = signs[i];
+      var D = { n: [0, -1], s: [0, 1], e: [1, 0], w: [-1, 0] }[sg.dir];
+      var rc = sg.col + D[0], rr = sg.row + D[1];
+      if (!g.map.isWalkable(rc, rr)) continue;
+      checked++;
+      var yaw = Math.atan2(D[0], D[1]) * 180 / Math.PI;
+      place(g, rc, rr, yaw);
+      sim(g, 1);
+      var found = g.progress._findSign();
+      if (found && found.id === sg.id) shown++;
+      t.ok(!!ST[sg.id], '掲示 ' + sg.id + ': 本文が正文にある', ST[sg.id]);
+    }
+    t.ok(checked > 0 && shown === checked, '掲示: 読む側に立つと本文が出る', shown + '/' + checked);
+    /* 同類バグ検出: Stealth も同じ #prompt を毎フレーム書くため、Progress が
+       自前キャッシュだけで判定すると「一度書いた文言が二度と出ない」ことがある。
+       Stealth に空文字で上書きさせた直後でも実DOMに出ることを確かめる。 */
+    var el = g.progress.dom.prompt;
+    var seenAgain = 0, tried = 0;
+    for (var q = 0; q < signs.length; q++) {
+      var s2 = signs[q];
+      var D2 = { n: [0, -1], s: [0, 1], e: [1, 0], w: [-1, 0] }[s2.dir];
+      var rc2 = s2.col + D2[0], rr2 = s2.row + D2[1];
+      if (!g.map.isWalkable(rc2, rr2)) continue;
+      place(g, rc2, rr2, Math.atan2(D2[0], D2[1]) * 180 / Math.PI);
+      sim(g, 1);
+      /* 操作できる対象（仕掛け・施錠扉）が同時に間合いにある掲示は
+         そちらの文言が優先されるので、この検査の対象外にする */
+      if (g.progress._findTarget() || g.progress._findGate()) continue;
+      tried++;
+      /* いったん Stealth 側の経路で消してから、次のフレームで戻ること */
+      g.stealth.prompt = ''; g.stealth._domCache = null; el.textContent = '';
+      sim(g, 1);
+      if (el.textContent === ST[s2.id]) seenAgain++;
+    }
+    t.ok(tried > 0 && seenAgain === tried,
+      '掲示: #prompt を他所から空にされても次のフレームで再表示される（キャッシュ不整合の検出）',
+      seenAgain + '/' + tried);
+    t.ok(ST.sg_breaker === '投入順序　① 循環　② 照明　③ 隔壁',
+      '掲示: 主電源盤の投入順序が正文どおり', ST.sg_breaker);
+    g.reset();
+    localStorage.removeItem(SAVE_KEY);
+  }
+
   function runAll(opts) {
     var g = ESCAPE.game;
     var t = new Runner();
@@ -2564,7 +3183,10 @@
       testAudioSettings, testAudioDirector, testAudioAmbience, testFearFx, testPatrolPause,
       /* P4.6: 捕獲シネマティック＋駆け引き強化 */
       testCaptureCinematic, testCaptureFaceDetail, testCaptureMash, testEatenGameOver,
-      testCaptureInterrupt, testNoiseSprint, testLockerSeen
+      testCaptureInterrupt, testNoiseSprint, testLockerSeen,
+      /* P4.7: エリア1 脱出フロー v2 */
+      testArea1V2Contract, testInventoryHud, testCardKeyLightsOut, testValveGauge,
+      testBulkheadTimer, testDrainRoute, testSignTexts
     ];
     for (var i = 0; i < suites.length; i++) {
       try {
@@ -2628,6 +3250,17 @@
       var pr = g.progress;
       t.ok(!pr.gimmick.power && !pr.gimmick.code && !pr.gimmick.doorOpen,
         '復帰: 仕掛け進行が初期化', JSON.stringify(pr.gimmick));
+      t.ok(!pr.gimmick.fuseSet && !pr.gimmick.drained && !pr.gimmick.cardUsed && !pr.gimmick.grating,
+        '復帰: v2の工程フラグが初期化', JSON.stringify(pr.gimmick));
+      t.near(pr.gimmick.opening, 0, 1e-9, '復帰: 隔壁の開放タイマーがゼロ');
+      t.ok(!pr.items.fuse && !pr.items.wrench && !pr.items.card,
+        '復帰: 所持品が初期化', JSON.stringify(pr.items));
+      t.ok(pr.valves.join(',') === '0,0,0', '復帰: バルブが初期位置', pr.valves.join(','));
+      t.near(pr.darkLevel, 0, 1e-9, '復帰: 処置室の漆黒化が解除');
+      t.ok(pr.clearedBy === null, '復帰: クリア経路の記録が消えている', pr.clearedBy);
+      t.ok(pr.breakerSeq.length === 0, '復帰: ブレーカーの投入順が消えている');
+      var bkOv = document.getElementById('breaker-overlay');
+      t.ok(!!bkOv && !bkOv.classList.contains('show'), '復帰: ブレーカーUIが閉じている');
       t.near(pr.gimmick.handleHold, 0, 1e-9, '復帰: ハンドル保持割合が0');
       t.ok(pr.checkpoint === null, '復帰: チェックポイントが未設定');
       t.ok(pr.modal === null, '復帰: モーダルが閉じている');

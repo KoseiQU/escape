@@ -139,11 +139,14 @@
 
     // 2) 移動
     if (!frozen) {
+      /* P4.7: 排水路（meta.crawl）は「しゃがみ専用・走行不可」（契約 §4 6b）。
+         天井1.15mの管の中なので立ち上がれず、走るボタンも効かない。 */
+      var crawl = !!(this.map.isCrawl && this.map.isCrawl(this.player.col(), this.player.row()));
       this.player.step(dt, {
         moveX: input.moveX,
         moveY: input.moveY,
-        run: input.isRunning(),
-        crouch: input.crouchOn
+        run: crawl ? false : input.isRunning(),
+        crouch: crawl ? true : input.crouchOn
       });
     } else {
       this.player.speed = 0;
@@ -232,7 +235,11 @@
                ? ('  演出 ' + this.cinematic.mode + '/' + this.cinematic.stage) : '')) : '') +
       (this.progress && this.progress.gimmick ? ('\n仕掛け 電源' + (this.progress.gimmick.power ? '○' : '×') +
              ' コード' + (this.progress.gimmick.code ? '○' : '×') +
-             ' 隔壁' + (this.progress.gimmick.doorOpen ? '開' : '×') +
+             ' 排水' + (this.progress.gimmick.drained ? '○' : '×') +
+             ' 隔壁' + (this.progress.gimmick.doorOpen ? '開' :
+               (this.progress.gimmick.opening > 0 ? this.progress.gimmick.opening.toFixed(1) : '×')) +
+             '\n所持 ' + (this.progress.items.fuse ? 'ヒューズ ' : '') +
+               (this.progress.items.wrench ? 'スパナ ' : '') + (this.progress.items.card ? 'カードキー ' : '') +
              '  CP:' + (this.progress.checkpoint || '—')) : '');
   };
 

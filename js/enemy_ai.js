@@ -205,6 +205,8 @@
         var ni = nr * w + nc;
         if (seen[ni] === this.stamp) continue;
         if (!map.isWalkable(nc, nr) || map.isBlocked(nc, nr)) continue;
+        /* P4.7: 排水路（しゃがみ専用の細管）には敵は入らない＝裏ルートは追走を回避できる */
+        if (map.isCrawl && map.isCrawl(nc, nr)) continue;
         seen[ni] = this.stamp; dist[ni] = dist[cur] + 1; prev[ni] = cur;
         q[tail++] = ni;
       }

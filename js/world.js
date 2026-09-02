@@ -868,6 +868,7 @@
 
     /* ---- 壁付け・天井付けの造作（モニタ壁・ホワイトボード・標識・手術灯） ---- */
     this._wallKit(B, shader, planeShader);
+    this._signs(B, shader, planeShader);
     this._ceilKit(B, shader);
 
     /* ---- メッシュ化 ---- */
@@ -1531,6 +1532,86 @@
             fz + m[2] * 0.115 + ((along === 'z') ? fo : 0),
             (along === 'z') ? 0.01 : 0.28, 0.66, (along === 'z') ? 0.28 : 0.01, 2, shD);
         }
+      } else if (k.type === 'supplyShelf') {
+        /* P4.7 保管庫の棚（B-2 / B-3）。突出0.30m以内＝通行の邪魔にならない */
+        var shWood = shader(key, [0.86, 0.78, 0.62]);
+        for (var tsh = 0; tsh < 4; tsh++) {
+          var ty = 0.34 + tsh * 0.52;
+          B.metal.box(fx + m[0] * 0.15, ty, fz + m[2] * 0.15,
+            (along === 'z') ? 0.30 : 1.84, 0.05, (along === 'z') ? 1.84 : 0.30, 1.4, sh);
+          /* 棚に載る箱・瓶（左右にばらけさせる） */
+          for (var it = 0; it < 3; it++) {
+            var hq2 = hash2(k.col * 7 + tsh * 3 + it, k.row * 11 + it);
+            if (hq2 < 0.34) continue;
+            var oa = (it - 1) * 0.56 + (hq2 - 0.5) * 0.18;
+            B.sheet.box(fx + m[0] * 0.15 + ((along === 'z') ? 0 : oa), ty + 0.16,
+              fz + m[2] * 0.15 + ((along === 'z') ? oa : 0),
+              (along === 'z') ? 0.22 : 0.34, 0.26, (along === 'z') ? 0.34 : 0.22, 1.4, shWood);
+          }
+        }
+        /* 側板と棚札 */
+        for (var sd2 = 0; sd2 < 2; sd2++) {
+          var so2 = (sd2 ? 1 : -1) * 0.92;
+          B.dark.box(fx + m[0] * 0.15 + ((along === 'z') ? 0 : so2), 1.05,
+            fz + m[2] * 0.15 + ((along === 'z') ? so2 : 0),
+            (along === 'z') ? 0.30 : 0.05, 2.10, (along === 'z') ? 0.05 : 0.30, 1.6, shD);
+        }
+        facePanel(B.sign, fx + m[0] * 0.305, 1.72, fz + m[2] * 0.305, m, 0.42, 0.30,
+          planeShader(key, [1.30, 1.28, 1.22], m), atlasUV(1, 0, 2));
+      } else if (k.type === 'valveWheel') {
+        /* P4.7 循環ポンプ室のバルブ（ハンドル車＋配管） */
+        var shV = shader(key, [1.10, 0.72, 0.42]);
+        B.metal.box(fx + m[0] * 0.10, 1.05, fz + m[2] * 0.10,
+          (along === 'z') ? 0.20 : 0.52, 0.52, (along === 'z') ? 0.52 : 0.20, 1.4, shD);
+        var vx = fx + m[0] * 0.24, vz = fz + m[2] * 0.24;
+        B.dark.tube([fx + m[0] * 0.10, 1.05, fz + m[2] * 0.10], [vx, 1.05, vz], 0.05, 6, shD);
+        /* ハンドル車は暗がりでも輪郭が読めるよう自発光の縁を持たせる */
+        B.lamp.tube([vx, 1.05, vz], [vx + m[0] * 0.07, 1.05, vz + m[2] * 0.07], 0.32, 14,
+          flat([0.62, 0.30, 0.09]));
+        B.metal.tube([vx, 1.05, vz], [vx + m[0] * 0.05, 1.05, vz + m[2] * 0.05], 0.26, 12, shV);
+        for (var sp2 = 0; sp2 < 4; sp2++) {
+          var a2 = sp2 * Math.PI / 4;
+          var ax = Math.cos(a2) * 0.28, ay = Math.sin(a2) * 0.28;
+          B.lamp.box(vx + m[0] * 0.03 + ((along === 'z') ? 0 : ax), 1.05 + ay,
+            vz + m[2] * 0.03 + ((along === 'z') ? ax : 0),
+            (along === 'z') ? 0.07 : 0.60, 0.06, (along === 'z') ? 0.60 : 0.07, 2,
+            flat([0.58, 0.28, 0.08]));
+        }
+        B.metal.box(vx + m[0] * 0.05, 1.05, vz + m[2] * 0.05,
+          (along === 'z') ? 0.12 : 0.14, 0.14, (along === 'z') ? 0.14 : 0.12, 2, shV);
+        /* 立ち上がり配管 */
+        B.dark.tube([fx + m[0] * 0.09 - ((along === 'z') ? 0 : 0.62), 0.02,
+          fz + m[2] * 0.09 - ((along === 'z') ? 0.62 : 0)],
+          [fx + m[0] * 0.09 - ((along === 'z') ? 0 : 0.62), 2.30,
+            fz + m[2] * 0.09 - ((along === 'z') ? 0.62 : 0)], 0.09, 6, shD);
+      } else if (k.type === 'breakerPanel') {
+        /* P4.7 主電源盤の3系統ブレーカー（盤の脇の配電箱） */
+        B.metal.box(fx + m[0] * 0.10, 1.42, fz + m[2] * 0.10,
+          (along === 'z') ? 0.20 : 1.12, 1.00, (along === 'z') ? 1.12 : 0.20, 1.2, sh);
+        for (var bk = 0; bk < 3; bk++) {
+          var bo = (bk - 1) * 0.32;
+          B.dark.box(fx + m[0] * 0.21 + ((along === 'z') ? 0 : bo), 1.42,
+            fz + m[2] * 0.21 + ((along === 'z') ? bo : 0),
+            (along === 'z') ? 0.06 : 0.20, 0.46, (along === 'z') ? 0.20 : 0.06, 2, shD);
+          B.lamp.box(fx + m[0] * 0.23 + ((along === 'z') ? 0 : bo), 1.78,
+            fz + m[2] * 0.23 + ((along === 'z') ? bo : 0), 0.07, 0.07, 0.07, 2,
+            flat([0.42, 0.10, 0.10]));
+        }
+        B.dark.tube([fx + m[0] * 0.06, 1.92, fz + m[2] * 0.06],
+          [fx + m[0] * 0.06, 2.66, fz + m[2] * 0.06], 0.07, 6, shD);
+      } else if (k.type === 'pipeBank') {
+        /* P4.7 ポンプ室の配管群（横走りの太管＋バルブ座） */
+        var shP = shader(key, [0.74, 0.78, 0.80]);
+        for (var pb = 0; pb < 3; pb++) {
+          var py2 = 0.60 + pb * 0.72;
+          var a0 = [fx + m[0] * 0.16 - ((along === 'z') ? 0 : 0.98), py2,
+            fz + m[2] * 0.16 - ((along === 'z') ? 0.98 : 0)];
+          var a1 = [fx + m[0] * 0.16 + ((along === 'z') ? 0 : 0.98), py2,
+            fz + m[2] * 0.16 + ((along === 'z') ? 0.98 : 0)];
+          B.metal.tube(a0, a1, 0.13, 7, shP);
+          B.dark.box(fx + m[0] * 0.16, py2, fz + m[2] * 0.16,
+            (along === 'z') ? 0.32 : 0.16, 0.32, (along === 'z') ? 0.16 : 0.32, 1.6, shD);
+        }
       } else {
         /* bioPlacard: 大きなバイオハザード標識＋区画銘板 */
         B.metal.box(fx + m[0] * 0.03, 1.72, fz + m[2] * 0.03,
@@ -1540,6 +1621,32 @@
         facePanel(B.sign, fx + m[0] * 0.068, 1.02, fz + m[2] * 0.068, m, 0.86, 0.86,
           planeShader(key, [1.22, 1.20, 1.16], m), atlasUV(1, 0, 2));
       }
+      setYBias(0);
+    }
+  };
+
+  /**
+   * P4.7 掲示（docs/notes.md「掲示・銘板」）。col,row は実体マス、dir はそれを読む側。
+   * 板は壁から0.05mしか出ないのでプレイヤーに干渉しない。本文は Progress が近接時に出す。
+   */
+  World.prototype._signs = function (B, shader, planeShader) {
+    var map = this.map, T = map.tileSize;
+    var list = (map.meta && map.meta.signs) || [];
+    for (var i = 0; i < list.length; i++) {
+      var k = list[i];
+      var m = FACE_VEC[k.dir] || FACE_VEC.n;            /* 実体マス -> 読む側 = 面の外向き法線 */
+      var nc = k.col + (m[0] | 0), nr = k.row + (m[2] | 0);
+      var key = this._ownerOf(nc, nr);
+      setYBias(map.cellFloorY(nc, nr));
+      var cx = k.col * T + T / 2, cz = k.row * T + T / 2;
+      var fx = cx + m[0] * (T * 0.5), fz = cz + m[2] * (T * 0.5);
+      var along = (m[0] !== 0) ? 'z' : 'x';
+      var shD = shader(key, [0.55, 0.58, 0.60]);
+      /* 台座（枠）＋読める明度の面。掲示は必ず目に入るよう明るめに焼く */
+      B.dark.box(fx + m[0] * 0.014, 2.06, fz + m[2] * 0.014,
+        (along === 'z') ? 0.03 : 1.30, 0.44, (along === 'z') ? 1.30 : 0.03, 1.2, shD);
+      facePanel(B.sign, fx + m[0] * 0.036, 2.06, fz + m[2] * 0.036, m, 1.16, 0.34,
+        planeShader(key, [1.45, 1.42, 1.32], m), atlasUV(1, 1, 2));
       setYBias(0);
     }
   };
@@ -1756,6 +1863,28 @@
           [PX(-ow / 2 + 0.1, -od / 2 - 0.22), 1.86, PZ(-ow / 2 + 0.1, -od / 2 - 0.22)], 0.026, 4, shD);
         B.sheet.box(PX(-ow / 2 + 0.1, -od / 2 - 0.22), 1.66, PZ(-ow / 2 + 0.1, -od / 2 - 0.22),
           0.16, 0.28, 0.16, 2, shCard);
+        /* P4.7: 処置台の上の遺体（DESIGN.md §4「処置室でカードキー」）。
+           布に覆われた胴体・落ちた腕・胸ポケットのカードが正面から一目で読める構図。 */
+        if (f.corpse) {
+          var shSkin = shader(key, [1.16, 0.92, 0.84]);
+          var shCloth = shader(key, [1.10, 1.16, 1.24]);
+          var shPock = shader(key, [0.66, 0.72, 0.80]);
+          /* 覆布に包まれた胴体（頭側が高く、脚側へ細くなる） */
+          B.sheet.box(PX(-0.30, 0), 1.14, PZ(-0.30, 0), SX(0.94, 0.62), 0.34, SZ(0.94, 0.62), 1.0, shCloth);
+          B.sheet.box(PX(0.52, 0), 1.06, PZ(0.52, 0), SX(0.86, 0.46), 0.20, SZ(0.86, 0.46), 1.0, shCloth);
+          /* 露出した頭部と顎（布の縁から覗く） */
+          B.metal.box(PX(-0.84, 0), 1.12, PZ(-0.84, 0), SX(0.30, 0.30), 0.30, SZ(0.30, 0.30), 1.6, shSkin);
+          B.dark.box(PX(-0.90, 0), 1.09, PZ(-0.90, 0), SX(0.10, 0.20), 0.09, SZ(0.10, 0.20), 2, shD);
+          /* 台から垂れた腕（指先が床に近い） */
+          B.metal.tube([PX(-0.18, od / 2 - 0.06), 1.02, PZ(-0.18, od / 2 - 0.06)],
+            [PX(-0.10, od / 2 + 0.30), 0.44, PZ(-0.10, od / 2 + 0.30)], 0.065, 6, shSkin);
+          B.metal.box(PX(-0.08, od / 2 + 0.34), 0.38, PZ(-0.08, od / 2 + 0.34),
+            SX(0.16, 0.18), 0.10, SZ(0.16, 0.18), 2, shSkin);
+          /* 胸ポケットとカードキーの端（黄色い縁が布の上に出ている） */
+          B.dark.box(PX(-0.52, 0.14), 1.32, PZ(-0.52, 0.14), SX(0.26, 0.20), 0.05, SZ(0.26, 0.20), 2, shPock);
+          B.lamp.box(PX(-0.52, 0.14), 1.36, PZ(-0.52, 0.14), 0.16, 0.02, 0.16, 2,
+            flat([0.52, 0.42, 0.10]));
+        }
         break;
       }
       /* ---- 見せ場③: 培養器（琥珀色に光る棚が並ぶ） ---- */

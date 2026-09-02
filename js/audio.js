@@ -803,7 +803,11 @@
     corrW:    { f: 40, f2: 60.2, lp: 175, air: 340, airG: 0.062, g: 0.30 },
     corrC:    { f: 43, f2: 64.6, lp: 190, air: 390, airG: 0.056, g: 0.30 },
     corrE:    { f: 41, f2: 61.8, lp: 180, air: 360, airG: 0.058, g: 0.30 },
-    corrS:    { f: 35, f2: 52.6, lp: 150, air: 260, airG: 0.078, g: 0.33 }   /* 南下層: 水気 */
+    corrS:    { f: 35, f2: 52.6, lp: 150, air: 260, airG: 0.078, g: 0.33 },  /* 南下層: 水気 */
+    /* P4.7 増築ぶん（DESIGN.md §4「エリア1 脱出フロー v2」） */
+    filter:   { f: 34, f2: 51.2, lp: 135, air: 220, airG: 0.092, g: 0.38 },  /* 濾過槽室: 旧ポンプ室 */
+    store:    { f: 36, f2: 54.2, lp: 155, air: 275, airG: 0.048, g: 0.27 },  /* 保管庫: 乾いて静か */
+    drain:    { f: 28, f2: 42.4, lp: 105, air: 175, airG: 0.115, g: 0.36 }   /* 排水路: 管鳴りと水気 */
   };
 
   /* ================================================================
@@ -1307,6 +1311,26 @@
       case 'noteOpen': this.play('paper', { gain: 0.9 }); break;
       case 'noteClose': this.play('paper', { gain: 0.6 }); break;
       case 'checkpoint': this.play('checkpoint', { gain: 0.7 }); break;
+      /* ---- P4.7 エリア1脱出フローv2（契約 DESIGN.md §4「エリア1 脱出フロー v2」） ---- */
+      case 'pickup': this.play('terminalOk', { gain: 0.62 }); break;
+      case 'valveTurn': this.play('handleCreak', { x: p.x, z: p.z, gain: 0.72, r: this._rand() }); break;
+      case 'gaugeOk': this.play('terminalOk', { gain: 0.95 }); break;
+      case 'grateOff': this.play('grateBreak', { priority: 1, gain: 0.95 }); break;
+      case 'spark':                /* 配電の誤順: 火花＋施設に響く大音 */
+        this.play('grateBreak', { priority: 1, gain: 1.0 });
+        this.play('lever', { x: p.x, z: p.z, priority: 1, gain: 0.95, maxDist: 60, occlude: false, when: 0.06 });
+        this._flash(0.42, 0.26);
+        this.fx.shakeImpulse = Math.max(this.fx.shakeImpulse, 0.5);
+        break;
+      case 'lampBurst':            /* 無影灯が落ちる（カードキー取得） */
+        this.play('grateBreak', { priority: 1, gain: 0.9 });
+        this.play('terminalErr', { gain: 0.9, when: 0.08 });
+        this._flash(0.30, 0.22);
+        this.fx.shakeImpulse = Math.max(this.fx.shakeImpulse, 0.4);
+        break;
+      case 'moanNear':             /* 呻きが近づいてくる（スクリプト演出・実捕獲はしない） */
+        this.play('enemyMoan', { x: p.x, z: p.z, bus: 'enemy', gain: 0.95, r: this._rand(), maxDist: 40 });
+        break;
       default: break;
     }
     return true;

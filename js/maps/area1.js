@@ -1,5 +1,17 @@
-/* ESCAPE — エリア1「研究区画」（DESIGN.md §3・2026-08-30 第2改訂＋第3次改修に対応）
- * 55x55マス（1マス=2m → 110m x 110m）。歩行可能 906 マス
+/* ESCAPE — エリア1「研究区画」（DESIGN.md §3・2026-08-30 第2改訂＋第3次改修＋P4.7増築に対応）
+ * 55x55マス（1マス=2m → 110m x 110m）。歩行可能 961 マス
+ *
+ * P4.7増築（DESIGN.md §4「エリア1 脱出フロー v2」）:
+ *   ① 保管庫（北西 cols3-11/rows1-2・床全面ガラス片）— 培養器室の北に2つの扉(5,3)(10,3)で接続。
+ *      棚B-2=ヒューズ(2,1) / 棚B-3=スパナ(12,1) / memo7(12,2)。
+ *   ② 循環ポンプ室（東 cols50-52/rows5-11）— 記録室の東の岩盤を掘って新設。扉(49,8)。
+ *      バルブ3基(50,12)(51,12)(52,12) / グレーチング(51,4) / memo9(53,6) / チェックポイント(50,8)。
+ *      旧「循環ポンプ室」(12-16/32-36) は id:filter「濾過槽室」に改名（配置は不変）。
+ *   ③ 排水路（しゃがみ専用の裏ルート）— ポンプ室の床の穴(52,4)から row2 を西へ這い、
+ *      隔壁の向こう側の竪坑(39-41,1)→ exitPad2(40,2) へ出る。天井高1.15m・水音の音地盤。
+ *      掘削のため行き止まりの先端(42,2)を1マス埋めた（連結度・到達性は不変）。
+ *   ④ 制御室（観察モニター室）の2つの入口(39,41)(49,43) をカードキー施錠（runtime の setBlocked）。
+ *   ⑤ 処置室の手術台(20,6) を GIMMICK 化（遺体の胸ポケット＝カードキー）／memo8(21,3)。
  *
  * 第3次改修（研究所らしさ／牢の中央移設）:
  *   ① 見せ場ルーム6室 — 検体タンク室(20-28,20-24) / 処置室(16-24,4-8) /
@@ -38,18 +50,18 @@
     },
     rows: [
       '#######################################################',
-      '##################################D#######F############',
-      '##############################....X....###.############',
-      '##############################.##G#.##.###.############',
-      '####.........###.........#####.####.##.###.#.....######',
-      '####.F.F.F.F.###.F.....F.#####.#######.###.....F.######',
-      '####...........#....F....L.....###.........#.....######',
-      '####.F.F.F...#.#.F....F..#####.###.#######.#...F.######',
-      '####.........#...........#####.###.#######.#.....######',
-      '##########.###.########.######.###.#######.......######',
-      '##########.........###.........###P........#.....######',
-      '##############.#N#...F.###.###########.#####.F.F.######',
-      '####.....#####.#.#.###.###.###########.#####.....######',
+      '##GWWWWWWWWWG#####################D####WWWWW###########',
+      '###WWWWWWWWWN#################....X....#X##WWWWWWWWWW##',
+      '#####.####.##########N########.##G#.##.###.#########W##',
+      '####.........###.........#####.####.##.###.#.....##GW##',
+      '####.F.F.F.F.###.F.....F.#####.#######.###.....F.#...##',
+      '####...........#....G....L.....###.........#.....#..WN#',
+      '####.F.F.F...#.#.F....F..#####.###.#######.#...F.#...##',
+      '####.........#...........#####.###.#######.#......P..##',
+      '##########.###.########.######.###.#######.......#...##',
+      '##########.........###.........###P........#.....#W..##',
+      '##############.#N#...F.###.###########.#####.F.F.#...##',
+      '####.....#####.#.#.###.###.###########.#####.....#GGG##',
       '####..F..#####.#.#.#W..###.###########.#########.######',
       '####F....#.........###S###.............###.........####',
       '####..F.F#.#######.###.###.###########.###.#######.####',
@@ -91,7 +103,7 @@
       '######################L##################.#############',
       '#########################################.#############',
       '#########################################F#############',
-      '#######################################################'
+      '#######################################################',
     ],
     meta: {
       spawn: { col: 6, row: 46, yawDeg: 0 },
@@ -141,7 +153,15 @@
         { c0: 38, r0: 18, c1: 46, r1: 22, h: 2.40 },
         { c0: 18, r0: 38, c1: 28, r1: 42, h: 2.45 },
         /* 拘束室は低く抑えて圧迫感を出す（鉄格子の高さ 2.55m より上に取る） */
-        { c0: 27, r0: 26, c1: 33, r1: 29, h: 2.80 }
+        { c0: 27, r0: 26, c1: 33, r1: 29, h: 2.80 },
+        /* P4.7: 保管庫は低い倉庫天井／ポンプ室は高い機械室／排水路は立ち上がれない高さ */
+        { c0: 2, r0: 1, c1: 12, r1: 3, h: 2.35 },
+        { c0: 49, r0: 5, c1: 53, r1: 12, h: 3.60 },
+        { c0: 39, r0: 1, c1: 41, r1: 1, h: 2.60 },
+        { c0: 40, r0: 2, c1: 40, r1: 2, h: 2.60 },
+        { c0: 42, r0: 1, c1: 43, r1: 1, h: 1.15 },
+        { c0: 43, r0: 2, c1: 52, r1: 2, h: 1.15 },
+        { c0: 52, r0: 3, c1: 52, r1: 4, h: 1.15 }
       ],
 
       /* 区画。前方一致で最初に当たったものを採用（部屋 → 長廊下 → 通路ゾーン） */
@@ -152,7 +172,11 @@
         { id: 'cellroom', name: '拘束室', c0: 27, r0: 26, c1: 33, r1: 29 },
         { id: 'specimen', name: '飼育檻室', c0: 4, r0: 12, c1: 8, r1: 20 },
         { id: 'machine', name: '検体タンク室', c0: 20, r0: 20, c1: 28, r1: 24 },
-        { id: 'pump', name: '循環ポンプ室', c0: 12, r0: 32, c1: 16, r1: 36 },
+        { id: 'filter', name: '濾過槽室', c0: 12, r0: 32, c1: 16, r1: 36 },
+        /* P4.7 増築: 保管庫（北西）／循環ポンプ室（東・新設）／排水路（裏ルート） */
+        { id: 'store', name: '保管庫', c0: 2, r0: 1, c1: 12, r1: 3 },
+        { id: 'pump', name: '循環ポンプ室', c0: 49, r0: 4, c1: 53, r1: 12 },
+        { id: 'drain', name: '排水路', c0: 39, r0: 1, c1: 52, r1: 3 },
         { id: 'control', name: '観察モニター室', c0: 40, r0: 40, c1: 48, r1: 44 },
         { id: 'hall', name: '受入ホール', c0: 4, r0: 44, c1: 8, r1: 48 },
         { id: 'lmA', name: '中央長廊下', c0: 6, r0: 30, c1: 22, r1: 30 },
@@ -195,7 +219,9 @@
         { col: 40, row: 30 }, { col: 48, row: 30 }, { col: 14, row: 34 }, { col: 12, row: 32 }, { col: 18, row: 36 },
         { col: 22, row: 46 }, { col: 20, row: 50 }, { col: 24, row: 44 }, { col: 34, row: 22 }, { col: 34, row: 30 },
         /* 拘束室（中央）の前室。房の奥までは届かない微光 */
-        { col: 27, row: 28 }, { col: 33, row: 28 }, { col: 30, row: 30 }
+        { col: 27, row: 28 }, { col: 33, row: 28 }, { col: 30, row: 30 },
+        /* P4.7: 保管庫・排水路・ポンプ室の非常灯 */
+        { col: 6, row: 2 }, { col: 45, row: 2 }, { col: 42, row: 1 }, { col: 51, row: 8 }
       ],
 
       /* P4改修: 仕掛け連鎖は docs/notes.md の実装仕様が正（order1=レバー/機械室 →
@@ -204,9 +230,17 @@
        * 隔壁前の前室（col34,row1のD/row2のXのすぐ南）へ、タイル自体を移設した
        * （ASCII grid の '#'⇄'G' 差し替えのみ・迷路のトポロジーは不変）。 */
       gimmicks: [
-        { col: 9, row: 16, id: 'a1_g1', order: 1, role: 'lever', label: '主電源レバー' },
-        { col: 44, row: 45, id: 'a1_g2', order: 2, role: 'terminal', label: '制御室端末' },
-        { col: 33, row: 3, id: 'a1_g3', order: 3, role: 'handle', label: '隔壁ハンドル' }
+        { col: 9, row: 16, id: 'a1_g1', order: 1, role: 'lever', label: '主電源盤' },
+        { col: 44, row: 45, id: 'a1_g2', order: 5, role: 'terminal', label: '制御室端末' },
+        { col: 33, row: 3, id: 'a1_g3', order: 7, role: 'handle', label: '隔壁ハンドル' },
+        /* P4.7 v2の追加工程（DESIGN.md §4「エリア1 脱出フロー v2」） */
+        { col: 2, row: 1, id: 'a1_g4', order: 2, role: 'fuse', label: '棚B-2 予備ヒューズ' },
+        { col: 12, row: 1, id: 'a1_g5', order: 2, role: 'wrench', label: '棚B-3 スパナ' },
+        { col: 20, row: 6, id: 'a1_g6', order: 4, role: 'corpse', label: '処置台の遺体' },
+        { col: 50, row: 12, id: 'a1_g7', order: 6, role: 'valve', valve: 0, label: 'バルブ1' },
+        { col: 51, row: 12, id: 'a1_g8', order: 6, role: 'valve', valve: 1, label: 'バルブ2' },
+        { col: 52, row: 12, id: 'a1_g9', order: 6, role: 'valve', valve: 2, label: 'バルブ3' },
+        { col: 51, row: 4, id: 'a1_g10', order: 6, role: 'grating', label: '排水路グレーチング' }
       ],
       /* P4改修: メモ本文(docs/notes.md memo1〜6)は「実位置に最も近い記述」で
        * 対応付ける（id の連番と memo 番号は一致しない）。a1_n4/a1_n5 は
@@ -221,7 +255,11 @@
         { col: 25, row: 27, id: 'a1_n3' },
         { col: 22, row: 19, id: 'a1_n4' },
         { col: 3, row: 46, id: 'a1_n5' },
-        { col: 49, row: 19, id: 'a1_n6' }
+        { col: 49, row: 19, id: 'a1_n6' },
+        /* P4.7: memo7=保管庫 / memo8=処置室 / memo9=循環ポンプ室（docs/notes.md v2節） */
+        { col: 12, row: 2, id: 'a1_n7' },
+        { col: 21, row: 3, id: 'a1_n8' },
+        { col: 53, row: 6, id: 'a1_n9' }
       ],
       lockers: [ { col: 2, row: 29 }, { col: 17, row: 21 }, { col: 25, row: 6 }, { col: 40, row: 19 }, { col: 22, row: 51 },
         { col: 27, row: 30 }, { col: 29, row: 30 } ],
@@ -231,14 +269,28 @@
       checkpoints: [
         { col: 10, row: 46, id: 'a1_cp1' },
         { col: 26, row: 28, id: 'a1_cp2' },
-        { col: 34, row: 10, id: 'a1_cp3' }
+        { col: 34, row: 10, id: 'a1_cp3' },
+        { col: 50, row: 8, id: 'a1_cp4' }
       ],
       noise: [
         { col: 16, row: 24, kind: 'glass' }, { col: 20, row: 13, kind: 'glass' }, { col: 24, row: 31, kind: 'water' },
         { col: 12, row: 44, kind: 'water' }, { col: 44, row: 22, kind: 'glass' }, { col: 10, row: 22, kind: 'water' },
         { col: 9, row: 22, kind: 'water' }, { col: 26, row: 30, kind: 'water' },
         { col: 46, row: 26, kind: 'glass' }, { col: 47, row: 26, kind: 'glass' }, { col: 18, row: 34, kind: 'water' },
-        { col: 38, row: 34, kind: 'glass' }, { col: 6, row: 34, kind: 'water' }
+        { col: 38, row: 34, kind: 'glass' }, { col: 6, row: 34, kind: 'water' },
+        /* P4.7 保管庫: 床一面が割れた検体瓶（走ると必ず音が出る音地盤） */
+        { col: 3, row: 1, kind: 'glass' }, { col: 3, row: 2, kind: 'glass' }, { col: 4, row: 1, kind: 'glass' }, { col: 4, row: 2, kind: 'glass' },
+        { col: 5, row: 1, kind: 'glass' }, { col: 5, row: 2, kind: 'glass' }, { col: 6, row: 1, kind: 'glass' }, { col: 6, row: 2, kind: 'glass' },
+        { col: 7, row: 1, kind: 'glass' }, { col: 7, row: 2, kind: 'glass' }, { col: 8, row: 1, kind: 'glass' }, { col: 8, row: 2, kind: 'glass' },
+        { col: 9, row: 1, kind: 'glass' }, { col: 9, row: 2, kind: 'glass' }, { col: 10, row: 1, kind: 'glass' }, { col: 10, row: 2, kind: 'glass' },
+        { col: 11, row: 1, kind: 'glass' }, { col: 11, row: 2, kind: 'glass' },
+        /* P4.7 循環ポンプ室・排水路: 水音の音地盤 */
+        { col: 50, row: 10, kind: 'water' }, { col: 52, row: 6, kind: 'water' },
+        { col: 52, row: 4, kind: 'water' }, { col: 52, row: 3, kind: 'water' }, { col: 52, row: 2, kind: 'water' }, { col: 51, row: 2, kind: 'water' },
+        { col: 50, row: 2, kind: 'water' }, { col: 49, row: 2, kind: 'water' }, { col: 48, row: 2, kind: 'water' }, { col: 47, row: 2, kind: 'water' },
+        { col: 46, row: 2, kind: 'water' }, { col: 45, row: 2, kind: 'water' }, { col: 44, row: 2, kind: 'water' }, { col: 43, row: 2, kind: 'water' },
+        { col: 43, row: 1, kind: 'water' }, { col: 42, row: 1, kind: 'water' }, { col: 41, row: 1, kind: 'water' }, { col: 40, row: 1, kind: 'water' },
+        { col: 39, row: 1, kind: 'water' }
       ],
       /* 拘束室（牢）＝マップ中央。房4室（1x2 の深房2＋1x1 の房2） */
       cells: [
@@ -250,6 +302,35 @@
       cellOpenings: [ { col: 32, row: 29 } ],
       door: { col: 34, row: 1, id: 'a1_exit_door' },
       exitPad: { col: 34, row: 2 },
+      /* P4.7 裏ルートの出口（隔壁の向こう側の竪坑）。正規ルートと違い隔壁の開放を要さない */
+      exitPad2: { col: 40, row: 2 },
+
+      /* P4.7 排水路（しゃがみ専用）。ここでは走れず、立ち上がれない（天井1.15m）。
+       * gate は「グレーチングを外す」まで runtime で通行止め（Progress._applyGates）。 */
+      crawl: [
+        { col: 52, row: 4 }, { col: 52, row: 3 }, { col: 52, row: 2 }, { col: 51, row: 2 },
+        { col: 50, row: 2 }, { col: 49, row: 2 }, { col: 48, row: 2 }, { col: 47, row: 2 },
+        { col: 46, row: 2 }, { col: 45, row: 2 }, { col: 44, row: 2 }, { col: 43, row: 2 },
+        { col: 43, row: 1 }, { col: 42, row: 1 }
+      ],
+      /* 施錠・封鎖（データ上は歩行可能。runtime の setBlocked で塞ぎ、FXメッシュで扉を描く） */
+      gates: [
+        { id: 'grate', col: 52, row: 4, kind: 'grate', requires: 'grating' },
+        { id: 'ctrlW', col: 39, row: 41, kind: 'door', requires: 'cardUsed' },
+        { id: 'ctrlE', col: 49, row: 43, kind: 'door', requires: 'cardUsed' },
+        { id: 'ctrlN', col: 45, row: 39, kind: 'door', requires: 'cardUsed' }
+      ],
+
+      /* 壁の掲示（docs/notes.md「掲示・銘板」の正文）。col,row は実体マス、dir は表示する側 */
+      signs: [
+        { col: 9, row: 15, dir: 'e', id: 'sg_breaker' },
+        { col: 4, row: 3, dir: 's', id: 'sg_store' },
+        { col: 39, row: 40, dir: 'w', id: 'sg_control' },
+        { col: 49, row: 42, dir: 'e', id: 'sg_control2' },
+        { col: 44, row: 39, dir: 'n', id: 'sg_control3' },
+        { col: 33, row: 1, dir: 's', id: 'sg_bulkhead' },
+        { col: 50, row: 4, dir: 's', id: 'sg_drain' }
+      ],
 
       decals: [
         { col: 20, row: 13, type: 'blood' }, { col: 16, row: 24, type: 'blood' }, { col: 35, row: 5, type: 'blood' },
@@ -273,7 +354,7 @@
         { col: 7, row: 7, type: 'incubator', dir: 'n' },
         { col: 9, row: 7, type: 'cabinet', dir: 'n' },
         /* --- 見せ場②「処置室」(labB): 手術灯の下の処置台 --- */
-        { col: 20, row: 6, type: 'opTable', dir: 'e' },
+        { col: 20, row: 6, type: 'opTable', dir: 'e', corpse: true },
         { col: 17, row: 5, type: 'cabinet', dir: 'n' },
         { col: 23, row: 5, type: 'cabinet', dir: 'n' },
         { col: 17, row: 7, type: 'benchIsland', dir: 's' },
@@ -388,7 +469,21 @@
         /* 拘束室: 前室の1本だけが切れかけで明滅する（房の奥は闇） */
         { col: 30, row: 28, state: 'flicker', gain: 1.15, reach: 1.20 },
         { col: 28, row: 28, state: 'on', gain: 0.48 },
-        { col: 32, row: 28, state: 'flicker', gain: 0.62 }
+        { col: 32, row: 28, state: 'flicker', gain: 0.62 },
+        /* --- P4.7 保管庫: 切れかけの1本だけ。硝子片が光を拾って足元がざらつく --- */
+        { col: 4, row: 1, state: 'flicker', gain: 1.05, reach: 1.15 },
+        { col: 7, row: 2, state: 'off' },
+        { col: 10, row: 1, state: 'on', gain: 0.62 },
+        /* --- P4.7 循環ポンプ室: 機械室らしく明るい2灯＋明滅1灯 --- */
+        { col: 50, row: 5, state: 'on', gain: 1.30, reach: 1.20 },
+        { col: 52, row: 8, state: 'flicker', gain: 1.10, reach: 1.10 },
+        { col: 50, row: 11, state: 'on', gain: 1.15, reach: 1.15 },
+        /* --- P4.7 排水路: 点検灯がぽつぽつ残るだけの管の中 --- */
+        { col: 52, row: 2, state: 'on', gain: 0.95, reach: 1.10 },
+        { col: 49, row: 2, state: 'flicker', gain: 0.90, reach: 1.05 },
+        { col: 46, row: 2, state: 'off' },
+        { col: 43, row: 2, state: 'on', gain: 0.90, reach: 1.05 },
+        { col: 40, row: 1, state: 'on', gain: 1.35, reach: 1.25 }
       ],
 
       /* 器具以外の光源（タンクの液体・手術灯・モニタ壁・卓上灯）。
@@ -434,7 +529,26 @@
         { col: 7, row: 12, dir: 'n', type: 'bioPlacard' },
         { col: 44, row: 8, dir: 'w', type: 'bioPlacard' },
         { col: 31, row: 28, dir: 'n', type: 'bioPlacard' },
-        { col: 42, row: 44, dir: 's', type: 'bioPlacard' }
+        { col: 42, row: 44, dir: 's', type: 'bioPlacard' },
+        /* --- P4.7 保管庫: 棚が両側に並ぶ倉庫 --- */
+        { col: 4, row: 1, dir: 'n', type: 'supplyShelf' },
+        { col: 6, row: 1, dir: 'n', type: 'supplyShelf' },
+        { col: 8, row: 1, dir: 'n', type: 'supplyShelf' },
+        { col: 10, row: 1, dir: 'n', type: 'supplyShelf' },
+        { col: 4, row: 2, dir: 's', type: 'supplyShelf' },
+        { col: 7, row: 2, dir: 's', type: 'supplyShelf' },
+        { col: 9, row: 2, dir: 's', type: 'supplyShelf' },
+        { col: 3, row: 2, dir: 'w', type: 'bioPlacard' },
+        /* --- P4.7 主電源盤: 3系統ブレーカーの配電箱 --- */
+        { col: 10, row: 15, dir: 'w', type: 'breakerPanel' },
+        /* --- P4.7 循環ポンプ室: バルブ3基＋配管群 --- */
+        { col: 50, row: 11, dir: 's', type: 'valveWheel' },
+        { col: 51, row: 11, dir: 's', type: 'valveWheel' },
+        { col: 52, row: 11, dir: 's', type: 'valveWheel' },
+        { col: 50, row: 6, dir: 'w', type: 'pipeBank' },
+        { col: 50, row: 9, dir: 'w', type: 'pipeBank' },
+        { col: 52, row: 8, dir: 'e', type: 'pipeBank' },
+        { col: 51, row: 5, dir: 'n', type: 'bioPlacard' }
       ],
 
       /* 天井付けの造作 */
