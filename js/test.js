@@ -1156,6 +1156,11 @@
   function walkCells(g, cells, maxFramesPerCell) {
     var dt = ESCAPE.FIXED_DT, p = g.player, frames = 0;
     var per = maxFramesPerCell || 240;
+    /* P4.10b: 台本歩行の間だけ音の罠を止める。ワイヤーは契約どおり「歩いても鳴る」ので、
+       長い経路を歩くロープ/地図のテストが罠→絶叫→捕獲に巻き込まれてしまう。
+       罠そのものの発火は js/traps.js の専用スイートが実経路で検証している。 */
+    var trapsWas = g.traps ? g.traps.enabled : null;
+    if (g.traps) g.traps.enabled = false;
     for (var i = 0; i < cells.length; i++) {
       var c = g.map.cellCenter(cells[i].col, cells[i].row);
       var guard = 0;
@@ -1169,6 +1174,7 @@
       }
     }
     g.input.moveX = 0; g.input.moveY = 0;
+    if (g.traps && trapsWas !== null) g.traps.enabled = trapsWas;
     return frames;
   }
   /** spawn から (col,row) への最短マス列（runtime の通行止めも含めた実際の歩行可能性で） */

@@ -1573,7 +1573,9 @@
       this._noiseKinds = Object.create(null);
       var list = (this.map.meta && this.map.meta.noise) || [];
       for (var i = 0; i < list.length; i++) {
-        this._noiseKinds[list[i].col + ',' + list[i].row] = (list[i].kind === 'glass') ? 'glass' : 'water';
+        var k = list[i].kind;
+        this._noiseKinds[list[i].col + ',' + list[i].row] =
+          (k === 'glass' || k === 'metal') ? k : 'water';
       }
     }
     return this._noiseKinds[col + ',' + row] || 'water';

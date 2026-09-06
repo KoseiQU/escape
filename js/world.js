@@ -1608,6 +1608,7 @@
     for (var i = 0; i < noise.length; i++) {
       var n = noise[i];
       if (n.kind === 'glass') quad(function () { return B.glass; }, n.col, n.row, 1.9, 0.016, [1.5, 1.5, 1.5]);
+      else if (n.kind === 'metal') this._metalPlate(B, n.col, n.row, shader, planeShader);
       else quad(function () { return B.water; }, n.col, n.row, 1.94, 0.012, [1.15, 1.15, 1.2]);
     }
     var cps = meta.checkpoints || [];
@@ -1629,6 +1630,24 @@
     /* 板 */
     var bd = meta.boards || [];
     for (var b = 0; b < bd.length; b++) this._board(B, bd[b].col, bd[b].row, shader);
+  };
+
+  /**
+   * 剥がれた金属板（音地盤 kind='metal'）。契約 §4 の踏む系の罠のひとつ。
+   * 床から 4cm だけ浮かせた板＝「踏むと鳴りそう」と見て分かる造形にする。
+   * 板の厚みぶんは段差になるが立体物ではない（プレイヤーの当たりは水平2Dのみ）。
+   */
+  World.prototype._metalPlate = function (B, col, row, shader, planeShader) {
+    if (this._bset) this._bset(col, row);
+    var T = this.map.tileSize;
+    setYBias(this.map.cellFloorY(col, row));
+    var cx = col * T + T / 2, cz = row * T + T / 2;
+    var sh = shader(col + ',' + row, [1.05, 1.06, 1.10]);
+    /* 大判1枚＋めくれた小片2枚。めくれは高さを変えて影の段を作る */
+    B.metal.box(cx, 0.022, cz, T * 0.86, 0.044, T * 0.72, 0.9, sh);
+    B.metal.box(cx - T * 0.30, 0.060, cz + T * 0.26, T * 0.26, 0.040, T * 0.20, 1.2, sh);
+    B.metal.box(cx + T * 0.28, 0.052, cz - T * 0.24, T * 0.22, 0.036, T * 0.24, 1.2, sh);
+    setYBias(0);
   };
 
   /** 歩行可能マスに隣接する壁の向きを返す */
@@ -2496,6 +2515,47 @@
     this.group.clear ? this.group.clear() : (this.group.children.length = 0);
     if (this.group.parent) this.group.parent.remove(this.group);
   };
+
+  /* ================================================================
+   * 外部モジュール向けの公開フック（P4.10b の罠が同じ焼き込み照明で小物を積む）。
+   * World 自身は使わない。造形の流儀（Builder / 接地AO / 区画の色味）を共有するための口。
+   * ============================================================== */
+
+  /**
+   * 小物用の shade 関数。col,row のマスから見える器具だけを積む＋接地AO＋区画の色味。
+   * aoBase は足元の暗さ（既定 0.42＝什器の流儀）。缶や床板のような**背の低い小物**は
+   * 全高が接地AOの帯に収まってしまい真っ黒に沈むので、0.85 前後を渡して浅くする。
+   */
+  World.prototype.propShader = function (col, row, tint, aoBase) {
+    var self = this, scratch = [0, 0, 0];
+    var owner = this._ownerOf(col, row);
+    var ti = tint || this._tintAt(col, row);
+    var base = this.map.cellFloorY(col, row);
+    var a0 = (aoBase === undefined) ? 0.42 : aoBase;
+    return function (x, y, z, nx, ny, nz) {
+      self._shade(x, y, z, nx === undefined ? 0 : nx, ny === undefined ? 1 : ny,
+        nz === undefined ? 0 : nz, owner, undefined, scratch);
+      var a = (y - base) / 0.95;
+      if (a > 1) a = 1; else if (a < 0) a = 0;
+      a = a0 + (1 - a0) * a;
+      return [scratch[0] * ti[0] * a, scratch[1] * ti[1] * a, scratch[2] * ti[2] * a];
+    };
+  };
+
+  /** 床デカール用（法線は上向き固定・接地AOなし） */
+  World.prototype.decalShader = function (col, row, tint) {
+    var self = this, scratch = [0, 0, 0];
+    var owner = this._ownerOf(col, row);
+    var ti = tint || [1, 1, 1];
+    return function (x, y, z) {
+      self._shade(x, y, z, 0, 1, 0, owner, undefined, scratch);
+      return [scratch[0] * ti[0], scratch[1] * ti[1], scratch[2] * ti[2]];
+    };
+  };
+
+  World.Builder = Builder;
+  World.buildMesh = buildMesh;
+  World.setYBias = setYBias;
 
   World.FOG_COLOR = FOG_COLOR;
   World.LIGHT_R = LIGHT_R;

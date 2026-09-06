@@ -178,6 +178,9 @@
     // 4) ステルス機構（音イベント発生・ロッカー・牢）→ 敵AI → 進行(P4) の順で更新する。
     //    プレイヤーの移動結果を見てから敵が知覚するため、同フレームの音も拾える。
     if (this.stealth) this.stealth.step(dt);
+    /* P4.10b: 音の罠（空き缶・軋む床板・ワイヤー・倒れかけの什器）。
+       Stealth（音地盤・センサー）と同じく「敵が知覚する前」に鳴らす＝同フレームで伝わる。 */
+    if (this.traps) this.traps.step(dt);
     if (this.ai) this.ai.step(dt);
     if (this.progress) this.progress.step(dt);
     /* P4.8: ロープの明滅と fog of war の記録（地図は「変わった時だけ」描き直す） */
@@ -278,6 +281,8 @@
     if (this.minimap) this.minimap.reset();
     if (this.headlight) this.headlight.reset();
     if (this.progress) this.progress.reset(); else this.progress = { flags: {} };
+    /* P4.10b: 罠の造形は world の焼き込み照明を読むので、world の作り直しより後に張り直す */
+    if (this.traps) this.traps.reset();
     if (ESCAPE.noise) ESCAPE.noise.reset();
     if (this.stealth) this.stealth.reset();
     if (this.ai) this.ai.reset();

@@ -810,6 +810,123 @@
         startStop(o, t0, 1.5);
       }
       return 1.5;
+    },
+
+    /* ---------------- P4.10b 音の罠（契約 §4「音の罠（5種以上）」） ---------------- */
+
+    /** 空き缶の散乱を蹴った: 薄い鉄が跳ねて転がる（高い金属の粒が連なる） */
+    canRattle: function (ctx, dest, t0, p) {
+      /* 既定値が1より大きいのは「罠が鳴った＝音イベントが起きた」と分かる強さにするため
+         （契約 §4。通常の足音 peak≈0.29 に対して明確に上に出す） */
+      var lv = (p.level === undefined) ? 2.2 : p.level;
+      var rnd = lcg(90311);
+      for (var i = 0; i < 9; i++) {
+        var t = t0 + Math.pow(i / 9, 1.35) * 0.72;
+        var f = 2100 + rnd() * 2600;
+        /* 缶の胴が鳴る（帯域の狭いノイズ＝金属の輪郭） */
+        var n = noiseSrc(ctx, 1.0 + rnd() * 0.7);
+        chain([n, bq(ctx, 'bandpass', f, 11), hit(ctx, t, (0.24 - i * 0.014) * lv, 0.002, 0.09 + rnd() * 0.07), dest]);
+        startStop(n, t, 0.20);
+        /* 床を叩く低い成分 */
+        var o = osc(ctx, 'triangle', 190 + rnd() * 160);
+        chain([o, bq(ctx, 'lowpass', 1200, 1.0), hit(ctx, t, 0.13 * lv, 0.002, 0.055), dest]);
+        startStop(o, t, 0.12);
+      }
+      /* 転がり続ける尾 */
+      var nr = noiseSrc(ctx, 0.9);
+      var fr = bq(ctx, 'bandpass', 3100, 3.2);
+      fr.frequency.setValueAtTime(3400, t0 + 0.10);
+      fr.frequency.exponentialRampToValueAtTime(1500, t0 + 0.95);
+      chain([nr, fr, hit(ctx, t0 + 0.10, 0.10 * lv, 0.020, 0.80), dest]);
+      startStop(nr, t0 + 0.10, 0.90);
+      return 1.05;
+    },
+
+    /** 軋む床板を踏んだ: 木が捻れる長い軋み（周波数が上下に揺れる） */
+    floorCreak: function (ctx, dest, t0, p) {
+      var lv = (p.level === undefined) ? 1.8 : p.level;
+      var rnd = lcg(48819);
+      for (var i = 0; i < 3; i++) {
+        var t = t0 + i * (0.13 + rnd() * 0.08);
+        var o = osc(ctx, 'sawtooth', 150 + rnd() * 90);
+        o.frequency.setValueAtTime(210 + rnd() * 120, t);
+        o.frequency.linearRampToValueAtTime(118 + rnd() * 60, t + 0.34);
+        var f = bq(ctx, 'bandpass', 620 + rnd() * 500, 5.5);
+        chain([o, f, swell(ctx, t, 0.17 * lv, 0.035, 0.10, 0.26), dest]);
+        startStop(o, t, 0.45);
+      }
+      /* 釘が抜ける乾いた擦れ */
+      var n = noiseSrc(ctx, 0.55);
+      chain([n, bq(ctx, 'bandpass', 1450, 3.0), hit(ctx, t0 + 0.02, 0.11 * lv, 0.010, 0.30), dest]);
+      startStop(n, t0 + 0.02, 0.40);
+      /* 板が床を叩く低音 */
+      var lo = osc(ctx, 'sine', 88);
+      lo.frequency.setValueAtTime(120, t0);
+      lo.frequency.exponentialRampToValueAtTime(62, t0 + 0.20);
+      chain([lo, hit(ctx, t0, 0.20 * lv, 0.006, 0.22), dest]);
+      startStop(lo, t0, 0.30);
+      return 0.85;
+    },
+
+    /** 吊るした缶のワイヤーに引っ掛かった: 缶が互いを叩く連打 */
+    wireCans: function (ctx, dest, t0, p) {
+      var lv = (p.level === undefined) ? 3.6 : p.level;
+      var rnd = lcg(11507);
+      /* 糸が張る（短い唸り） */
+      var w = osc(ctx, 'sawtooth', 320);
+      w.frequency.setValueAtTime(420, t0);
+      w.frequency.exponentialRampToValueAtTime(240, t0 + 0.12);
+      chain([w, bq(ctx, 'bandpass', 900, 6), hit(ctx, t0, 0.10 * lv, 0.004, 0.11), dest]);
+      startStop(w, t0, 0.20);
+      /* 缶どうしの打鍵。減衰しながら14回 */
+      for (var i = 0; i < 14; i++) {
+        var t = t0 + 0.03 + Math.pow(i / 14, 1.15) * 1.05;
+        var g = (0.34 - i * 0.016) * lv;
+        if (g < 0.05) g = 0.05;
+        var f = 2400 + rnd() * 3000;
+        var n = noiseSrc(ctx, 1.1 + rnd() * 0.6);
+        chain([n, bq(ctx, 'bandpass', f, 14), hit(ctx, t, g, 0.0015, 0.11 + rnd() * 0.08), dest]);
+        startStop(n, t, 0.16);
+        var o = osc(ctx, 'square', 520 + rnd() * 420);
+        chain([o, bq(ctx, 'bandpass', 1600, 4), hit(ctx, t, g * 0.42, 0.0015, 0.045), dest]);
+        startStop(o, t, 0.10);
+      }
+      return 1.30;
+    },
+
+    /** 倒れかけの棚・ロッカーが倒れた: 施設に響く倒壊 */
+    furnitureCrash: function (ctx, dest, t0, p) {
+      var lv = (p.level === undefined) ? 1.3 : p.level;
+      var rnd = lcg(70213);
+      /* 倒れ始めの軋み */
+      var c = osc(ctx, 'sawtooth', 190);
+      c.frequency.setValueAtTime(240, t0);
+      c.frequency.linearRampToValueAtTime(120, t0 + 0.22);
+      chain([c, bq(ctx, 'bandpass', 700, 5), swell(ctx, t0, 0.14 * lv, 0.03, 0.08, 0.14), dest]);
+      startStop(c, t0, 0.30);
+      /* 着地の衝撃（低音） */
+      var b = osc(ctx, 'sine', 74);
+      b.frequency.setValueAtTime(132, t0 + 0.22);
+      b.frequency.exponentialRampToValueAtTime(46, t0 + 0.62);
+      chain([b, hit(ctx, t0 + 0.22, 0.58 * lv, 0.004, 0.46), dest]);
+      startStop(b, t0 + 0.22, 0.58);
+      var bn = noiseSrc(ctx, 0.45);
+      chain([bn, bq(ctx, 'lowpass', 420, 0.9), hit(ctx, t0 + 0.22, 0.26 * lv, 0.004, 0.40), dest]);
+      startStop(bn, t0 + 0.22, 0.53);
+      /* 鉄板が跳ねる・中身がばら撒かれる */
+      for (var i = 0; i < 10; i++) {
+        var t = t0 + 0.24 + Math.pow(i / 10, 1.4) * 1.10;
+        var g = (0.26 - i * 0.020) * lv;
+        if (g < 0.025) g = 0.025;
+        var n = noiseSrc(ctx, 0.9 + rnd() * 0.8);
+        chain([n, bq(ctx, 'bandpass', 1100 + rnd() * 3200, 5), hit(ctx, t, g, 0.002, 0.10 + rnd() * 0.10), dest]);
+        startStop(n, t, 0.24);
+      }
+      /* 響きの尾（施設全体に届く） */
+      var tail = noiseSrc(ctx, 0.5);
+      chain([tail, bq(ctx, 'bandpass', 520, 1.2), hit(ctx, t0 + 0.26, 0.16 * lv, 0.030, 1.05), dest]);
+      startStop(tail, t0 + 0.26, 1.23);
+      return 1.60;
     }
   };
 
@@ -939,7 +1056,12 @@
     /* P4.6 捕獲シネマティック */
     { key: 'cellDoor',    name: 'cellDoor', params: {}, sec: 2.4 },
     { key: 'cellLock',    name: 'cellLock', params: {}, sec: 1.6 },
-    { key: 'bite',        name: 'bite', params: {}, sec: 2.0 }
+    { key: 'bite',        name: 'bite', params: {}, sec: 2.0 },
+    /* P4.10b 音の罠（種類ごとの罠音） */
+    { key: 'trap_can',    name: 'canRattle', params: {}, sec: 1.4 },
+    { key: 'trap_creak',  name: 'floorCreak', params: {}, sec: 1.2 },
+    { key: 'trap_wire',   name: 'wireCans', params: {}, sec: 1.6 },
+    { key: 'trap_crash',  name: 'furnitureCrash', params: {}, sec: 2.0 }
   ];
 
   var renderCache = Object.create(null);
@@ -1375,6 +1497,22 @@
       case 'lockerIn': this.play('lockerDoor', { gain: 0.8, open: false }); break;
       case 'lockerOut': this.play('lockerDoor', { gain: 0.8, open: true }); break;
       case 'boardTopple': this.play('boardCrash', { gain: 0.95 }); break;
+      /* P4.10b 音の罠（契約 §4）。位置つきで鳴らす＝方向が分かる立体音 */
+      case 'trapCan':
+        this.play('canRattle', { priority: 1, x: p.x, z: p.z, gain: 1.0, maxDist: 34 });
+        break;
+      case 'trapCreak':
+        this.play('floorCreak', { priority: 1, x: p.x, z: p.z, gain: 0.95, maxDist: 26 });
+        break;
+      case 'trapWire':
+        this.play('wireCans', { priority: 1, x: p.x, z: p.z, gain: 1.0, maxDist: 38 });
+        break;
+      case 'trapShelf':
+        this.play('furnitureCrash', { priority: 1, x: p.x, z: p.z, gain: 0.95, maxDist: 46 });
+        break;
+      case 'trapLocker':
+        this.play('furnitureCrash', { priority: 1, x: p.x, z: p.z, gain: 1.05, maxDist: 50 });
+        break;
       case 'noteOpen': this.play('paper', { gain: 0.9 }); break;
       case 'noteClose': this.play('paper', { gain: 0.6 }); break;
       case 'checkpoint': this.play('checkpoint', { gain: 0.7 }); break;
@@ -1487,7 +1625,9 @@
         this._noiseKind = Object.create(null);
         var list = (map.meta && map.meta.noise) || [];
         for (var i = 0; i < list.length; i++) {
-          this._noiseKind[list[i].col + ',' + list[i].row] = (list[i].kind === 'glass') ? 'glass' : 'water';
+          var nk = list[i].kind;
+          this._noiseKind[list[i].col + ',' + list[i].row] =
+            (nk === 'glass' || nk === 'metal') ? nk : 'water';
         }
       }
       return this._noiseKind[col + ',' + row] || 'water';
