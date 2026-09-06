@@ -116,7 +116,9 @@
     taut: 'ロープが張った —— 来た道を戻れ',
     knot: '落ちたロープの結び目へ戻る',
     /* P4.9: 張力インジケータが赤に入った瞬間の一時表示（docs/notes.md「目的表示（P4.9追加）」） */
-    ropeShort: 'ロープが足りない —— 戻って巻き戻せ'
+    ropeShort: 'ロープが足りない —— 戻って巻き戻せ',
+    /* 2026-09-04: 赤の理由が「遠回り率超過」の時はこちら（docs/notes.md 目的表示 P4.9追加・改訂） */
+    ropeDetour: '遠回りしすぎだ —— 戻って巻き戻せ'
   };
 
   /* P4.9 HUD文言（docs/notes.md「HUD文言（P4.9追加）」）。{M} は余裕(m)の整数 */
@@ -457,7 +459,10 @@
     if (rope && !rope.isAttached()) return OBJECTIVE.knot;
     if (rope && rope.taut) return OBJECTIVE.taut;
     /* P4.9: 張力インジケータが赤に入った直後は目的表示を差し替える */
-    if (rope && rope.redT > 0) return OBJECTIVE.ropeShort;
+    if (rope && rope.redT > 0) {
+      var ten = rope.tension ? rope.tension() : null;
+      return (ten && ten.lowSlack) ? OBJECTIVE.ropeShort : OBJECTIVE.ropeDetour;
+    }
     /* 鍵を得たら以後はずっとこの行（クリア画面が出た後も戻さない） */
     if (this.gimmick.key) return OBJECTIVE.haveKey;
     return OBJECTIVE.findKey;
@@ -468,7 +473,7 @@
     if (!el) return;
     var s = this.objective();
     if (el.textContent !== s) el.textContent = s;
-    var taut = (s === OBJECTIVE.taut || s === OBJECTIVE.ropeShort);
+    var taut = (s === OBJECTIVE.taut || s === OBJECTIVE.ropeShort || s === OBJECTIVE.ropeDetour);
     if (el._taut !== taut) { el.classList.toggle('taut', taut); el._taut = taut; }
     this._objText = s;
   };
