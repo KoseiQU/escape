@@ -872,6 +872,10 @@
     e.poseT = 0; e.transTime = 0; e.state = 'walk';
     this.form = 'stand';
     this.lastSeen = null;
+    /* P4.10: 捕獲前に受け取った音の予約は捨てる（復帰した途端に古い音源へ走り出さない） */
+    this.pending = null;
+    this._shriekT = 0;
+    this.outside = false;
     this.toPatrol();
   };
 
