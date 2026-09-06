@@ -27,7 +27,8 @@
   var ROPE_TUNING = {
     alpha: 0.35,             /* ロープの余裕率 L = 最短 × (1+α)。P4.9 で 0.30→0.35 */
     greenRatio: 1.05,        /* 緑: 使用長 ≤ スタート→現在地の最短 × これ */
-    yellowRatio: 1.30,       /* 黄: 遠回り中（≤ 最短 × これ） */
+    yellowRatio: 1.35,       /* 黄: 遠回り中（≤ 最短 × これ）。超えたら赤 */
+    redSlackRatio: 0.08,     /* 赤: 余裕が L × これ を下回ったら（遠回り率に関わらず） */
     tensionInterval: 0.50,   /* 張力インジケータの再計算間隔(s)。マス変化時は即時 */
     redWarnDur: 3.20,        /* 赤に入った時の目的表示の一時差し替え(s) */
     knotPickRange: 2.30,     /* 結び目に「調べる」が届く距離(m) */
@@ -130,11 +131,13 @@
   };
 
   /* ---------------- 張力インジケータ（DESIGN.md §4「エリア1 新マップ Z4」） ----------------
-   * 緑 = 最短経路上（使用長 ≤ スタート→現在地の最短 × 1.05）
-   * 黄 = 遠回り中（≤ × 1.30。それ以上でも「届く」うちは黄のまま）
-   * 赤 = この先届かない（残りロープ < 現在地→目標の最短距離）
-   *      目標は鍵未取得なら金庫、取得後は北の隔壁（exitPad）。
-   * 距離場は静的なので BFS はリセット時に3枚だけ焼き、以後は O(1) 参照。
+   * 2026-09-04 改訂。旧「赤 = 残りロープ < 現在地→目標の最短」は鍵取得直後に必ず赤になる
+   * 欠陥があり失効。赤は「戻って巻き戻す必要がある」の意味に統一した。
+   *   緑 = 最短経路上   （使用長 ≤ スタート→現在地の最短 × 1.05）
+   *   黄 = 遠回り中     （≤ 最短 × 1.35）
+   *   赤 = 大きな遠回り （> 最短 × 1.35）または 余裕 < L × 0.08
+   * 距離場（スタート／鍵／出口）は静的なので BFS はリセット時に3枚だけ焼き、以後は O(1) 参照。
+   * 鍵・出口までの距離は状態判定には使わない（情報表示と機械テスト用に残す）。
    * 状態の再評価はマスが変わった時と 0.5 秒ごと（契約の「間引き計算」）。 */
 
   /** 任意のマスからの距離場（マス数。未到達は -1） */
@@ -212,15 +215,17 @@
     var need = (needTiles >= 0) ? needTiles * T : 0;
     var bestTiles = this._dFromSpawn ? this._dFromSpawn[idx] : -1;
     var best = (bestTiles >= 0) ? bestTiles * T : 0;
+    var ratio = (best > 1e-6) ? (this.used / best) : 1;
+    var lowSlack = slack < this.L * this.T.redSlackRatio;
     var state;
     if (!this.attached) state = 'loose';
-    else if (needTiles >= 0 && slack < need) state = 'red';
-    else if (this.used <= best * this.T.greenRatio + 1e-6) state = 'green';
+    else if (ratio > this.T.yellowRatio + 1e-9 || lowSlack) state = 'red';
+    else if (ratio <= this.T.greenRatio + 1e-9) state = 'green';
     else state = 'yellow';
     return {
       state: state, goal: goal, slack: slack, used: this.used, L: this.L,
       need: need, needTiles: needTiles, best: best, bestTiles: bestTiles,
-      ratio: (best > 1e-6) ? (this.used / best) : 1
+      ratio: ratio, lowSlack: lowSlack
     };
   };
 

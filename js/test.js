@@ -830,7 +830,11 @@
 
     var noiseCell = null, list = g.map.meta.noise || [];
     for (var i = 0; i < list.length && !noiseCell; i++) {
+      if (ai.territory && (list[i].row < ai.territory.r0 || list[i].row > ai.territory.r1)) continue;
       if (approachTo(g.map, list[i].col, list[i].row)) noiseCell = list[i];
+    }
+    for (var i2 = 0; i2 < list.length && !noiseCell; i2++) {
+      if (approachTo(g.map, list[i2].col, list[i2].row)) noiseCell = list[i2];
     }
     if (t.ok(!!noiseCell, '音地盤の検証に使えるマスがある')) {
       var r1 = runOver(noiseCell.col, noiseCell.row, true);
@@ -846,9 +850,14 @@
     }
 
     /* センサー: 走って通ると警報 / 歩けば鳴らない */
+    /* P4.10: 敵が複数いるので、検証する個体（g.ai）自身の縄張りの中のセンサーを使う */
     var sensors = g.map.meta.sensors || [], sc = null;
     for (var j = 0; j < sensors.length && !sc; j++) {
+      if (ai.territory && (sensors[j].row < ai.territory.r0 || sensors[j].row > ai.territory.r1)) continue;
       if (approachTo(g.map, sensors[j].col, sensors[j].row)) sc = sensors[j];
+    }
+    for (var j2 = 0; j2 < sensors.length && !sc; j2++) {
+      if (approachTo(g.map, sensors[j2].col, sensors[j2].row)) sc = sensors[j2];
     }
     if (t.ok(!!sc, 'センサーの検証に使えるマスがある')) {
       t.ok(g.map.tileAt(sc.col, sc.row) === TILE.SENSOR, 'センサー: タイル種別が SENSOR');
@@ -3336,76 +3345,88 @@
     t.ok(cbad.length === 0, 'P4.9: 天井付け造作の参照整合', cbad.join(' / '));
   }
 
-  /** ロープ張力インジケータ（緑/黄/赤）と赤の警告 */
+  /** ロープ張力インジケータ（緑/黄/赤）と赤の警告（DESIGN.md §4・2026-09-04改訂） */
   function testP49RopeTension(t, g) {
     g.reset();
     localStorage.removeItem(SAVE_KEY);
     var rope = g.rope, meta = g.map.meta, T = ESCAPE.ROPE_TUNING;
     t.near(T.alpha, 0.35, 1e-9, 'P4.9: α = 0.35（契約）', T.alpha);
     t.near(T.greenRatio, 1.05, 1e-9, 'P4.9: 緑の判定は最短×1.05（契約）', T.greenRatio);
-    t.near(T.yellowRatio, 1.30, 1e-9, 'P4.9: 黄の判定は最短×1.30（契約）', T.yellowRatio);
+    t.near(T.yellowRatio, 1.35, 1e-9, 'P4.9: 黄の判定は最短×1.35（契約・改訂）', T.yellowRatio);
+    t.near(T.redSlackRatio, 0.08, 1e-9, 'P4.9: 赤は余裕が L の8%未満でも立つ（契約・改訂）', T.redSlackRatio);
     t.ok(T.tensionInterval <= 0.5 + 1e-9, 'P4.9: 張力の再計算は0.5秒以下の間引き', T.tensionInterval);
 
     /* スタート地点は必ず緑（使用長0＝最短） */
     var t0 = rope.computeTension();
     t.ok(t0.state === 'green', 'P4.9 緑: スタート地点は最短経路上', t0.state);
-    t.ok(t0.goal === 'key', 'P4.9: 鍵未取得なら目標は金庫', t0.goal);
 
-    /* 緑: 最短経路をそのまま進む */
+    /* 最短経路上を実際に歩いても緑のまま */
     var route = routeTo(g, meta.spawn.col, meta.spawn.row, meta.spawn.col, meta.spawn.row - 6);
-    if (route && route.length) {
-      walkCells(g, route);
-      var tg = rope.computeTension();
-      t.ok(tg.state === 'green', 'P4.9 緑: 最短経路上を進んでいる間は緑',
-        tg.state + ' used=' + tg.used.toFixed(0) + ' best=' + tg.best.toFixed(0));
-    }
+    if (route && route.length) walkCells(g, route);
+    var tg = rope.computeTension();
+    t.ok(tg.best > 0, 'P4.9: 最短距離が積み上がっている', tg.best.toFixed(0) + 'm');
+    t.ok(tg.state === 'green', 'P4.9 緑: 最短経路上を進んでいる間は緑',
+      tg.state + ' ratio=' + tg.ratio.toFixed(3));
 
-    /* 黄: 同じ場所へ遠回りして戻ると使用長が最短を超える */
-    var here = { col: g.player.col(), row: g.player.row() };
-    var det = routeTo(g, here.col, here.row, meta.spawn.col, meta.spawn.row);
-    if (det) walkCells(g, det);
-    /* いったんスタートへ戻して used を 0 にし、遠回りの往復を作る */
-    var loop = routeTo(g, meta.spawn.col, meta.spawn.row, here.col, here.row);
-    if (loop) {
-      /* 別の道を通って同じマスへ: 一度離れてから戻る */
-      var away = routeTo(g, meta.spawn.col, meta.spawn.row, meta.spawn.col + 6, meta.spawn.row);
-      if (away) walkCells(g, away);
-      var back = routeTo(g, g.player.col(), g.player.row(), here.col, here.row);
-      if (back) walkCells(g, back);
-    }
+    /* 遠回り率だけを動かして 緑→黄→赤 の閾値を検証する（余裕は潤沢なまま） */
+    var usedSave = rope.used, Lsave = rope.L;
+    var best = tg.best;
+    rope.used = best * 1.02; rope._tension = null;
+    t.ok(rope.computeTension().state === 'green', 'P4.9 緑: 最短×1.02 は緑');
+    rope.used = best * 1.20; rope._tension = null;
     var ty = rope.computeTension();
-    t.ok(ty.used >= ty.best - 1e-6, 'P4.9: 使用長は常に最短以上', ty.used + ' >= ' + ty.best);
-    t.ok(ty.state === 'yellow' || ty.state === 'green',
-      'P4.9 黄: 遠回りすると黄（最短のままなら緑）',
-      ty.state + ' ratio=' + ty.ratio.toFixed(2));
-
-    /* 赤: 鍵を取った直後は「残りロープ < 出口までの最短」になり得る＝警告が出る */
-    g.reset();
-    localStorage.removeItem(SAVE_KEY);
-    rope = g.rope;
-    var Lsave = rope.L;
-    rope.L = 30;                                    /* 余裕を絞って必ず赤にする */
-    rope._tension = null;
+    t.ok(ty.state === 'yellow', 'P4.9 黄: 最短×1.20 は黄（遠回り中）', ty.state);
+    rope.used = best * 1.34; rope._tension = null;
+    t.ok(rope.computeTension().state === 'yellow', 'P4.9 黄: 最短×1.34 まで黄');
+    rope.used = best * 1.40; rope._tension = null;
     var tr = rope.computeTension();
-    t.ok(tr.state === 'red', 'P4.9 赤: 残りロープ < 目標までの最短 で赤',
-      tr.state + ' slack=' + tr.slack.toFixed(0) + ' need=' + tr.need.toFixed(0));
-    /* 赤に入った瞬間に警告（音＋目的表示の一時差し替え）が出る */
-    var warns0 = rope.redWarns;
+    t.ok(tr.state === 'red', 'P4.9 赤: 最短×1.40 は赤（大きな遠回り）', tr.state);
+    t.ok(tr.lowSlack === false, 'P4.9 赤: この赤は「余裕不足」ではなく「遠回り」で立っている');
+
+    /* 余裕が L の8%を切っても赤（遠回り率が小さくても） */
+    rope.used = best * 1.02;
+    rope.L = rope.used * 1.05;                       /* 余裕 ≒ L の 4.8% */
     rope._tension = null;
-    rope._tenCell = null;
+    var tr2 = rope.computeTension();
+    t.ok(tr2.state === 'red', 'P4.9 赤: 余裕が L の8%未満なら赤', tr2.state);
+    t.ok(tr2.lowSlack === true, 'P4.9 赤: 余裕不足の赤として記録される');
+
+    /* 赤に入った瞬間の警告は1回だけ／赤の間は繰り返さない／解除できる */
+    rope.redT = 0;
+    var warns0 = rope.redWarns;
+    rope._tension = null; rope._tenCell = null;
     rope._tickTension(0.6);
     t.ok(rope.redWarns === warns0 + 1, 'P4.9 赤: 赤に入った瞬間に警告が1回だけ出る', rope.redWarns);
     t.ok(rope.redT > 0, 'P4.9 赤: 目的表示の一時差し替えが立つ', rope.redT.toFixed(2));
     t.ok(g.progress.objective() === ESCAPE.PROGRESS_OBJECTIVE.ropeShort,
       'P4.9 赤: 目的表示が「ロープが足りない —— 戻って巻き戻せ」（正文）', g.progress.objective());
-    /* 連続で赤のままなら警告は増えない */
     rope._tickTension(0.6);
     t.ok(rope.redWarns === warns0 + 1, 'P4.9 赤: 赤のままなら警告は繰り返さない', rope.redWarns);
-    /* 余裕を戻すと赤が解ける */
-    rope.L = Lsave;
+    /* 巻き戻し相当（使用長を戻す）で赤が解ける */
+    rope.L = Lsave; rope.used = usedSave;
     rope._tension = null;
     rope._tickTension(0.6);
-    t.ok(rope.tension().state !== 'red', 'P4.9: 余裕が戻れば赤が解ける', rope.tension().state);
+    t.ok(rope.tension().state !== 'red', 'P4.9: 巻き戻して最短に近づけば赤が解ける', rope.tension().state);
+
+    /* 鍵を取っただけでは赤にならない（改訂の主眼。旧定義はここで必ず赤になっていた） */
+    g.reset();
+    localStorage.removeItem(SAVE_KEY);
+    rope = g.rope;
+    var safe = null, gl = g.map.meta.gimmicks || [];
+    for (var gi = 0; gi < gl.length; gi++) if (gl[gi].role === 'safe') safe = gl[gi];
+    var ks = rope._keyStand();
+    var toKey = routeTo(g, meta.spawn.col, meta.spawn.row, ks.col, ks.row);
+    if (t.ok(!!toKey, 'P4.9: 金庫の前まで実経路がある')) {
+      walkCells(g, toKey);
+      g.progress.gimmick.key = true;
+      rope._tension = null; rope._tenCell = null;
+      rope._tickTension(0.6);
+      var tk = rope.computeTension();
+      t.ok(tk.state !== 'red',
+        'P4.9: 最短で鍵まで来ただけでは赤にならない（旧定義の欠陥を作り込まない）',
+        tk.state + ' ratio=' + tk.ratio.toFixed(3) + ' slack=' + tk.slack.toFixed(0) +
+        ' / L*0.08=' + (tk.L * T.redSlackRatio).toFixed(0));
+    }
 
     /* HUD: 文言と色クラス */
     g.stepFrame(ESCAPE.FIXED_DT);
