@@ -2070,6 +2070,27 @@
         return ai.info();
       },
       trap: function (col, row, radius) { return ESCAPE.noise.emitCell(col, row, radius || 24, 'trap'); },
+      /** 任意のマップに対する縄張り・巡回路の解決結果（マップ差し替えの事前確認用） */
+      planFor: function (map, n) {
+        var m = map || ESCAPE.game.map;
+        var ts = resolveTerritories(m, n || ENEMY_TUNING.enemyCount);
+        var plans = planRoutes(m, ts, 20260904);
+        var out = [];
+        for (var i = 0; i < plans.length; i++) {
+          var pl = plans[i], bad = 0;
+          for (var k = 0; k < pl.route.length; k++) {
+            if (!pl.territory.contains(pl.route[k].col, pl.route[k].row)) bad++;
+          }
+          out.push({
+            territory: pl.territory.id + ':' + pl.territory.r0 + '-' + pl.territory.r1,
+            zones: pl.territory.zones.join(''),
+            spawn: pl.spawn.col + ',' + pl.spawn.row,
+            spawnInside: pl.territory.contains(pl.spawn.col, pl.spawn.row),
+            route: pl.route.length, outsideRoutePoints: bad
+          });
+        }
+        return out;
+      },
       interact: function () { return ESCAPE.game.stealth.onInteract(); },
       cine: function () { return ESCAPE.game.cinematic ? ESCAPE.game.cinematic.info() : null; },
       reset: function () { ESCAPE.game.ai.reset(); ESCAPE.game.stealth.reset(); }
