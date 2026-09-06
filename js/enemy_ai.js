@@ -1669,12 +1669,12 @@
        ロープの軌跡・結び目・錨（rope が持つ）／鍵の取得（progress が持つ）／
        読んだ区画名（minimap.zones）は残る＝復帰後は自分のロープだけが頼りになる。 */
     if (this.game.minimap && this.game.minimap.onCapture) this.game.minimap.onCapture();
-    /* 消した状態を保存する（次のセーブ機会まで古い踏破が残り、再読み込みで
-       地図が戻ってしまうのを防ぐ）。鍵・読んだメモ・ロープは save の中で保持される。 */
-    if (this.game.progress && this.game.progress.save) this.game.progress.save();
     /* P4.8（契約 §4「捕獲時」）: 掴まれた瞬間にロープ端が床に落ちて結び目になる。
        復帰後は自分の敷いたロープを辿って結び目まで戻り「拾って結ぶ」で再接続する。 */
     if (this.game.rope) this.game.rope.dropKnot();
+    /* 消した地図と落ちた結び目をこの時点で保存する（次のセーブ機会まで古い踏破が
+       残り、再読み込みで地図が戻ってしまうのを防ぐ）。鍵・読んだメモは save が保持する。 */
+    if (this.game.progress && this.game.progress.save) this.game.progress.save();
     /* 契約 §4「捕獲時に耳元の音＋暗転」 */
     sfx('capture', {});
     /* P4.6: 捕獲シネマティック（毎回）。3回目は「食われる」に差し替わる。
@@ -2469,6 +2469,10 @@
 
   function testCaptureWipesMap(t, g) {
     g.reset();
+    /* 捕獲は「消した地図」を保存する。検証で作ったセーブは最後に片付ける */
+    var keysBefore = {};
+    try { for (var kk = 0; kk < global.localStorage.length; kk++) keysBefore[global.localStorage.key(kk)] = 1; }
+    catch (e0) { /* private モード等は無視 */ }
     var mm = g.minimap, rope = g.rope, st = g.stealth;
     if (!t.ok(!!mm, 'P4.10 地図リセット: ミニマップが組み込まれている')) { g.reset(); return; }
     var sp = g.map.meta.spawn;
@@ -2529,6 +2533,14 @@
       'P4.10 地図リセット: 2回目の捕獲でも消える（毎回）', mm.exploredCount + ' / wipes' + mm.wipes);
     simUntil(g, function () { return st.jail.phase === 'none'; },
       Math.ceil(g.cinematic.totalDur('jail') / ESCAPE.FIXED_DT) + 600);
+    try {
+      var kill = [];
+      for (var k2 = 0; k2 < global.localStorage.length; k2++) {
+        var key = global.localStorage.key(k2);
+        if (!keysBefore[key]) kill.push(key);
+      }
+      for (var k3 = 0; k3 < kill.length; k3++) global.localStorage.removeItem(kill[k3]);
+    } catch (e1) { /* 無視 */ }
     g.reset();
   }
 
