@@ -46,6 +46,17 @@
     white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
   }
   #objective.taut { color:#f2c9c9; text-shadow:0 0 12px rgba(200,70,70,.7), 0 1px 5px rgba(0,0,0,.95); }
+  /* --- P4.9: ロープ張力インジケータ（正文 docs/notes.md「HUD文言（P4.9追加）」）。
+         ラベルは出さず色だけで状態を示す: 緑=最短経路上 / 黄=遠回り / 赤=この先届かない --- */
+  #rope-hud {
+    position:absolute; left:50%; top:34px; transform:translateX(-50%);
+    font-size:12px; letter-spacing:.10em; white-space:nowrap;
+    color:rgba(196,214,196,.92); text-shadow:0 1px 5px rgba(0,0,0,.95);
+  }
+  #rope-hud.green { color:#a8e6b0; text-shadow:0 0 10px rgba(90,210,120,.45), 0 1px 5px rgba(0,0,0,.95); }
+  #rope-hud.yellow { color:#efd98a; text-shadow:0 0 10px rgba(230,190,70,.45), 0 1px 5px rgba(0,0,0,.95); }
+  #rope-hud.red { color:#f28a8a; text-shadow:0 0 12px rgba(220,60,60,.65), 0 1px 5px rgba(0,0,0,.95); }
+  #rope-hud.loose { color:rgba(170,180,190,.72); }
   /* --- P4.8: fog of war ミニマップ（右上・画面幅22%・半透明。タップで全画面） --- */
   #minimap-wrap {
     position:absolute; right:12px; top:10px; z-index:20; pointer-events:auto;
@@ -212,6 +223,7 @@
     <div id="debug"></div>
     <div id="status"></div>
     <div id="objective"></div>
+    <div id="rope-hud"></div>
     <div id="prompt"></div>
     <div id="hint">WASD 移動 / Shift 走る / Ctrl しゃがむ / E 調べる / 画面クリックで視点</div>
     <div id="stick-base"><div id="stick-knob"></div></div>

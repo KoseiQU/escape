@@ -38,7 +38,9 @@
     this.scene.background = new THREE.Color(ESCAPE.World.FOG_COLOR);
     this.scene.fog = new THREE.Fog(ESCAPE.World.FOG_COLOR, 1.6, 15.5);
 
-    this.camera = new THREE.PerspectiveCamera(BASE_FOV, 1, 0.05, 300);
+    /* far は霧の到達（15.5m）の少し先で切る。それより遠くは完全に霧色で見えないので、
+     * 遠クリップを詰めるほど world のチャンク（P4.9）が視錐台カリングで落ちる。 */
+    this.camera = new THREE.PerspectiveCamera(BASE_FOV, 1, 0.05, 30);
     this.camera.rotation.order = 'YXZ';
 
     this.map = ESCAPE.Maps.load(this.mapId);

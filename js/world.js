@@ -33,13 +33,16 @@
     { r: 1.00, g: 0.96, b: 0.86 }          /* 暖色に劣化した管 */
   ];
   var EMERG_COLOR = { r: 1.00, g: 0.20, b: 0.14 };
-  var EMERG_R = 8.0;                       /* 非常灯の到達半径(m) */
-  var EMERG_GAIN = 0.32;                   /* 非常灯の強さ（闇だまりで方向だけ分かる程度） */
+  var EMERG_R = 8.6;                       /* 非常灯の到達半径(m) */
+  var EMERG_GAIN = 0.52;                   /* 非常灯の強さ（P4.9: 拘束区画の赤が主役になる強さ） */
 
   /* 灯の間引き。通路は LAMP_SPACING マス(=6m)に1本 */
   var LAMP_SPACING = 3;
-  var OFF_LEVEL = 0.50;                    /* 帯状ノイズがこの値未満なら消灯＝消灯帯 */
-  var FLICKER_LEVEL = 0.565;                /* 点灯器具の20%以上が明滅になるよう広めに取る */
+  /* P4.9: 80x80 のブレイド迷路は1マス幅の通路と角が多く、同じ設定だと光がほとんど届かない。
+   * 消灯帯を薄くし、到達半径と環境光を上げて契約 §3 の輝度ゲート（暗部35〜65%）に合わせた。
+   * 数値は LIGHT_TUNING に集約する（P7 で再調整する前提）。 */
+  var OFF_LEVEL = 0.30;                    /* 帯状ノイズがこの値未満なら消灯＝消灯帯 */
+  var FLICKER_LEVEL = 0.47;                 /* 点灯器具の20%以上が明滅になるよう広めに取る */
   var BLACK_MARGIN = 2;                     /* 漆黒区画の周囲何マスまで消灯させるか */
   var FLICKER_GROUPS = 8;                   /* 明滅は8グループに束ねて描画コールを抑える
                                                （4パターン x 2位相。近接する器具は別グループ） */
@@ -53,28 +56,76 @@
   var AO_WALL_BASE = 0.26;                 /* 平坦な壁面での遮蔽率＝ここを基準に隅だけ落とす */
   var AO_VERT = 0.62;                      /* 壁の床際・天井際の落とし幅(m) */
 
-  /* 区画ごとの床・壁の色味（似た交差点が続かないよう通路ゾーンも色を変える） */
+  /* ================================================================
+   * 区画（帯）ごとの景観（DESIGN.md §4「エリア1 新マップ Z4」＞区画ごとの景観差）
+   *   A 受入 : 青白い蛍光灯・事務的な白壁・掲示物
+   *   B 実験 : 白タイル・明滅多め・実験台・ガラス器具
+   *   C 検体 : 緑の微発光（タンク・培養液）・湿った床
+   *   D 拘束 : 赤い非常灯・鉄格子・拘束具
+   *   E 記録 : 木製什器・暖色の卓上灯・書類の山
+   *   F 機械 : 配管・蒸気・オレンジの警告灯・金属床（足音が変わる）
+   * ============================================================== */
+
+  /* 床・壁のテクスチャを区画ごとに差し替える。walls は3枚を混ぜる（§3「壁テクスチャ3種以上」） */
+  var ZONE_TEX = {
+    A: { floor: 'floor',      walls: ['wallPaint', 'wall2', 'wallPaint'] },
+    B: { floor: 'floorTile',  walls: ['wall', 'wall2', 'wall3'] },
+    C: { floor: 'floorWet',   walls: ['wall3', 'wallPaint', 'wall2'] },
+    D: { floor: 'floorWet',   walls: ['wallPaint', 'wallMetal', 'wall2'] },
+    E: { floor: 'floor',      walls: ['wallPaint', 'wall2', 'wall'] },
+    F: { floor: 'floorMetal', walls: ['wallMetal', 'wallPaint', 'wall3'] }
+  };
+  var DEFAULT_TEX = ZONE_TEX.A;
+
+  /* 区画の基調色（床 f / 壁・天井 w）。部屋ごとの上書きは REGION_TINT が優先 */
+  var ZONE_TINT = {
+    A: { f: [1.00, 1.00, 1.02], w: [1.02, 1.03, 1.06] },   /* 事務的な白 */
+    B: { f: [0.94, 1.00, 1.02], w: [0.97, 1.02, 1.05] },   /* 白タイル・やや青白 */
+    C: { f: [0.76, 0.94, 0.84], w: [0.80, 0.96, 0.88] },   /* 湿った緑白 */
+    D: { f: [0.96, 0.86, 0.84], w: [0.92, 0.88, 0.87] },   /* 彩度を抜いた灰（色は赤い非常灯が付ける） */
+    E: { f: [1.04, 0.96, 0.84], w: [1.06, 0.98, 0.86] },   /* 古い書類の暖色 */
+    F: { f: [0.86, 0.88, 0.90], w: [0.88, 0.90, 0.93] }    /* 鋼と配管の冷たい灰 */
+  };
+
+  /* 区画ごとの蛍光灯の色温度（契約の言語どおり）。glow / emergency には掛けない */
+  var ZONE_LAMP = {
+    A: { r: 0.80, g: 0.90, b: 1.00 },   /* 青白い蛍光灯 */
+    B: { r: 0.92, g: 0.99, b: 1.00 },   /* 実験室の白 */
+    C: { r: 0.72, g: 1.00, b: 0.86 },   /* 緑に振れた古い管 */
+    D: { r: 1.00, g: 0.58, b: 0.50 },   /* 非常灯に寄った赤み */
+    E: { r: 1.00, g: 0.92, b: 0.76 },   /* 暖色の卓上灯に寄せる */
+    F: { r: 1.00, g: 0.82, b: 0.54 }    /* オレンジの警告灯 */
+  };
+  /* 区画ごとの明滅比率の底上げ（B 実験区画は「明滅多め」が契約） */
+  var ZONE_FLICKER = { A: 0.00, B: 0.10, C: 0.03, D: 0.05, E: 0.00, F: 0.04 };
+  /* 区画ごとの消灯帯のずらし（負＝点く器具が増える）と明るさの倍率。
+   * 契約 §3 の輝度ゲート（暗部35〜65%）を**区画単位で**満たすためのキャリブレーション値。 */
+  var ZONE_OFF = { A: 0.11, B: 0.03, C: -0.06, D: -0.22, E: -0.09, F: -0.14 };
+  var ZONE_GAIN = { A: 0.84, B: 0.98, C: 1.10, D: 1.42, E: 1.12, F: 1.20 };
+
+  /* 部屋ごとの色味の上書き（区画の基調からさらに振る＝似た交差点が続かない） */
   var REGION_TINT = {
-    hall:     { f: [1.00, 0.99, 0.95], w: [1.04, 1.03, 0.99] },
-    labA:     { f: [0.92, 0.98, 1.02], w: [0.97, 1.01, 1.05] },
-    labB:     { f: [0.92, 0.98, 1.02], w: [0.97, 1.01, 1.05] },
-    specimen: { f: [1.02, 0.96, 0.84], w: [1.05, 0.98, 0.86] },   /* 飼育檻室＝黄ばんだ白 */
-    machine:  { f: [0.74, 0.86, 0.82], w: [0.78, 0.90, 0.86] },   /* 検体タンク室＝冷たい緑白 */
-    pump:     { f: [0.80, 0.88, 0.90], w: [0.84, 0.92, 0.95] },
-    control:  { f: [0.84, 0.89, 1.04], w: [0.86, 0.92, 1.07] },   /* 観察室＝青白 */
-    office:   { f: [1.00, 0.95, 0.86], w: [1.03, 0.98, 0.88] },   /* 記録室＝古い書類の色 */
-    director: { f: [1.02, 0.92, 0.78], w: [1.05, 0.95, 0.80] },   /* 所長室＝木質の暖色 */
-    cellroom: { f: [0.80, 0.79, 0.76], w: [0.82, 0.81, 0.77] },   /* 拘束室＝彩度を抜いた灰 */
-    lmA:      { f: [1.02, 0.94, 0.80], w: [1.06, 0.97, 0.82] },   /* 中央長廊下＝アンバー */
-    lmB:      { f: [0.88, 0.94, 1.04], w: [0.90, 0.97, 1.08] },   /* 縦の長廊下＝冷たい白青 */
-    lmC:      { f: [0.86, 1.00, 0.86], w: [0.88, 1.03, 0.88] },   /* 南長廊下＝病んだ緑 */
-    rcA:      { f: [0.78, 0.90, 0.92], w: [0.80, 0.93, 0.96] },   /* 沈下通路 */
-    rcB:      { f: [0.94, 0.86, 1.00], w: [0.97, 0.88, 1.04] },   /* 登り通路 */
-    corrN:    { f: [0.96, 0.97, 0.96], w: [1.00, 1.01, 1.00] },
-    corrW:    { f: [0.98, 0.94, 0.86], w: [1.01, 0.97, 0.89] },
-    corrC:    { f: [0.90, 0.93, 0.95], w: [0.94, 0.97, 0.99] },
-    corrE:    { f: [0.86, 0.88, 0.84], w: [0.90, 0.92, 0.87] },
-    corrS:    { f: [0.88, 0.90, 0.94], w: [0.92, 0.94, 0.98] }
+    director: { f: [1.06, 0.94, 0.76], w: [1.10, 0.97, 0.78] },   /* 所長室＝木質の暖色 */
+    office:   { f: [1.04, 0.96, 0.84], w: [1.08, 0.99, 0.86] },   /* 記録室＝古い書類 */
+    control:  { f: [0.84, 0.90, 1.06], w: [0.86, 0.93, 1.09] },   /* 観察室＝青白 */
+    pump:     { f: [0.80, 0.86, 0.90], w: [0.84, 0.90, 0.95] },   /* ポンプ室＝鋼 */
+    store:    { f: [0.94, 0.92, 0.86], w: [0.98, 0.95, 0.88] },   /* 保管庫＝乾いた倉庫 */
+    elec:     { f: [0.90, 0.86, 0.78], w: [0.94, 0.89, 0.80] },   /* 電気室 */
+    cellroom: { f: [0.94, 0.84, 0.82], w: [0.90, 0.85, 0.84] },   /* 拘束室＝灰（赤い非常灯で染まる） */
+    guardpost:{ f: [0.92, 0.86, 0.84], w: [0.90, 0.86, 0.85] },
+    visitroom:{ f: [0.94, 0.86, 0.84], w: [0.92, 0.86, 0.85] },
+    labB:     { f: [0.96, 1.02, 1.04], w: [0.99, 1.04, 1.07] },   /* 処置室＝白タイル */
+    labA:     { f: [1.00, 0.96, 0.86], w: [1.02, 0.99, 0.90] },   /* 培養器室＝琥珀 */
+    assay:    { f: [0.94, 1.00, 1.02], w: [0.97, 1.03, 1.05] },
+    machine:  { f: [0.70, 0.92, 0.80], w: [0.74, 0.94, 0.84] },   /* 検体タンク室＝冷たい緑白 */
+    specimen: { f: [1.02, 0.94, 0.80], w: [1.05, 0.96, 0.82] },   /* 飼育檻室＝黄ばんだ白 */
+    necro:    { f: [0.78, 0.94, 0.86], w: [0.82, 0.96, 0.90] },
+    hall:     { f: [1.02, 1.02, 1.00], w: [1.06, 1.06, 1.04] },   /* 受入ホール＝明るい白 */
+    quaran:   { f: [0.98, 1.00, 1.02], w: [1.01, 1.03, 1.05] },
+    security: { f: [0.90, 0.94, 1.04], w: [0.92, 0.96, 1.07] },
+    lmA:      { f: [1.02, 1.00, 0.96], w: [1.06, 1.04, 0.99] },   /* 南の受入長廊下 */
+    lmB:      { f: [0.90, 1.00, 1.02], w: [0.92, 1.03, 1.06] },   /* 実験区画の中央長廊下 */
+    lmC:      { f: [0.94, 0.88, 0.74], w: [0.98, 0.91, 0.76] }    /* 機械区画の長回廊＝アンバー */
   };
   var DEFAULT_TINT = { f: [0.92, 0.93, 0.92], w: [0.96, 0.97, 0.97] };
 
@@ -417,15 +468,21 @@
           state = 'off';                                /* 闇だまり */
         } else {
           var v = bandNoise(c, r);
-          state = (v < OFF_LEVEL) ? 'off' : ((v < FLICKER_LEVEL) ? 'flicker' : 'on');
+          var zz = this._zoneAt(c, r);
+          var offL = OFF_LEVEL + (ZONE_OFF[zz] || 0);
+          var fl = offL + (FLICKER_LEVEL - OFF_LEVEL) + (ZONE_FLICKER[zz] || 0);
+          state = (v < offL) ? 'off' : ((v < fl) ? 'flicker' : 'on');
         }
-        var ci = (hash2(c + 5, r + 3) < 0.20) ? 1 : ((hash2(c + 91, r + 7) < 0.12) ? 2 : 0);
+        /* 区画ごとの色温度（契約 §4「区画ごとの景観差」）。管の劣化で更に個体差をつける */
+        var zl = ZONE_LAMP[this._zoneAt(c, r)] || LAMP_COLORS[0];
+        var wob = (hash2(c + 5, r + 3) < 0.20) ? -0.08 : ((hash2(c + 91, r + 7) < 0.12) ? 0.07 : 0.00);
+        var lampCol = { r: Math.min(1, zl.r * (1 + wob)), g: Math.min(1, zl.g), b: Math.min(1, zl.b * (1 - wob)) };
         var fy = map.cellFloorY(c, r), ch = map.ceilHAt(c, r);
         list.push({
           kind: 'lamp',
           col: c, row: r, x: (c + 0.5) * T, z: (r + 0.5) * T,
           fy: fy, ch: ch, y: fy + ch - LIGHT_DROP,
-          state: state, color: LAMP_COLORS[ci], R: LIGHT_R, gain: LIGHT_GAIN,
+          state: state, color: lampCol, R: LIGHT_R, gain: LIGHT_GAIN * (ZONE_GAIN[this._zoneAt(c, r)] || 1),
           axis: ns ? 'z' : 'x', phase: hash2(c * 3 + 1, r * 7 + 2) * 6.283
         });
       }
@@ -441,7 +498,7 @@
       if (best >= 0 && bd <= 3) {
         list[best].state = ov[o].state;
         /* gain/reach は「ここだけは明るく」を作るための局所ブースト */
-        if (ov[o].gain) list[best].gain = LIGHT_GAIN * ov[o].gain;
+        if (ov[o].gain) list[best].gain = LIGHT_GAIN * (ZONE_GAIN[this._zoneAt(list[best].col, list[best].row)] || 1) * ov[o].gain;
         if (ov[o].reach) list[best].R = LIGHT_R * ov[o].reach;
       }
     }
@@ -645,9 +702,24 @@
     }
     return null;
   };
+  /** その位置の区画（A〜F）。meta.regions の zone → meta.bands の行レンジ の順で解決する */
+  World.prototype._zoneAt = function (col, row) {
+    var meta = this.map.meta || {};
+    var rs = meta.regions || [];
+    for (var i = 0; i < rs.length; i++) {
+      var g = rs[i];
+      if (!g.zone) continue;
+      if (col >= g.c0 && col <= g.c1 && row >= g.r0 && row <= g.r1) return g.zone;
+    }
+    var bs = meta.bands || [];
+    for (var b = 0; b < bs.length; b++) if (row >= bs[b].r0 && row <= bs[b].r1) return bs[b].zone;
+    return 'A';
+  };
+  World.prototype._zoneTex = function (col, row) { return ZONE_TEX[this._zoneAt(col, row)] || DEFAULT_TEX; };
   World.prototype._tintAt = function (col, row) {
     var id = this._regionAt(col, row);
-    return (id && REGION_TINT[id]) || DEFAULT_TINT;
+    if (id && REGION_TINT[id]) return REGION_TINT[id];
+    return ZONE_TINT[this._zoneAt(col, row)] || DEFAULT_TINT;
   };
 
   /* ---------------- 本体 ---------------- */
@@ -664,15 +736,38 @@
     this.lightIndex = this._buildLightIndex();
     this.stats.fixtures = this.fixtures.length;
 
-    var B = {
-      floor: new Builder(), ceil: new Builder(),
-      wall: new Builder(), wall2: new Builder(), wall3: new Builder(),
-      litter: new Builder(), poster: new Builder(), sign: new Builder(), zonesign: new Builder(),
-      metal: new Builder(), dark: new Builder(), lamp: new Builder(),
-      screen: new Builder(), paper: new Builder(), sheet: new Builder(),
-      fluid: new Builder(), board: new Builder(), monitors: new Builder(),
-      water: new Builder(), glass: new Builder(), hatch: new Builder(), blood: new Builder()
-    };
+    /* --- 空間チャンク × 素材 でメッシュを分ける（P4.9・80x80対応） ---
+     * 80x80 を CHUNK マス角に切り、チャンクごとにマージ済みメッシュを作る。
+     * 霧の到達は 15.5m ＝ 8マスなので、視錐台カリングで遠景のチャンクが丸ごと落ちる
+     * （マップ全体を1メッシュにすると 41万三角形が毎フレーム描かれてしまう）。
+     * B は「今のチャンク × 今の区画のテクスチャ」へ委譲するプロキシで、
+     * 呼び出し側（B.floor.gridP(...) 等）は一切変えずに済む。 */
+    var CHUNK = 12;
+    var CHUNK_COLS = Math.ceil(map.width / CHUNK);
+    var chunkBags = Object.create(null);
+    var curChunk = 0, curZone = 'A';
+    function chunkKey(col, row) {
+      var cc2 = col < 0 ? 0 : (col >= map.width ? map.width - 1 : col);
+      var rr2 = row < 0 ? 0 : (row >= map.height ? map.height - 1 : row);
+      return ((rr2 / CHUNK) | 0) * CHUNK_COLS + ((cc2 / CHUNK) | 0);
+    }
+    /** これから積む面の所属（チャンクと区画）を決める。造形の直前に必ず呼ぶ */
+    function bset(col, row) { curChunk = chunkKey(col, row); curZone = self._zoneAt(col, row); }
+    self._bset = bset;
+    function bag(texKey) {
+      var g2 = chunkBags[curChunk] || (chunkBags[curChunk] = Object.create(null));
+      return g2[texKey] || (g2[texKey] = new Builder());
+    }
+    var B = {};
+    Object.defineProperty(B, 'floor', { get: function () { return bag((ZONE_TEX[curZone] || DEFAULT_TEX).floor); } });
+    Object.defineProperty(B, 'wall', { get: function () { return bag((ZONE_TEX[curZone] || DEFAULT_TEX).walls[0]); } });
+    Object.defineProperty(B, 'wall2', { get: function () { return bag((ZONE_TEX[curZone] || DEFAULT_TEX).walls[1]); } });
+    Object.defineProperty(B, 'wall3', { get: function () { return bag((ZONE_TEX[curZone] || DEFAULT_TEX).walls[2]); } });
+    ['ceil', 'litter', 'poster', 'sign', 'zonesign', 'metal', 'dark', 'lamp', 'screen',
+      'paper', 'sheet', 'fluid', 'board', 'monitors', 'water', 'glass', 'hatch', 'blood']
+      .forEach(function (n) {
+        Object.defineProperty(B, n, { get: function () { return bag(n); } });
+      });
     /* チラつきの加算メッシュはグループ単位（描画コールを抑える） */
     var flickBuilders = [];
     for (var fi = 0; fi < FLICKER_GROUPS; fi++) {
@@ -760,6 +855,7 @@
 
     for (var i = 0; i < cells.length; i++) {
       var c = cells[i].col, r = cells[i].row;
+      bset(c, r);
       var key = this._ownerOf(c, r);
       var tint = this._tintAt(c, r).f;
       var vary = 0.92 + hash2(c, r) * 0.16;
@@ -801,6 +897,7 @@
     /* ---- 天井高が変わる境界の埋め（低天井→高天井の段差） ---- */
     for (var ci = 0; ci < cells.length; ci++) {
       var cc0 = cells[ci].col, rr0 = cells[ci].row;
+      bset(cc0, rr0);
       var h0 = map.ceilHAt(cc0, rr0);
       var SD = [[1, 0], [0, 1]];
       for (var sd = 0; sd < 2; sd++) {
@@ -844,14 +941,20 @@
     for (var rr = 0; rr < map.height; rr++) {
       for (var cc = 0; cc < map.width; cc++) {
         if (!map.isSolid(cc, rr)) continue;
+        bset(cc, rr);
         var t = map.tileAt(cc, rr);
-        var isFurn = !!furnAt[cc + ',' + rr];
+        var furnHere = furnAt[cc + ',' + rr];
         var any = false;
         for (var d = 0; d < 4; d++) {
           var nc = cc + DIRS[d].dc, nr = rr + DIRS[d].dr;
           if (!map.isWalkable(nc, nr)) continue;
           any = true;
-          if (isFurn) continue;   /* 什器マスは壁を張らず小道具だけ描く */
+          /* 什器マス: 什器が向いている面だけ壁を落として「アルコーブに置かれた什器」にする。
+           * open:true の什器は四方の壁面を落として独立した什器にする（旧来の挙動）。 */
+          if (furnHere) {
+            var fv2 = FACE_VEC[furnHere.dir] || FACE_VEC.n;
+            if (furnHere.open || (fv2[0] === DIRS[d].dc && fv2[2] === DIRS[d].dr)) continue;
+          }
           this._wallFace(B, flickBuilders, cc, rr, nc, nr, DIRS[d], t, shader, planeShader, wallShader, flickerNear, litBy);
         }
         if (any) wallCells.push({ col: cc, row: rr });
@@ -891,29 +994,43 @@
       });
     }
     var MATS = {
-      floor: opaque('floor'), ceil: opaque('ceiling'),
+      floor: opaque('floor'), floorTile: opaque('floorTile'),
+      floorWet: opaque('floorWet'), floorMetal: opaque('floorMetal'),
+      ceil: opaque('ceiling'),
       wall: opaque('wall'), wall2: opaque('wall2'), wall3: opaque('wall3'),
+      wallPaint: opaque('wallPaint'), wallMetal: opaque('wallMetal'),
       litter: decal('litter'), poster: decal('poster'), sign: decal('sign'), zonesign: decal('zonesign'),
       metal: opaque('metal'), dark: opaque('metal'), lamp: opaque('lamp'),
       screen: opaque('screen'), paper: opaque('paper'), sheet: opaque('sheet'),
       fluid: opaque('tankfluid'), board: opaque('board'), monitors: opaque('monitors'),
       water: decal('water'), glass: decal('glass'), hatch: decal('hatch'), blood: decal('blood')
     };
-    var order = ['floor', 'ceil', 'wall', 'wall2', 'wall3', 'metal', 'dark', 'lamp', 'poster',
+    /* 描画順（不透明 → デカール）。素材は全チャンクで共有する */
+    var order = ['floor', 'floorTile', 'floorWet', 'floorMetal', 'ceil',
+      'wall', 'wall2', 'wall3', 'wallPaint', 'wallMetal', 'metal', 'dark', 'lamp', 'poster',
       'screen', 'paper', 'sheet', 'fluid', 'board', 'monitors', 'sign', 'zonesign',
       'hatch', 'blood', 'litter', 'water', 'glass'];
+    var matCache = Object.create(null);
     var tris = 0, groups = 0;
-    for (var m = 0; m < order.length; m++) {
-      var name = order[m], b = B[name];
-      if (b.isEmpty()) continue;
-      var mat = this._track(MATS[name]);
-      var mesh = buildMesh(b, mat);
-      this._track(mesh.geometry);
-      mesh.name = name;                 /* 監査で天井だけ隠す等に使う */
-      mesh.frustumCulled = true;
-      this.group.add(mesh);
-      tris += b.idx.length / 3; groups++;
+    var chunkKeys = Object.keys(chunkBags);
+    for (var ck = 0; ck < chunkKeys.length; ck++) {
+      var bagn = chunkBags[chunkKeys[ck]];
+      for (var m = 0; m < order.length; m++) {
+        var name = order[m], b = bagn[name];
+        if (!b || b.isEmpty()) continue;
+        var mat = matCache[name] || (matCache[name] = this._track(MATS[name]));
+        var mesh = buildMesh(b, mat);
+        this._track(mesh.geometry);
+        mesh.name = name;                 /* 監査で天井だけ隠す等に使う */
+        mesh.renderOrder = m;
+        mesh.frustumCulled = true;
+        this.group.add(mesh);
+        tris += b.idx.length / 3; groups++;
+      }
     }
+    /* 未使用の素材は破棄しておく（テクスチャは Textures 側のキャッシュが持つ） */
+    for (var mk in MATS) if (!matCache[mk]) MATS[mk].dispose();
+    this.stats.chunks = chunkKeys.length;
 
     /* チラつき灯: 加算合成の光溜まり */
     for (var k2 = 0; k2 < flickBuilders.length; k2++) {
@@ -1003,7 +1120,10 @@
     var fx = cxw + dir.n[0] * T * 0.5, fz = czw + dir.n[2] * T * 0.5;
     var along = (dir.dc !== 0) ? 'z' : 'x';
 
-    if (tile === TILE.NOTE) {
+    var noteEntry = (tile === TILE.NOTE) ? this._noteEntryAt(cc, rr) : null;
+    var noteFace = !noteEntry || !noteEntry.dir ||
+      (FACE_VEC[noteEntry.dir][0] === dir.dc && FACE_VEC[noteEntry.dir][2] === dir.dr);
+    if (tile === TILE.NOTE && noteFace) {
       /* 壁のメモ: 目に付くよう少し明るく描く */
       var pw = 0.52, ph = 0.72, py = 1.45;
       var no = [], nu = [], nv = [0, ph, 0];
@@ -1028,7 +1148,10 @@
           fz + dir.n[2] * 0.045 + ((along === 'z') ? pu : 0),
           (along === 'z') ? 0.035 : 0.055, 0.055, (along === 'z') ? 0.055 : 0.035, 3, pin);
       }
-    } else if (tile === TILE.GIMMICK && this._gimmickRoleAt(cc, rr) === 'safe') {
+    } else if (tile === TILE.GIMMICK && this._gimmickRoleAt(cc, rr) === 'safe' &&
+      (function (e) {
+        return !e || !e.dir || (FACE_VEC[e.dir][0] === dir.dc && FACE_VEC[e.dir][2] === dir.dr);
+      })(this._gimmickAt(cc, rr))) {
       /* P4.8 所長室の金庫（唯一の鍵の在り処）。厚い鋼扉＋ダイヤル＋レバー把手 */
       this._safe(B, cc, rr, dir, shader, key);
     } else if (tile === TILE.GIMMICK) {
@@ -1093,13 +1216,15 @@
     var cx = cc * T + T / 2, cz = rr * T + T / 2;
     var m = dir.n;                                  /* 壁面の外向き法線 */
     var fx = cx + m[0] * (T * 0.5 + 0.018), fz = cz + m[2] * (T * 0.5 + 0.018);
-    var rid = this._regionAt(nc, nr);
+    var zone = this._zoneAt(nc, nr);
     var pick = hash2(cc * 7 + 13, rr * 19 + 5);
     var i, j;
-    if (rid === 'machine' || rid === 'specimen' || rid === 'labA' || rid === 'labB') {
-      i = 0; j = (pick < 0.62) ? 0 : 1;             /* 実験室はバイオハザード / 立入禁止 */
-    } else if (rid === 'cellroom') {
-      i = 0; j = 1;
+    if (zone === 'B' || zone === 'C') {
+      i = 0; j = (pick < 0.62) ? 0 : 1;             /* 実験・検体区画はバイオハザード / 立入禁止 */
+    } else if (zone === 'D') {
+      i = 0; j = 1;                                 /* 拘束区画は立入禁止 */
+    } else if (zone === 'A' || zone === 'E') {
+      i = 1; j = (pick < 0.55) ? 0 : 1;             /* 受入・記録区画は銘板と注意書き */
     } else if (pick < 0.34) { i = 1; j = 0; }       /* 区画銘板 */
     else if (pick < 0.60) { i = 0; j = 0; }
     else if (pick < 0.82) { i = 0; j = 1; }
@@ -1114,14 +1239,22 @@
 
   /* 区画ごとの標識帯の色。交差点の壁に塗って「同じ交差点が続く」感覚を壊す */
   var REGION_MARK = {
-    corrN:    [0.30, 0.72, 0.86], corrW: [0.92, 0.66, 0.18], corrC: [0.86, 0.88, 0.92],
-    corrE:    [0.34, 0.80, 0.42], corrS: [0.90, 0.34, 0.26],
-    lmA:      [0.98, 0.72, 0.20], lmB: [0.40, 0.70, 0.98], lmC: [0.44, 0.92, 0.42],
-    rcA:      [0.24, 0.82, 0.80], rcB: [0.72, 0.46, 0.96],
-    labA:     [0.42, 0.76, 0.92], labB: [0.42, 0.76, 0.92], specimen: [0.94, 0.78, 0.30],
-    machine:  [0.34, 0.90, 0.62], pump: [0.30, 0.68, 0.88], control: [0.60, 0.56, 0.94],
-    cellroom: [0.88, 0.24, 0.20], hall: [0.94, 0.90, 0.60], office: [0.92, 0.80, 0.44],
-    director: [0.96, 0.72, 0.30]
+    /* 部屋 */
+    director: [0.96, 0.72, 0.30], office: [0.92, 0.80, 0.44], control: [0.60, 0.56, 0.94],
+    pump: [0.98, 0.58, 0.16], store: [0.86, 0.78, 0.52], elec: [1.00, 0.66, 0.12],
+    cellroom: [0.88, 0.24, 0.20], guardpost: [0.82, 0.30, 0.28], visitroom: [0.86, 0.36, 0.32],
+    labB: [0.42, 0.76, 0.92], labA: [0.94, 0.78, 0.30], assay: [0.46, 0.82, 0.96],
+    machine: [0.34, 0.90, 0.62], specimen: [0.62, 0.94, 0.46], necro: [0.30, 0.86, 0.70],
+    hall: [0.94, 0.90, 0.60], quaran: [0.70, 0.88, 0.98], security: [0.40, 0.70, 0.98],
+    /* ランドマーク長廊下 */
+    lmA: [0.98, 0.90, 0.44], lmB: [0.40, 0.70, 0.98], lmC: [0.98, 0.66, 0.20],
+    /* 帯（区画）ゾーン */
+    corrE: [0.34, 0.72, 0.96],   /* A 受入 */
+    corrW: [0.62, 0.86, 0.98],   /* B 実験 */
+    corrS: [0.34, 0.90, 0.56],   /* C 検体 */
+    corrC: [0.92, 0.26, 0.22],   /* D 拘束 */
+    corrN: [0.98, 0.78, 0.34],   /* E 記録 */
+    filter: [1.00, 0.58, 0.14]   /* F 機械 */
   };
 
   /**
@@ -1194,6 +1327,24 @@
   /* ---------------- 個別の造形 ---------------- */
 
   /** meta.gimmicks のそのマスの役割（P4.8: 'safe' / 'bulkhead' / undefined） */
+  World.prototype._gimmickAt = function (col, row) {
+    if (!this._gimAt) {
+      this._gimAt = Object.create(null);
+      var gl = (this.map.meta && this.map.meta.gimmicks) || [];
+      for (var gi = 0; gi < gl.length; gi++) this._gimAt[gl[gi].col + ',' + gl[gi].row] = gl[gi];
+    }
+    return this._gimAt[col + ',' + row] || null;
+  };
+  /** 壁のメモ（meta.notes）。dir を持つメモはその面にだけ紙を貼る */
+  World.prototype._noteEntryAt = function (col, row) {
+    if (!this._noteAtMap) {
+      this._noteAtMap = Object.create(null);
+      var nl = (this.map.meta && this.map.meta.notes) || [];
+      for (var ni = 0; ni < nl.length; ni++) this._noteAtMap[nl[ni].col + ',' + nl[ni].row] = nl[ni];
+    }
+    return this._noteAtMap[col + ',' + row] || null;
+  };
+
   World.prototype._gimmickRoleAt = function (col, row) {
     if (!this._gimRole) {
       this._gimRole = Object.create(null);
@@ -1310,6 +1461,7 @@
       for (var c = 0; c < map.width; c++) {
         if (map.tileAt(c, r) !== TILE.CELL) continue;
         if (open[c + ',' + r]) continue;
+        if (this._bset) this._bset(c, r);
         for (var d = 0; d < 4; d++) {
           var nc = c + D[d][0], nr = r + D[d][1];
           if (!map.isWalkable(nc, nr)) continue;
@@ -1335,6 +1487,7 @@
     for (var r2 = 0; r2 < map.height; r2++) {
       for (var c2 = 0; c2 < map.width; c2++) {
         if (map.tileAt(c2, r2) !== TILE.CELL) continue;
+        if (this._bset) this._bset(c2, r2);
         /* 3方が塞がった「奥のマス」にだけ置く（前室側には置かない） */
         var solid = 0, openDir = null;
         for (var d2 = 0; d2 < 4; d2++) {
@@ -1373,10 +1526,12 @@
   World.prototype._ceilingKit = function (B, flickBuilders, shader, planeShader) {
     var map = this.map, T = map.tileSize, H = map.wallHeight;
     var self = this;
+    var bset = this._bset || function () {};
 
     /* 蛍光灯・非常灯 */
     for (var i = 0; i < this.fixtures.length; i++) {
       var f = this.fixtures[i];
+      bset(f.col, f.row);
       var key = f.col + ',' + f.row;
       var sh = shader(key, [1, 1, 1]);
       if (f.kind === 'emergency') {
@@ -1410,6 +1565,7 @@
     var cells = map.walkableCells();
     for (var q = 0; q < cells.length; q++) {
       var c = cells[q].col, r = cells[q].row;
+      bset(c, r);
       var ns = !map.isWalkable(c - 1, r) && !map.isWalkable(c + 1, r);
       var ew = !map.isWalkable(c, r - 1) && !map.isWalkable(c, r + 1);
       if (!ns && !ew) continue;
@@ -1438,7 +1594,10 @@
     var self = this;
     var up = [0, 1, 0];
 
-    function quad(builder, col, row, size, y, tintArr) {
+    var bset = this._bset || function () {};
+    function quad(builderFn, col, row, size, y, tintArr) {
+      bset(col, row);
+      var builder = builderFn();
       var cx = col * T + T / 2, cz = row * T + T / 2, h = size / 2;
       builder.grid([cx - h, 0, cz + h], [size, 0, 0], [0, 0, -size], 1, 1, 1, 1,
         planeShader(col + ',' + row, tintArr, up), null,
@@ -1448,21 +1607,21 @@
     var noise = meta.noise || [];
     for (var i = 0; i < noise.length; i++) {
       var n = noise[i];
-      if (n.kind === 'glass') quad(B.glass, n.col, n.row, 1.9, 0.016, [1.5, 1.5, 1.5]);
-      else quad(B.water, n.col, n.row, 1.94, 0.012, [1.15, 1.15, 1.2]);
+      if (n.kind === 'glass') quad(function () { return B.glass; }, n.col, n.row, 1.9, 0.016, [1.5, 1.5, 1.5]);
+      else quad(function () { return B.water; }, n.col, n.row, 1.94, 0.012, [1.15, 1.15, 1.2]);
     }
     var cps = meta.checkpoints || [];
     for (var j = 0; j < cps.length; j++) {
-      quad(B.hatch, cps[j].col, cps[j].row, 1.6, 0.014, [0.85, 0.85, 0.85]);
+      quad(function () { return B.hatch; }, cps[j].col, cps[j].row, 1.6, 0.014, [0.85, 0.85, 0.85]);
       /* 非常灯（緑）を近くの壁に */
       this._wallLamp(B, cps[j].col, cps[j].row, [0.35, 1.0, 0.5], shader);
     }
     if (meta.exitPad) {
-      quad(B.hatch, meta.exitPad.col, meta.exitPad.row, 1.86, 0.014, [0.95, 0.95, 0.95]);
+      quad(function () { return B.hatch; }, meta.exitPad.col, meta.exitPad.row, 1.86, 0.014, [0.95, 0.95, 0.95]);
     }
     var dec = meta.decals || [];
     for (var k = 0; k < dec.length; k++) {
-      if (dec[k].type === 'blood') quad(B.blood, dec[k].col, dec[k].row, 1.8, 0.018, [1, 1, 1]);
+      if (dec[k].type === 'blood') quad(function () { return B.blood; }, dec[k].col, dec[k].row, 1.8, 0.018, [1, 1, 1]);
     }
     /* センサー */
     var sen = meta.sensors || [];
@@ -1483,6 +1642,7 @@
   };
 
   World.prototype._wallLamp = function (B, col, row, rgb, shader) {
+    if (this._bset) this._bset(col, row);
     var n = this._wallDirOf(col, row);
     if (!n) return;
     var T = this.map.tileSize;
@@ -1499,6 +1659,7 @@
   };
 
   World.prototype._sensor = function (B, col, row, shader) {
+    if (this._bset) this._bset(col, row);
     var n = this._wallDirOf(col, row);
     if (!n) return;
     var T = this.map.tileSize;
@@ -1523,6 +1684,7 @@
   };
 
   World.prototype._board = function (B, col, row, shader) {
+    if (this._bset) this._bset(col, row);
     var n = this._wallDirOf(col, row);
     if (!n) return;
     var T = this.map.tileSize;
@@ -1552,6 +1714,7 @@
     var list = (map.meta && map.meta.wallKit) || [];
     for (var i = 0; i < list.length; i++) {
       var k = list[i];
+      if (this._bset) this._bset(k.col, k.row);
       var v = FACE_VEC[k.dir] || FACE_VEC.n;            /* 手前マス -> 壁 */
       var m = [-v[0], 0, -v[2]];                        /* 面の外向き法線 */
       var key = k.col + ',' + k.row;
@@ -1689,6 +1852,127 @@
           B.dark.box(fx + m[0] * 0.16, py2, fz + m[2] * 0.16,
             (along === 'z') ? 0.32 : 0.16, 0.32, (along === 'z') ? 0.16 : 0.32, 1.6, shD);
         }
+      } else if (k.type === 'filePile') {
+        /* P4.9 記録区画: 壁ぎわに積み上がった書類の山とファイル箱（突出0.30m以内） */
+        var shBox = shader(key, [0.94, 0.84, 0.62]);
+        var shPaper = shader(key, [1.28, 1.24, 1.10]);
+        for (var fp = 0; fp < 4; fp++) {
+          var hq4 = hash2(k.col * 5 + fp, k.row * 9 + fp * 3);
+          var fo2 = (fp - 1.5) * 0.46;
+          var stack = 2 + ((hq4 * 3) | 0);
+          for (var sy3 = 0; sy3 < stack; sy3++) {
+            var yy = 0.11 + sy3 * 0.22;
+            var jitter = (hash2(fp * 3 + sy3, k.col) - 0.5) * 0.06;
+            B.sheet.box(fx + m[0] * 0.16 + ((along === 'z') ? 0 : fo2 + jitter), yy,
+              fz + m[2] * 0.16 + ((along === 'z') ? fo2 + jitter : 0),
+              (along === 'z') ? 0.30 : 0.42, 0.20, (along === 'z') ? 0.42 : 0.30, 1.6, shBox);
+            /* 箱から溢れた紙束 */
+            if (hq4 > 0.55 && sy3 === stack - 1) {
+              B.paper.box(fx + m[0] * 0.16 + ((along === 'z') ? 0 : fo2), yy + 0.13,
+                fz + m[2] * 0.16 + ((along === 'z') ? fo2 : 0),
+                (along === 'z') ? 0.26 : 0.34, 0.07, (along === 'z') ? 0.34 : 0.26, 2.2, shPaper);
+            }
+          }
+        }
+        /* 床に散った書類（薄物） */
+        B.paper.box(fx + m[0] * 0.26, 0.012, fz + m[2] * 0.26,
+          (along === 'z') ? 0.42 : 1.30, 0.012, (along === 'z') ? 1.30 : 0.42, 1.6, shPaper);
+      } else if (k.type === 'labBench') {
+        /* P4.9 実験区画: 壁付けの実験台（天板0.30m）＋ガラス器具 */
+        var shTop = shader(key, [1.02, 1.04, 1.02]);
+        var shGlass2 = shader(key, [1.55, 1.62, 1.58]);
+        B.metal.box(fx + m[0] * 0.15, 0.90, fz + m[2] * 0.15,
+          (along === 'z') ? 0.30 : 1.86, 0.06, (along === 'z') ? 1.86 : 0.30, 1.4, shTop);
+        B.dark.box(fx + m[0] * 0.15, 0.44, fz + m[2] * 0.15,
+          (along === 'z') ? 0.28 : 1.78, 0.60, (along === 'z') ? 1.78 : 0.28, 1.2, shD);
+        for (var gb = 0; gb < 5; gb++) {
+          var hq5 = hash2(k.col * 7 + gb * 5, k.row * 3 + gb);
+          if (hq5 < 0.25) continue;
+          var go = (gb - 2) * 0.36;
+          var gx2 = fx + m[0] * 0.15 + ((along === 'z') ? 0 : go);
+          var gz2 = fz + m[2] * 0.15 + ((along === 'z') ? go : 0);
+          if (hq5 < 0.6) {
+            /* ビーカー */
+            B.glass.tube([gx2, 0.93, gz2], [gx2, 1.10 + hq5 * 0.10, gz2], 0.055, 8, shGlass2);
+          } else {
+            /* フラスコ（台形＝2段のtube） */
+            B.glass.tube([gx2, 0.93, gz2], [gx2, 1.02, gz2], 0.075, 8, shGlass2);
+            B.glass.tube([gx2, 1.02, gz2], [gx2, 1.22, gz2], 0.028, 6, shGlass2);
+          }
+        }
+        /* 台の下の吊り棚 */
+        B.metal.box(fx + m[0] * 0.13, 1.62, fz + m[2] * 0.13,
+          (along === 'z') ? 0.26 : 1.70, 0.05, (along === 'z') ? 1.70 : 0.26, 1.4, shTop);
+      } else if (k.type === 'crateRow') {
+        /* P4.9 受入・機械区画: 壁ぎわに積まれた搬送箱とドラム缶（突出0.30m以内） */
+        var shWood = shader(key, [0.92, 0.78, 0.54]);
+        var shDrum = shader(key, [0.86, 0.72, 0.46]);
+        for (var cr2 = 0; cr2 < 3; cr2++) {
+          var hq6 = hash2(k.col * 11 + cr2 * 7, k.row * 13 + cr2);
+          var co2 = (cr2 - 1) * 0.62;
+          var cx3 = fx + m[0] * 0.16 + ((along === 'z') ? 0 : co2);
+          var cz3 = fz + m[2] * 0.16 + ((along === 'z') ? co2 : 0);
+          if (hq6 < 0.4) {
+            B.dark.tube([cx3, 0, cz3], [cx3, 0.86, cz3], 0.28, 10, shDrum);
+            B.metal.tube([cx3, 0.28, cz3], [cx3, 0.32, cz3], 0.30, 10, shDrum);
+            B.metal.tube([cx3, 0.60, cz3], [cx3, 0.64, cz3], 0.30, 10, shDrum);
+          } else {
+            var hgt = 0.42 + hq6 * 0.36;
+            B.sheet.box(cx3, hgt / 2, cz3,
+              (along === 'z') ? 0.30 : 0.56, hgt, (along === 'z') ? 0.56 : 0.30, 1.4, shWood);
+            if (hq6 > 0.72) {
+              B.sheet.box(cx3, hgt + 0.18, cz3,
+                (along === 'z') ? 0.26 : 0.44, 0.34, (along === 'z') ? 0.44 : 0.26, 1.6, shWood);
+            }
+          }
+        }
+      } else if (k.type === 'restraintRack') {
+        /* P4.9 拘束区画: 拘束具（革帯＋鋼の手枷）を掛けた壁ラック。突出0.22m以内。
+         * 「板が並んでいる」ように見えないよう、帯は細く・長さをばらし・金具を目立たせる。 */
+        var shLeather = shader(key, [0.34, 0.22, 0.16]);
+        var shSteel = shader(key, [1.35, 1.32, 1.28]);
+        B.metal.tube(
+          [fx + m[0] * 0.06 - ((along === 'z') ? 0 : 0.78), 1.94, fz + m[2] * 0.06 - ((along === 'z') ? 0.78 : 0)],
+          [fx + m[0] * 0.06 + ((along === 'z') ? 0 : 0.78), 1.94, fz + m[2] * 0.06 + ((along === 'z') ? 0.78 : 0)],
+          0.035, 6, shSteel);
+        var nRack = 3 + ((hash2(k.col, k.row) * 2) | 0);
+        for (var rk = 0; rk < nRack; rk++) {
+          var hq3 = hash2(k.col * 13 + rk * 7, k.row * 11 + rk);
+          var ro = (rk - (nRack - 1) / 2) * (1.52 / nRack) + (hq3 - 0.5) * 0.10;
+          var rx = fx + m[0] * 0.08 + ((along === 'z') ? 0 : ro);
+          var rz = fz + m[2] * 0.08 + ((along === 'z') ? ro : 0);
+          /* S字フック */
+          B.metal.tube([rx, 1.94, rz], [rx, 1.84, rz], 0.018, 5, shSteel);
+          /* 垂れた革帯（細く・長さをばらす・幅も変える） */
+          var rl = 0.34 + hq3 * 0.62;
+          var rw = 0.055 + hq3 * 0.03;
+          B.sheet.box(rx, 1.84 - rl / 2, rz,
+            (along === 'z') ? 0.035 : rw, rl, (along === 'z') ? rw : 0.035, 2.6, shLeather);
+          /* 先端の手枷（鋼のリング） */
+          B.metal.tube([rx - ((along === 'z') ? 0 : 0.045), 1.84 - rl, rz - ((along === 'z') ? 0.045 : 0)],
+            [rx + ((along === 'z') ? 0 : 0.045), 1.84 - rl, rz + ((along === 'z') ? 0.045 : 0)], 0.062, 8, shSteel);
+        }
+        /* 下に落ちた拘束帯（薄物・壁際） */
+        B.sheet.box(fx + m[0] * 0.13, 0.04, fz + m[2] * 0.04,
+          (along === 'z') ? 0.24 : 0.72, 0.04, (along === 'z') ? 0.72 : 0.24, 2.0, shLeather);
+      } else if (k.type === 'steamVent') {
+        /* P4.9 機械区画: 蒸気の噴き出す排気口。蒸気は加算合成の薄板を重ねる */
+        B.metal.box(fx + m[0] * 0.06, 1.06, fz + m[2] * 0.06,
+          (along === 'z') ? 0.12 : 0.72, 0.56, (along === 'z') ? 0.72 : 0.12, 1.4, shD);
+        for (var sv = 0; sv < 3; sv++) {
+          var svy = 0.88 + sv * 0.18;
+          B.dark.tube([fx + m[0] * 0.14, svy, fz + m[2] * 0.14],
+            [fx + m[0] * 0.20, svy, fz + m[2] * 0.20], 0.055, 6, shD);
+        }
+        /* 蒸気: 上へ広がる半透明の板（sheet は不透明なので lamp で淡く光らせる） */
+        for (var st = 0; st < 3; st++) {
+          var sw2 = 0.55 + st * 0.30, sy2 = 1.38 + st * 0.46;
+          facePanel(B.lamp, fx + m[0] * (0.24 + st * 0.10), sy2, fz + m[2] * (0.24 + st * 0.10),
+            m, sw2, 0.52, flat([0.16 - st * 0.04, 0.17 - st * 0.04, 0.18 - st * 0.045]));
+        }
+        /* 足元の結露 */
+        B.dark.box(fx + m[0] * 0.10, 0.02, fz + m[2] * 0.10,
+          (along === 'z') ? 0.20 : 1.10, 0.02, (along === 'z') ? 1.10 : 0.20, 1.2, shD);
       } else {
         /* bioPlacard: 大きなバイオハザード標識＋区画銘板 */
         B.metal.box(fx + m[0] * 0.03, 1.72, fz + m[2] * 0.03,
@@ -1713,6 +1997,7 @@
       var k = list[i];
       var m = FACE_VEC[k.dir] || FACE_VEC.n;            /* 実体マス -> 読む側 = 面の外向き法線 */
       var nc = k.col + (m[0] | 0), nr = k.row + (m[2] | 0);
+      if (this._bset) this._bset(k.col, k.row);
       var key = this._ownerOf(nc, nr);
       setYBias(map.cellFloorY(nc, nr));
       var cx = k.col * T + T / 2, cz = k.row * T + T / 2;
@@ -1742,6 +2027,7 @@
       var k = list[i];
       var idx = ORDER[k.zone];
       if (idx === undefined) continue;
+      if (this._bset) this._bset(k.col, k.row);
       var m = FACE_VEC[k.dir] || FACE_VEC.n;
       var nc = k.col + (m[0] | 0), nr = k.row + (m[2] | 0);
       var key = this._ownerOf(nc, nr);
@@ -1765,6 +2051,7 @@
     var list = (map.meta && map.meta.ceilKit) || [];
     for (var i = 0; i < list.length; i++) {
       var k = list[i];
+      if (this._bset) this._bset(k.col, k.row);
       var key = this._ownerOf(k.col, k.row);
       setYBias(map.cellFloorY(k.col, k.row));
       var cx = k.col * T + T / 2, cz = k.row * T + T / 2;
@@ -1796,6 +2083,7 @@
 
   World.prototype._furniture = function (B, f, shader) {
     var T = this.map.tileSize;
+    if (this._bset) this._bset(f.col, f.row);
     setYBias(this.map.cellFloorY(f.col, f.row));
     var cx = f.col * T + T / 2, cz = f.row * T + T / 2;
     var key = this._ownerOf(f.col, f.row);
@@ -2211,5 +2499,15 @@
 
   World.FOG_COLOR = FOG_COLOR;
   World.LIGHT_R = LIGHT_R;
+  /* 照明の調整定数（契約 §3 の輝度ゲートに合わせる。P7 で全エリア通しで再調整する）。
+   * 値を書き換えて new ESCAPE.World(map) し直すと効く＝キャリブレーションに使える。 */
+  World.LIGHT_TUNING = {
+    get offLevel() { return OFF_LEVEL; }, set offLevel(v) { OFF_LEVEL = v; },
+    get flickerLevel() { return FLICKER_LEVEL; }, set flickerLevel(v) { FLICKER_LEVEL = v; },
+    get lightR() { return LIGHT_R; }, set lightR(v) { LIGHT_R = v; },
+    get lightGain() { return LIGHT_GAIN; }, set lightGain(v) { LIGHT_GAIN = v; },
+    get ambient() { return AMBIENT; }, set ambient(v) { AMBIENT = v; },
+    zoneOff: ZONE_OFF, zoneGain: ZONE_GAIN, zoneFlicker: ZONE_FLICKER
+  };
   ESCAPE.World = World;
 })(window);

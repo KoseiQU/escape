@@ -1212,6 +1212,337 @@
   }
 
   /* ================================================================ */
+  /* P4.9 区画ごとの景観差（DESIGN.md §4「エリア1 新マップ Z4」）            */
+  /*   壁: wallPaint（塗装モルタル）/ wallMetal（リベット鋼板）              */
+  /*   床: floorTile（白タイル）/ floorWet（湿ったコンクリ）/ floorMetal（縞鋼板） */
+  /* ================================================================ */
+
+  /** 壁: 塗装した石膏・モルタル（2m x 3m / 512 x 768）。事務区画・記録区画・拘束区画向け */
+  function texWallPaint() {
+    var W = 512, H = 768, c = makeCanvas(W, H), ctx = c.getContext('2d');
+    var rand = rng(771103);
+    ctx.fillStyle = '#a6a49c'; ctx.fillRect(0, 0, W, H);
+    /* ローラー塗りのムラ（縦方向の帯） */
+    for (var i = 0; i < 90; i++) {
+      var x = rand() * W, w = 18 + rand() * 60;
+      ctx.fillStyle = 'rgba(' + (150 + rand() * 60 | 0) + ',' + (148 + rand() * 58 | 0) + ',' + (140 + rand() * 54 | 0) + ',0.18)';
+      ctx.fillRect(x, 0, w, H);
+    }
+    speckle(ctx, W, H, 14000, rand, 'rgba(126,124,116,0.35)');
+    /* 打ち継ぎ目地（1.5mごと＝水平の線）とパネル割 */
+    ctx.fillStyle = 'rgba(74,76,72,0.55)';
+    ctx.fillRect(0, 372, W, 4);
+    ctx.fillStyle = 'rgba(216,214,206,0.22)'; ctx.fillRect(0, 368, W, 2);
+    /* 塗装の剥がれ＝薄く浮いた塗膜が捲れて下地のモルタルが覗く。
+     * 「暗い染み」に見えないよう、①下地は周囲とほぼ同じ明度 ②縁だけを段差として描く
+     * ③捲れた塗膜の側に細い明るいハイライトを入れる。数は控えめに。 */
+    for (var k = 0; k < 10; k++) {
+      var hx = rand() * W, hy = rand() * H, hr = 9 + rand() * 18;
+      var pts = [];
+      for (var q = 0; q <= 13; q++) {
+        var aa = q / 13 * Math.PI * 2, rr = hr * (0.72 + rand() * 0.5);
+        pts.push([hx + Math.cos(aa) * rr * 1.25, hy + Math.sin(aa) * rr * 0.85]);
+      }
+      function tracePoly() {
+        ctx.beginPath();
+        for (var t2 = 0; t2 < pts.length; t2++) {
+          if (t2 === 0) ctx.moveTo(pts[t2][0], pts[t2][1]); else ctx.lineTo(pts[t2][0], pts[t2][1]);
+        }
+        ctx.closePath();
+      }
+      /* 下地（僅かに暗くザラつく） */
+      tracePoly();
+      ctx.save(); ctx.clip();
+      ctx.fillStyle = 'rgba(178,174,164,0.80)';
+      ctx.fillRect(hx - hr * 2, hy - hr * 2, hr * 4, hr * 4);
+      speckle(ctx, W, H, 1600, rand, 'rgba(146,142,134,0.45)');
+      /* 下地に残る刷毛目 */
+      ctx.strokeStyle = 'rgba(158,154,146,0.45)'; ctx.lineWidth = 2;
+      for (var br = -3; br < 4; br++) {
+        ctx.beginPath();
+        ctx.moveTo(hx - hr * 1.6, hy + br * 7); ctx.lineTo(hx + hr * 1.6, hy + br * 7 + 3);
+        ctx.stroke();
+      }
+      ctx.restore();
+      /* 縁: 上側は塗膜の影、下側は捲れた塗膜のハイライト */
+      tracePoly();
+      ctx.strokeStyle = 'rgba(126,122,116,0.45)'; ctx.lineWidth = 2.0; ctx.stroke();
+      ctx.save(); ctx.clip();
+      var eg = ctx.createLinearGradient(0, hy - hr, 0, hy + hr);
+      eg.addColorStop(0, 'rgba(96,92,88,0.22)');
+      eg.addColorStop(0.35, 'rgba(96,92,88,0)');
+      ctx.fillStyle = eg; ctx.fillRect(hx - hr * 2, hy - hr * 2, hr * 4, hr * 4);
+      ctx.restore();
+      ctx.strokeStyle = 'rgba(224,220,212,0.34)'; ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      for (var t3 = 0; t3 < pts.length; t3++) {
+        var pp = [pts[t3][0], pts[t3][1] + 2.2];
+        if (t3 === 0) ctx.moveTo(pp[0], pp[1]); else ctx.lineTo(pp[0], pp[1]);
+      }
+      ctx.stroke();
+    }
+    /* 掲示物を剥がした跡（四角い日焼け） */
+    for (var t = 0; t < 7; t++) {
+      var tx = rand() * (W - 120), ty = rand() * (H - 200);
+      ctx.fillStyle = 'rgba(226,222,206,0.16)';
+      ctx.fillRect(tx, ty, 60 + rand() * 70, 80 + rand() * 90);
+    }
+    /* 錆だれ・水だれ・しみ */
+    for (var s2 = 0; s2 < 6; s2++) rustRun(ctx, rand() * W, rand() * H * 0.35, 6 + rand() * 12, 100 + rand() * 340, rand, 0.8);
+    for (var s3 = 0; s3 < 14; s3++) {
+      var sx = rand() * W, sw = 5 + rand() * 16, sh = 80 + rand() * 400;
+      var gr = ctx.createLinearGradient(0, 0, 0, sh);
+      gr.addColorStop(0, 'rgba(84,80,68,0.26)'); gr.addColorStop(1, 'rgba(84,80,68,0)');
+      ctx.fillStyle = gr; ctx.fillRect(sx, 0, sw, sh);
+    }
+    for (var b2 = 0; b2 < 18; b2++) blot(ctx, rand() * W, rand() * H, 26 + rand() * 96, 'rgba(92,84,62,0.24)');
+    for (var cr = 0; cr < 9; cr++) crack(ctx, rand() * W, rand() * H, 80 + rand() * 190, rand() * 6.28, rand, 0);
+    /* 床際・天井際の落ち */
+    var gm = ctx.createLinearGradient(0, H, 0, H - 200);
+    gm.addColorStop(0, 'rgba(26,30,28,0.78)'); gm.addColorStop(0.45, 'rgba(30,34,32,0.32)');
+    gm.addColorStop(1, 'rgba(30,34,32,0)');
+    ctx.fillStyle = gm; ctx.fillRect(0, H - 200, W, 200);
+    var gt = ctx.createLinearGradient(0, 0, 0, 90);
+    gt.addColorStop(0, 'rgba(20,24,26,0.40)'); gt.addColorStop(1, 'rgba(20,24,26,0)');
+    ctx.fillStyle = gt; ctx.fillRect(0, 0, W, 90);
+    /* 幅木（塗装のケレン） */
+    ctx.fillStyle = '#4c5158'; ctx.fillRect(0, H - 44, W, 44);
+    ctx.fillStyle = 'rgba(255,255,255,0.08)'; ctx.fillRect(0, H - 44, W, 3);
+    ctx.fillStyle = 'rgba(0,0,0,0.45)'; ctx.fillRect(0, H - 8, W, 8);
+    for (var bb = 0; bb < 22; bb++) {
+      ctx.fillStyle = 'rgba(102,62,32,' + (0.22 + rand() * 0.38) + ')';
+      ctx.fillRect(rand() * W, H - 42 + rand() * 32, 3 + rand() * 18, 2 + rand() * 7);
+    }
+    speckle(ctx, W, H, 5000, rand, 'rgba(60,58,52,0.28)');
+    grain(ctx, W, H, 8, rand);
+    return c;
+  }
+
+  /** 壁: リベット留めの鋼板（2m x 3m / 512 x 768）。機械区画向け */
+  function texWallMetal() {
+    var W = 512, H = 768, c = makeCanvas(W, H), ctx = c.getContext('2d');
+    var rand = rng(410889);
+    ctx.fillStyle = '#6f757a'; ctx.fillRect(0, 0, W, H);
+    /* 圧延の縦目 */
+    for (var i = 0; i < 260; i++) {
+      ctx.fillStyle = 'rgba(' + (110 + rand() * 60 | 0) + ',' + (116 + rand() * 60 | 0) + ',' + (122 + rand() * 58 | 0) + ',0.30)';
+      ctx.fillRect(rand() * W, 0, 1 + rand() * 3, H);
+    }
+    /* パネル割（0.5m = 128px）と継ぎ目の段差 */
+    var PS = 128;
+    for (var py = 0; py <= H; py += PS * 1.5) {
+      ctx.fillStyle = 'rgba(38,42,46,0.85)'; ctx.fillRect(0, py - 3, W, 5);
+      ctx.fillStyle = 'rgba(196,204,210,0.20)'; ctx.fillRect(0, py + 2, W, 2);
+    }
+    for (var px = 0; px <= W; px += PS * 2) {
+      ctx.fillStyle = 'rgba(38,42,46,0.75)'; ctx.fillRect(px - 3, 0, 5, H);
+      ctx.fillStyle = 'rgba(196,204,210,0.16)'; ctx.fillRect(px + 2, 0, 2, H);
+    }
+    /* リベット */
+    for (var ry = 22; ry < H; ry += PS * 1.5) {
+      for (var rx = 20; rx < W; rx += 46) {
+        var d = 5 + rand() * 1.5;
+        ctx.fillStyle = 'rgba(150,158,164,0.85)';
+        ctx.beginPath(); ctx.arc(rx, ry, d, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = 'rgba(30,34,38,0.55)';
+        ctx.beginPath(); ctx.arc(rx + 1.4, ry + 1.8, d * 0.72, 0, Math.PI * 2); ctx.fill();
+      }
+    }
+    /* 塗装の剥げと錆（重力方向に流れる） */
+    for (var s = 0; s < 22; s++) rustRun(ctx, rand() * W, rand() * H * 0.6, 6 + rand() * 20, 90 + rand() * 320, rand, 1.15);
+    for (var k = 0; k < 40; k++) {
+      ctx.fillStyle = 'rgba(' + (98 + rand() * 50 | 0) + ',' + (58 + rand() * 34 | 0) + ',24,' + (0.25 + rand() * 0.45) + ')';
+      ctx.fillRect(rand() * W, rand() * H, 4 + rand() * 22, 3 + rand() * 12);
+    }
+    for (var b2 = 0; b2 < 14; b2++) blot(ctx, rand() * W, rand() * H, 30 + rand() * 90, 'rgba(46,40,30,0.30)');
+    /* 打痕（凹み） */
+    for (var d2 = 0; d2 < 16; d2++) {
+      var dx = rand() * W, dy = rand() * H, dr = 8 + rand() * 20;
+      blot(ctx, dx, dy - dr * 0.3, dr, 'rgba(24,28,32,0.45)');
+      blot(ctx, dx, dy + dr * 0.4, dr * 0.7, 'rgba(206,214,220,0.16)');
+    }
+    var gm2 = ctx.createLinearGradient(0, H, 0, H - 190);
+    gm2.addColorStop(0, 'rgba(20,24,26,0.80)'); gm2.addColorStop(1, 'rgba(20,24,26,0)');
+    ctx.fillStyle = gm2; ctx.fillRect(0, H - 190, W, 190);
+    var gt2 = ctx.createLinearGradient(0, 0, 0, 80);
+    gt2.addColorStop(0, 'rgba(16,20,22,0.40)'); gt2.addColorStop(1, 'rgba(16,20,22,0)');
+    ctx.fillStyle = gt2; ctx.fillRect(0, 0, W, 80);
+    speckle(ctx, W, H, 6800, rand, 'rgba(44,48,52,0.32)');
+    speckle(ctx, W, H, 2400, rand, 'rgba(198,206,212,0.18)');
+    grain(ctx, W, H, 9, rand);
+    return c;
+  }
+
+  /** 床: 白タイル（2m x 2m / 512 x 512・0.25m角）。実験区画向け */
+  function texFloorTile() {
+    var W = 512, H = 512, c = makeCanvas(W, H), ctx = c.getContext('2d');
+    var rand = rng(556677);
+    ctx.fillStyle = '#8d8d86'; ctx.fillRect(0, 0, W, H);
+    var TS = 64;
+    for (var ty = 0; ty < H / TS; ty++) {
+      for (var tx = 0; tx < W / TS; tx++) {
+        var broken = rand() < 0.05;
+        if (broken) {
+          ctx.fillStyle = '#70706a'; ctx.fillRect(tx * TS + 2, ty * TS + 2, TS - 4, TS - 4);
+          for (var q2 = 0; q2 < 22; q2++) {
+            ctx.fillStyle = 'rgba(' + (104 + rand() * 40 | 0) + ',' + (102 + rand() * 38 | 0) + ',' + (94 + rand() * 34 | 0) + ',0.6)';
+            ctx.fillRect(tx * TS + rand() * TS, ty * TS + rand() * TS, 2 + rand() * 6, 2 + rand() * 5);
+          }
+          continue;
+        }
+        var v = 158 + rand() * 40;
+        ctx.fillStyle = 'rgb(' + (v | 0) + ',' + ((v + 2) | 0) + ',' + ((v - 8) | 0) + ')';
+        ctx.fillRect(tx * TS + 2, ty * TS + 2, TS - 4, TS - 4);
+        /* 1枚ごとの微傾き＝反射差 */
+        var ga = rand() * Math.PI * 2, gs = 0.05 + rand() * 0.20;
+        var lg = ctx.createLinearGradient(
+          tx * TS + TS / 2 + Math.cos(ga) * TS, ty * TS + TS / 2 + Math.sin(ga) * TS,
+          tx * TS + TS / 2 - Math.cos(ga) * TS, ty * TS + TS / 2 - Math.sin(ga) * TS);
+        lg.addColorStop(0, 'rgba(255,255,255,' + gs.toFixed(3) + ')');
+        lg.addColorStop(1, 'rgba(0,0,0,' + (gs * 0.85).toFixed(3) + ')');
+        ctx.fillStyle = lg; ctx.fillRect(tx * TS + 2, ty * TS + 2, TS - 4, TS - 4);
+      }
+    }
+    /* 目地（立体感つき）と黒カビ */
+    ctx.fillStyle = 'rgba(62,66,62,0.92)';
+    for (var gx = 0; gx <= W; gx += TS) ctx.fillRect(gx - 2, 0, 3, H);
+    for (var gy = 0; gy <= H; gy += TS) ctx.fillRect(0, gy - 2, W, 3);
+    ctx.fillStyle = 'rgba(0,0,0,0.28)';
+    for (var gx1 = 0; gx1 <= W; gx1 += TS) ctx.fillRect(gx1 + 1, 0, 2, H);
+    for (var gy1 = 0; gy1 <= H; gy1 += TS) ctx.fillRect(0, gy1 + 1, W, 2);
+    ctx.fillStyle = 'rgba(30,36,30,0.55)';
+    for (var mk = 0; mk < 300; mk++) {
+      var h2 = rand() < 0.5;
+      var kx = h2 ? rand() * W : ((rand() * W / TS) | 0) * TS - 2;
+      var ky = h2 ? ((rand() * H / TS) | 0) * TS - 2 : rand() * H;
+      if (h2) ctx.fillRect(kx, ky, 3 + rand() * 20, 3); else ctx.fillRect(kx, ky, 3, 3 + rand() * 20);
+    }
+    /* 引きずり痕（動線方向）と汚れだまり */
+    for (var dr2 = 0; dr2 < 14; dr2++) {
+      ctx.strokeStyle = 'rgba(70,68,60,' + (0.10 + rand() * 0.22) + ')';
+      ctx.lineWidth = 2 + rand() * 7;
+      ctx.beginPath();
+      var dy0 = rand() * H;
+      ctx.moveTo(-20, dy0);
+      ctx.bezierCurveTo(W * 0.3, dy0 + (rand() - 0.5) * 40, W * 0.7, dy0 + (rand() - 0.5) * 40, W + 20, dy0 + (rand() - 0.5) * 30);
+      ctx.stroke();
+    }
+    for (var t2 = 0; t2 < 18; t2++) {
+      var bx2 = rand() * W, by2 = rand() * H, br2 = 30 + rand() * 110;
+      blot(ctx, bx2, by2, br2, 'rgba(60,58,48,0.24)');
+      var tg = ctx.createLinearGradient(0, by2, 0, by2 + br2 * 1.2);
+      tg.addColorStop(0, 'rgba(56,54,44,0.20)'); tg.addColorStop(1, 'rgba(56,54,44,0)');
+      ctx.fillStyle = tg; ctx.fillRect(bx2 - br2 * 0.4, by2, br2 * 0.8, br2 * 1.2);
+    }
+    speckle(ctx, W, H, 6000, rand, 'rgba(44,44,38,0.28)');
+    grain(ctx, W, H, 8, rand);
+    return c;
+  }
+
+  /** 床: 湿ったコンクリート（2m x 2m / 512 x 512）。検体区画向け */
+  function texFloorWet() {
+    var W = 512, H = 512, c = makeCanvas(W, H), ctx = c.getContext('2d');
+    var rand = rng(313373);
+    ctx.fillStyle = '#71766f'; ctx.fillRect(0, 0, W, H);
+    speckle(ctx, W, H, 22000, rand, 'rgba(96,102,94,0.45)');
+    speckle(ctx, W, H, 6000, rand, 'rgba(126,134,124,0.35)');
+    /* 骨材（コンクリの粒） */
+    for (var i = 0; i < 900; i++) {
+      var v = 100 + rand() * 60;
+      ctx.fillStyle = 'rgba(' + (v | 0) + ',' + ((v + 6) | 0) + ',' + ((v - 4) | 0) + ',0.55)';
+      ctx.beginPath(); ctx.arc(rand() * W, rand() * H, 1 + rand() * 3.4, 0, Math.PI * 2); ctx.fill();
+    }
+    /* 打ち継ぎの目地（2mごと＝セル境界） */
+    ctx.fillStyle = 'rgba(48,54,48,0.70)';
+    ctx.fillRect(0, 0, W, 5); ctx.fillRect(0, 0, 5, H);
+    ctx.fillStyle = 'rgba(132,140,130,0.24)';
+    ctx.fillRect(0, 5, W, 2); ctx.fillRect(5, 0, 2, H);
+    /* 濡れ＝低い場所に溜まった艶（暗く・青緑に寄る鏡面） */
+    for (var p = 0; p < 22; p++) {
+      var px = rand() * W, py = rand() * H, pr = 26 + rand() * 110;
+      var g2 = ctx.createRadialGradient(px, py, 0, px, py, pr);
+      g2.addColorStop(0, 'rgba(30,52,48,0.52)');
+      g2.addColorStop(0.72, 'rgba(38,60,54,0.30)');
+      g2.addColorStop(1, 'rgba(38,60,54,0)');
+      ctx.fillStyle = g2; ctx.beginPath(); ctx.arc(px, py, pr, 0, Math.PI * 2); ctx.fill();
+      /* 水縁のハイライト */
+      ctx.strokeStyle = 'rgba(168,206,196,0.20)'; ctx.lineWidth = 1.6;
+      ctx.beginPath(); ctx.arc(px, py, pr * 0.78, 0, Math.PI * 2); ctx.stroke();
+    }
+    /* 藻・ぬめり（緑） */
+    for (var m = 0; m < 34; m++) blot(ctx, rand() * W, rand() * H, 18 + rand() * 70, 'rgba(52,86,58,0.30)');
+    /* 排水の流れ跡（重力方向） */
+    for (var s = 0; s < 12; s++) {
+      ctx.strokeStyle = 'rgba(40,58,50,' + (0.16 + rand() * 0.26) + ')';
+      ctx.lineWidth = 3 + rand() * 9;
+      ctx.beginPath();
+      var sx = rand() * W;
+      ctx.moveTo(sx, -10);
+      ctx.bezierCurveTo(sx + (rand() - 0.5) * 60, H * 0.35, sx + (rand() - 0.5) * 80, H * 0.7, sx + (rand() - 0.5) * 40, H + 10);
+      ctx.stroke();
+    }
+    /* ひび */
+    for (var cr = 0; cr < 8; cr++) crack(ctx, rand() * W, rand() * H, 70 + rand() * 180, rand() * 6.28, rand, 0);
+    grain(ctx, W, H, 9, rand);
+    return c;
+  }
+
+  /** 床: 縞鋼板（2m x 2m / 512 x 512）。機械区画向け＝足音が変わる床 */
+  function texFloorMetal() {
+    var W = 512, H = 512, c = makeCanvas(W, H), ctx = c.getContext('2d');
+    var rand = rng(902244);
+    ctx.fillStyle = '#6b7076'; ctx.fillRect(0, 0, W, H);
+    speckle(ctx, W, H, 14000, rand, 'rgba(96,102,108,0.40)');
+    /* 縞（涙型の突起）を千鳥に並べる */
+    var SP = 64;
+    for (var ry = 0; ry < H; ry += SP) {
+      for (var rx = 0; rx < W; rx += SP) {
+        var ox = ((ry / SP) | 0) % 2 ? SP / 2 : 0;
+        for (var k = 0; k < 2; k++) {
+          var a = (k ? 1 : -1) * 0.62;
+          var bx = rx + ox + SP * 0.25 + k * SP * 0.30, by = ry + SP * 0.30 + k * SP * 0.32;
+          ctx.save();
+          ctx.translate(bx, by); ctx.rotate(a);
+          /* 突起の面（明）と影 */
+          ctx.fillStyle = 'rgba(28,32,36,0.62)';
+          ctx.fillRect(-14, -4 + 3, 28, 8);
+          ctx.fillStyle = 'rgba(150,158,166,0.55)';
+          ctx.fillRect(-14, -4, 28, 8);
+          ctx.fillStyle = 'rgba(206,214,222,0.35)';
+          ctx.fillRect(-13, -4, 26, 3);
+          ctx.restore();
+        }
+      }
+    }
+    /* 板の継ぎ目（2mごと）とボルト */
+    ctx.fillStyle = 'rgba(30,34,38,0.85)'; ctx.fillRect(0, 0, W, 6); ctx.fillRect(0, 0, 6, H);
+    ctx.fillStyle = 'rgba(190,200,208,0.20)'; ctx.fillRect(0, 6, W, 2); ctx.fillRect(6, 0, 2, H);
+    for (var bx2 = 26; bx2 < W; bx2 += 120) {
+      for (var by2 = 26; by2 < H; by2 += 120) {
+        ctx.fillStyle = 'rgba(146,154,162,0.85)';
+        ctx.beginPath(); ctx.arc(bx2, by2, 6.5, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = 'rgba(26,30,34,0.6)';
+        ctx.beginPath(); ctx.arc(bx2 + 1.5, by2 + 1.8, 4.2, 0, Math.PI * 2); ctx.fill();
+      }
+    }
+    /* 摩耗（動線に沿って突起が潰れて光る） */
+    var wear = ctx.createLinearGradient(0, H * 0.5 - 130, 0, H * 0.5 + 130);
+    wear.addColorStop(0, 'rgba(206,214,222,0)');
+    wear.addColorStop(0.5, 'rgba(206,214,222,0.20)');
+    wear.addColorStop(1, 'rgba(206,214,222,0)');
+    ctx.fillStyle = wear; ctx.fillRect(0, 0, W, H);
+    /* 油だまりと錆 */
+    for (var o = 0; o < 16; o++) blot(ctx, rand() * W, rand() * H, 24 + rand() * 90, 'rgba(24,24,22,0.42)');
+    for (var s2 = 0; s2 < 26; s2++) {
+      ctx.fillStyle = 'rgba(' + (104 + rand() * 46 | 0) + ',' + (58 + rand() * 32 | 0) + ',22,' + (0.22 + rand() * 0.4) + ')';
+      ctx.fillRect(rand() * W, rand() * H, 4 + rand() * 20, 3 + rand() * 10);
+    }
+    speckle(ctx, W, H, 5200, rand, 'rgba(40,44,48,0.30)');
+    grain(ctx, W, H, 8, rand);
+    return c;
+  }
+
+  /* ================================================================ */
 
   var BUILDERS = {
     wall: function () { return texWall(1337); },
@@ -1222,7 +1553,9 @@
     lamp: texLamp, screen: texScreen, paper: texPaper, sheet: texSheet,
     water: texWater, glass: texGlass, blood: texBlood, hatch: texHatch,
     sign: texSign, tankfluid: texTankFluid, board: texBoard, monitors: texMonitors,
-    zonesign: texZoneSign
+    zonesign: texZoneSign,
+    wallPaint: texWallPaint, wallMetal: texWallMetal,
+    floorTile: texFloorTile, floorWet: texFloorWet, floorMetal: texFloorMetal
   };
 
   var cache = Object.create(null);

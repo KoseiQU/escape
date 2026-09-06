@@ -63,7 +63,7 @@
     a1_n6: {
       title: '最終封鎖手順書 控え',
       body: '最終封鎖手順書 控え\n\n' +
-        '・隔壁鍵は所長保管。所長室は東端、記録室のさらに奥。\n' +
+        '・隔壁鍵は所長保管。所長室は北の記録区画の西端 —— 記録室のさらに奥。\n' +
         '・区画銘板は撤去せず残す。迷った者の目印になる。\n\n' +
         '……もう戻る者もいない。この控えを残す。\n' +
         '誰かがここまで辿り着いたなら、どうか急いでくれ。奴は音を覚える。'
@@ -114,8 +114,13 @@
     findKey: '出口の鍵を探す —— 施設の一番奥へ',
     haveKey: '鍵を手に入れた —— 北の隔壁へ戻る',
     taut: 'ロープが張った —— 来た道を戻れ',
-    knot: '落ちたロープの結び目へ戻る'
+    knot: '落ちたロープの結び目へ戻る',
+    /* P4.9: 張力インジケータが赤に入った瞬間の一時表示（docs/notes.md「目的表示（P4.9追加）」） */
+    ropeShort: 'ロープが足りない —— 戻って巻き戻せ'
   };
+
+  /* P4.9 HUD文言（docs/notes.md「HUD文言（P4.9追加）」）。{M} は余裕(m)の整数 */
+  var ROPE_HUD = 'ロープ 余裕 {M}m';
 
   /* 壁の掲示（docs/notes.md「掲示（短文・使い回し可のフレーバー）」の正文）。
    * P4.8: 配電順序・制御室・排水路・12秒開放の掲示は失効（該当の仕掛けが無い）。 */
@@ -157,6 +162,7 @@
     this.dom = {
       prompt: document.getElementById('prompt'),
       objective: document.getElementById('objective'),
+      ropeHud: document.getElementById('rope-hud'),
       memoOverlay: document.getElementById('memo-overlay'),
       memoTitle: document.getElementById('memo-title'),
       memoBody: document.getElementById('memo-body'),
@@ -379,6 +385,7 @@
     this._updateNoteGlow(dt);
     this._updatePrompt();
     this._updateObjective();
+    this._updateRopeHud();
     this._syncHud();
   };
 
@@ -449,6 +456,8 @@
     var rope = this.game.rope;
     if (rope && !rope.isAttached()) return OBJECTIVE.knot;
     if (rope && rope.taut) return OBJECTIVE.taut;
+    /* P4.9: 張力インジケータが赤に入った直後は目的表示を差し替える */
+    if (rope && rope.redT > 0) return OBJECTIVE.ropeShort;
     /* 鍵を得たら以後はずっとこの行（クリア画面が出た後も戻さない） */
     if (this.gimmick.key) return OBJECTIVE.haveKey;
     return OBJECTIVE.findKey;
@@ -459,9 +468,33 @@
     if (!el) return;
     var s = this.objective();
     if (el.textContent !== s) el.textContent = s;
-    var taut = (s === OBJECTIVE.taut);
+    var taut = (s === OBJECTIVE.taut || s === OBJECTIVE.ropeShort);
     if (el._taut !== taut) { el.classList.toggle('taut', taut); el._taut = taut; }
     this._objText = s;
+  };
+
+  /* P4.9 ロープ張力インジケータ（DESIGN.md §4「エリア1 新マップ Z4」）。
+   * 表示は余裕(m)のみ・状態は色だけで示す（GPS的な矢印は出さない＝手探りを壊さない）。 */
+  Progress.prototype.ropeHudText = function () {
+    var rope = this.game.rope;
+    if (!rope) return '';
+    return ROPE_HUD.replace('{M}', String(Math.round(rope.slack())));
+  };
+  Progress.prototype.ropeHudState = function () {
+    var rope = this.game.rope;
+    if (!rope) return 'loose';
+    return rope.tension().state;
+  };
+  Progress.prototype._updateRopeHud = function () {
+    var el = this.dom.ropeHud;
+    if (!el) return;
+    var txt = this.ropeHudText();
+    if (el.textContent !== txt) el.textContent = txt;
+    var st = this.ropeHudState();
+    if (el._st !== st) {
+      el.className = st;
+      el._st = st;
+    }
   };
 
   /* ---------------- 本物のメモの見分け（近接で縁が淡く光る） ---------------- */
@@ -695,7 +728,8 @@
         key: pr.gimmick.key, doorOpen: pr.gimmick.doorOpen,
         checkpoint: pr.checkpoint, cleared: pr.cleared, clearedBy: pr.clearedBy,
         notesRead: Object.keys(pr.notesRead), signsRead: Object.keys(pr.signsRead),
-        objective: pr.objective(), prompt: pr.dom.prompt ? pr.dom.prompt.textContent : ''
+        objective: pr.objective(), prompt: pr.dom.prompt ? pr.dom.prompt.textContent : '',
+        ropeHud: pr.ropeHudText(), ropeState: pr.ropeHudState()
       };
     }
   };

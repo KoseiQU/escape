@@ -23,9 +23,13 @@
   var ESCAPE = global.ESCAPE;
   var THREE = global.THREE;
 
-  /* 契約 §4「α初期値0.3（ENEMY_TUNINGと同様に定数集約、P7で調整）」 */
+  /* 契約 §4「α初期値0.3」／P4.9「αは新マップで0.35に引き上げ（定数）。P7で再調整」 */
   var ROPE_TUNING = {
-    alpha: 0.30,             /* ロープの余裕率 L = 最短 × (1+α) */
+    alpha: 0.35,             /* ロープの余裕率 L = 最短 × (1+α)。P4.9 で 0.30→0.35 */
+    greenRatio: 1.05,        /* 緑: 使用長 ≤ スタート→現在地の最短 × これ */
+    yellowRatio: 1.30,       /* 黄: 遠回り中（≤ 最短 × これ） */
+    tensionInterval: 0.50,   /* 張力インジケータの再計算間隔(s)。マス変化時は即時 */
+    redWarnDur: 3.20,        /* 赤に入った時の目的表示の一時差し替え(s) */
     knotPickRange: 2.30,     /* 結び目に「調べる」が届く距離(m) */
     tautMsgDur: 2.40,        /* 「ロープが張った」の表示時間(s) */
     tautPullDur: 0.42,       /* 腰を引かれる演出の長さ(s) */
@@ -114,10 +118,130 @@
     this.blocks = 0;
     this.picks = 0;
     this.drops = 0;
+    this.redWarns = 0;
+    this.redT = 0;
+    this._tension = null;
+    this._tenT = 0;
+    this._tenCell = null;
     this._dirty = true;
     this._lastX = 0; this._lastZ = 0;
     this._clearFX();
     this._buildKnots();
+  };
+
+  /* ---------------- 張力インジケータ（DESIGN.md §4「エリア1 新マップ Z4」） ----------------
+   * 緑 = 最短経路上（使用長 ≤ スタート→現在地の最短 × 1.05）
+   * 黄 = 遠回り中（≤ × 1.30。それ以上でも「届く」うちは黄のまま）
+   * 赤 = この先届かない（残りロープ < 現在地→目標の最短距離）
+   *      目標は鍵未取得なら金庫、取得後は北の隔壁（exitPad）。
+   * 距離場は静的なので BFS はリセット時に3枚だけ焼き、以後は O(1) 参照。
+   * 状態の再評価はマスが変わった時と 0.5 秒ごと（契約の「間引き計算」）。 */
+
+  /** 任意のマスからの距離場（マス数。未到達は -1） */
+  Rope.prototype._distMap = function (col, row) {
+    var map = this.map || this.game.map;
+    var W = map.width, H = map.height;
+    var d = new Int32Array(W * H);
+    for (var i = 0; i < d.length; i++) d[i] = -1;
+    if (!rawWalkable(map, col, row)) return d;
+    d[row * W + col] = 0;
+    var q = [col, row], head = 0;
+    var D = [1, 0, -1, 0, 0, 1, 0, -1];
+    while (head < q.length) {
+      var c = q[head++], r = q[head++];
+      var d0 = d[r * W + c];
+      for (var k = 0; k < 8; k += 2) {
+        var nc = c + D[k], nr = r + D[k + 1];
+        if (!rawWalkable(map, nc, nr) || d[nr * W + nc] >= 0) continue;
+        d[nr * W + nc] = d0 + 1;
+        q.push(nc, nr);
+      }
+    }
+    return d;
+  };
+
+  /** 金庫（鍵）に「調べる」ために立つマス */
+  Rope.prototype._keyStand = function () {
+    var map = this.map || this.game.map, meta = map.meta || {};
+    var safe = null, gl = meta.gimmicks || [];
+    for (var i = 0; i < gl.length; i++) if (gl[i].role === 'safe') safe = gl[i];
+    if (!safe) safe = meta.keySafe;
+    if (!safe) return null;
+    var F = { n: [0, -1], s: [0, 1], e: [1, 0], w: [-1, 0] };
+    if (safe.dir && F[safe.dir]) {
+      var v = F[safe.dir];
+      if (rawWalkable(map, safe.col + v[0], safe.row + v[1])) {
+        return { col: safe.col + v[0], row: safe.row + v[1] };
+      }
+    }
+    var D = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+    for (var d = 0; d < 4; d++) {
+      if (rawWalkable(map, safe.col + D[d][0], safe.row + D[d][1])) {
+        return { col: safe.col + D[d][0], row: safe.row + D[d][1] };
+      }
+    }
+    return null;
+  };
+
+  Rope.prototype._buildDistMaps = function () {
+    var map = this.map, meta = map.meta || {};
+    this._W = map.width;
+    this._dFromSpawn = this._distMap(meta.spawn.col, meta.spawn.row);
+    this._dToExit = meta.exitPad ? this._distMap(meta.exitPad.col, meta.exitPad.row) : null;
+    var ks = this._keyStand();
+    this._dToKey = ks ? this._distMap(ks.col, ks.row) : null;
+    this._keyStandCell = ks;
+  };
+
+  /** 鍵を取ったか（progress が無い状況＝単体テストでも落ちない） */
+  Rope.prototype._hasKey = function () {
+    var pr = this.game.progress;
+    return !!(pr && pr.gimmick && pr.gimmick.key);
+  };
+
+  /** 張力インジケータの状態を計算する（緑/黄/赤 と数値） */
+  Rope.prototype.computeTension = function () {
+    var map = this.map, T = map.tileSize;
+    if (!this._dFromSpawn) this._buildDistMaps();
+    var h = this.head();
+    var idx = h.row * this._W + h.col;
+    var slack = this.slack();
+    var goal = this._hasKey() ? 'exit' : 'key';
+    var field = (goal === 'exit') ? this._dToExit : this._dToKey;
+    var needTiles = (field && field[idx] >= 0) ? field[idx] : -1;
+    var need = (needTiles >= 0) ? needTiles * T : 0;
+    var bestTiles = this._dFromSpawn ? this._dFromSpawn[idx] : -1;
+    var best = (bestTiles >= 0) ? bestTiles * T : 0;
+    var state;
+    if (!this.attached) state = 'loose';
+    else if (needTiles >= 0 && slack < need) state = 'red';
+    else if (this.used <= best * this.T.greenRatio + 1e-6) state = 'green';
+    else state = 'yellow';
+    return {
+      state: state, goal: goal, slack: slack, used: this.used, L: this.L,
+      need: need, needTiles: needTiles, best: best, bestTiles: bestTiles,
+      ratio: (best > 1e-6) ? (this.used / best) : 1
+    };
+  };
+
+  /** 直近の張力（毎フレーム BFS を舐めないよう間引いたキャッシュ） */
+  Rope.prototype.tension = function () {
+    if (!this._tension) this._refreshTension();
+    return this._tension;
+  };
+
+  Rope.prototype._refreshTension = function () {
+    var prev = this._tension;
+    this._tension = this.computeTension();
+    this._tenT = 0;
+    /* 赤に入った瞬間: 短い警告音＋目的表示の一時差し替え（正文は docs/notes.md P4.9追加） */
+    if (this._tension.state === 'red' && (!prev || prev.state !== 'red')) {
+      this.redT = this.T.redWarnDur;
+      this.redWarns++;
+      sfx('terminalErr', {});
+      shakeKick(0.18);
+    }
+    return this._tension;
   };
 
   /** 残りの余裕(m) */
@@ -137,12 +261,14 @@
       this.tautT -= dt;
       if (this.tautT <= 0) { this.tautT = 0; this.taut = false; }
     }
+    if (this.redT > 0) { this.redT -= dt; if (this.redT < 0) this.redT = 0; }
     var p = this.game.player;
     var c = p.col(), r = p.row();
     if (!this.attached) {
       /* 結び目まで戻る区間はロープ無し＝余裕を消費しない（契約） */
       this._pullBack(dt);
       this._syncTrail();
+      this._tickTension(dt);
       return;
     }
     var h = this.head();
@@ -166,6 +292,18 @@
     }
     this._pullBack(dt);
     this._syncTrail();
+    this._tickTension(dt);
+  };
+
+  /** 張力インジケータ: マスが変わった時と 0.5 秒ごとにだけ BFS 距離場を引き直す（間引き計算） */
+  Rope.prototype._tickTension = function (dt) {
+    this._tenT += dt;
+    var hh = this.head();
+    var hk = hh.col + ',' + hh.row + (this.attached ? '+' : '-');
+    if (!this._tension || hk !== this._tenCell || this._tenT >= this.T.tensionInterval) {
+      this._refreshTension();
+      this._tenCell = hk;
+    }
   };
 
   /** head から (c,r) までの1マスずつの経路（斜め移動は軸で分解する） */
@@ -282,6 +420,7 @@
     this.used = k.used;
     this.attached = true;
     this.picks++;
+    this._tension = null; this._tenCell = null; this._tenT = 0;
     var idx = this.knots.indexOf(k);
     if (idx >= 0) this.knots.splice(idx, 1);
     sfx('pickup', {});
@@ -304,6 +443,7 @@
     this.attached = true;
     this.knots.length = 0;
     this.taut = false; this.tautT = 0; this.pullT = 0;
+    this.redT = 0; this._tension = null; this._tenCell = null; this._tenT = 0;
     this._buildKnots();
     this._dirty = true;
   };
@@ -349,6 +489,7 @@
     this.ghosts = [];
     var gh = d.ghosts || [];
     for (var g = 0; g < gh.length; g++) this.ghosts.push(unpack(gh[g]));
+    this._tension = null; this._tenCell = null; this._tenT = 0; this.redT = 0;
     this._buildKnots();
     this._dirty = true;
     return true;
@@ -515,7 +656,8 @@
       attached: this.attached, taut: this.taut, cells: this.stack.length,
       knots: this.knots.length, ghosts: this.ghosts.length,
       payouts: this.payouts, rewinds: this.rewinds, blocks: this.blocks,
-      picks: this.picks, drops: this.drops
+      picks: this.picks, drops: this.drops,
+      tension: this.tension(), redWarns: this.redWarns, redT: this.redT
     };
   };
 
@@ -528,6 +670,10 @@
     info: function () {
       var r = ESCAPE.game && ESCAPE.game.rope;
       return r ? r.info() : null;
+    },
+    tension: function () {
+      var r = ESCAPE.game && ESCAPE.game.rope;
+      return r ? r.computeTension() : null;
     }
   };
 })(window);

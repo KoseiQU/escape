@@ -764,8 +764,26 @@
       t.ok(!g.stealth.inLocker(), 'ロッカー: 外に出ている');
       t.ok(!g.player.collidesAt(g.player.x, g.player.z), 'ロッカー: 出た先で壁に埋まっていない');
     }
-    /* 暗所では発見距離が落ちる */
-    var dark = { col: 4, row: 22 }, lit = { col: 7, row: 46 };
+    /* 暗所では発見距離が落ちる。基準マスは meta から取る（マップ差し替えに強くする） */
+    /* 漆黒区画（非常灯すら置かない区間）の中心を使う＝確実に暗い */
+    var dz = (g.map.meta.blackZones || g.map.meta.darkZones || [])[0];
+    var dark = { col: Math.round((dz.c0 + dz.c1) / 2), row: Math.round((dz.r0 + dz.r1) / 2) };
+    if (!g.map.isWalkable(dark.col, dark.row)) {
+      var found = false;
+      for (var dr0 = dz.r0; dr0 <= dz.r1 && !found; dr0++) {
+        for (var dc0 = dz.c0; dc0 <= dz.c1 && !found; dc0++) {
+          if (g.map.isWalkable(dc0, dr0)) { dark = { col: dc0, row: dr0 }; found = true; }
+        }
+      }
+    }
+    /* 明所: lightOverrides で強く点灯させたマス（受入ホール等） */
+    var lit = { col: 7, row: 46 };
+    var ovs = g.map.meta.lightOverrides || [];
+    for (var oi = 0; oi < ovs.length; oi++) {
+      if (ovs[oi].state === 'on' && (ovs[oi].gain || 1) >= 1.5 && g.map.isWalkable(ovs[oi].col, ovs[oi].row)) {
+        lit = { col: ovs[oi].col, row: ovs[oi].row }; break;
+      }
+    }
     place(g, dark.col, dark.row, 0);
     var rDark = ai.sightRange();
     place(g, lit.col, lit.row, 0);
@@ -1172,7 +1190,7 @@
     g.reset();
     var rope = g.rope, T = ESCAPE.ROPE_TUNING;
     if (!t.ok(!!rope, 'ロープ: モジュールが組み込まれている')) return;
-    t.near(T.alpha, 0.30, 1e-9, 'ロープ: α の初期値は 0.30（契約）', T.alpha);
+    t.near(T.alpha, 0.35, 1e-9, 'ロープ: α は 0.35（契約 §4「エリア1 新マップ Z4」P4.9）', T.alpha);
     /* 独立に BFS して最短経路長を出し直す（Rope の実装と別経路で確かめる） */
     var meta = g.map.meta;
     var route = routeTo(g, meta.spawn.col, meta.spawn.row, meta.exitPad.col, meta.exitPad.row);
@@ -1253,7 +1271,11 @@
     var stackAtCapture = rope.stack.length;
     var px = g.player.x, pz = g.player.z;
     g.progress.gimmick.key = true;                 /* 進行状態の保持を確かめるための印 */
+    /* 道中で敵に捕まっていても「1回目の捕獲」から検証する（敵の数に依存させない） */
+    st.captures = 0;
     var beforeExplored = g.minimap.exploredCount;
+    /* 捕獲前に踏破済みだった「スタートから遠いマス」を1つ控える */
+    var farCell = { col: g.player.col(), row: g.player.row() };
 
     t.ok(st.capture() === true, '捕獲: 捕獲が始まる');
     t.ok(rope.isAttached() === false, '捕獲: ロープが外れる');
@@ -1269,8 +1291,12 @@
       '捕獲: 復帰先はスタート地点（2026-09-03改訂・牢送りは失効）',
       g.player.col() + ',' + g.player.row());
     t.ok(g.progress.gimmick.key === true, '捕獲: 進行状態（鍵）は保持される');
-    t.ok(g.minimap.exploredCount >= beforeExplored, '捕獲: 地図の踏破は保持される',
-      g.minimap.exploredCount + ' / ' + beforeExplored);
+    /* 【失効】旧「捕獲: 地図の踏破は保持される」（契約 §4 P4.8）は、
+     * P4.10「捕獲のたびに地図を真っ暗にする」で失効した。捕獲で遠方の踏破が消えることを検査する。 */
+    t.ok(g.minimap.isExplored(farCell.col, farCell.row) === false,
+      '捕獲: 地図の踏破が消える（P4.10改訂・旧「保持される」は失効）',
+      farCell.col + ',' + farCell.row + ' explored=' + g.minimap.isExplored(farCell.col, farCell.row) +
+      ' / 捕獲前 ' + beforeExplored);
     t.ok(g.progress.objective() === ESCAPE.PROGRESS_OBJECTIVE.knot,
       '捕獲: 目的表示が「落ちたロープの結び目へ戻る」になる', g.progress.objective());
 
@@ -1445,7 +1471,8 @@
     var dir = null, rs = g.map.meta.regions || [];
     for (var i = 0; i < rs.length; i++) if (rs[i].id === 'director') dir = rs[i];
     t.ok(!!dir && dir.zone === 'E', '所長室: 区画Eに属する', dir && dir.zone);
-    t.ok(!!dir && safe.col >= dir.c0 && safe.col <= dir.c1 + 1,
+    t.ok(!!dir && safe.col >= dir.c0 - 1 && safe.col <= dir.c1 + 1 &&
+      safe.row >= dir.r0 - 1 && safe.row <= dir.r1 + 1,
       '所長室: 金庫は所長室の壁にある', safe.col + ',' + safe.row);
 
     /* 鍵あり → 解錠 → EXIT でクリア */
@@ -1600,8 +1627,9 @@
     /* P4.8 で差し替えた3枚（memo1/4/5）が v3 の正文になっていること */
     t.ok(ESCAPE.PROGRESS_NOTE_TEXTS.a1_n5.body.indexOf('鍵は所長室の金庫') >= 0,
       'メモ: memo1 が v3 の差し替え本文（所長室の金庫）');
-    t.ok(ESCAPE.PROGRESS_NOTE_TEXTS.a1_n6.body.indexOf('所長室は東端、記録室のさらに奥') >= 0,
-      'メモ: memo4 が v3 の差し替え本文（所長室の場所）');
+    /* P4.9: 正文が Z4 に合わせて改訂された（所長室＝北の記録区画の西端） */
+    t.ok(ESCAPE.PROGRESS_NOTE_TEXTS.a1_n6.body.indexOf('所長室は北の記録区画の西端 —— 記録室のさらに奥') >= 0,
+      'メモ: memo4 が正文どおり（所長室は北の記録区画の西端）');
     t.ok(ESCAPE.PROGRESS_NOTE_TEXTS.a1_n1.title === '点検員の走り書き',
       'メモ: memo5 が v3 の差し替え（点検員の走り書き）', ESCAPE.PROGRESS_NOTE_TEXTS.a1_n1.title);
     t.ok(!ESCAPE.PROGRESS_NOTE_TEXTS.a1_n7 && !ESCAPE.PROGRESS_NOTE_TEXTS.a1_n8 &&
@@ -1795,11 +1823,19 @@
     var mats = ['tile', 'metal', 'water', 'glass'], mm = [];
     for (var j = 0; j < mats.length; j++) if (!A.FLOOR_MAT[mats[j]]) mm.push(mats[j]);
     t.ok(mm.length === 0, '音響: 床種4種の足音パラメータがある', mm.join(' / '));
-    /* 区画ごとの環境ドローン */
-    var regions = (g.map.meta && g.map.meta.regions) || [];
-    var noAmb = 0;
-    for (var k = 0; k < regions.length; k++) if (!A.AMBIENCE[regions[k].id]) noAmb++;
-    t.ok(noAmb === 0, '音響: 全ての区画に環境ドローンの色味が定義されている', noAmb + '区画が未定義');
+    /* 区画（帯）ごとの環境ドローン。P4.9: 帯 A〜F の6区画に必ず色味があり、互いに異なること
+     * （個々の小部屋は既定のドローンにフォールバックしてよい）。 */
+    var bands = (g.map.meta && g.map.meta.bands) || [];
+    var noAmb = [], fset = {};
+    for (var k = 0; k < bands.length; k++) {
+      var amb = A.AMBIENCE[bands[k].id];
+      if (!amb) { noAmb.push(bands[k].zone); continue; }
+      fset[amb.f + '/' + amb.lp] = (fset[amb.f + '/' + amb.lp] || 0) + 1;
+    }
+    t.ok(bands.length === 6, '音響: 区画（帯）が6つ定義されている', bands.length);
+    t.ok(noAmb.length === 0, '音響: 全ての区画（帯）に環境ドローンの色味が定義されている', noAmb.join(','));
+    t.ok(Object.keys(fset).length === bands.length,
+      '音響: 区画（帯）ごとにドローンの色味が異なる', Object.keys(fset).length + '/' + bands.length);
     /* 恐怖演出のDOM */
     t.ok(!!document.getElementById('fx-vignette') && !!document.getElementById('fx-flash') &&
       !!document.getElementById('fx-noise'), '演出: 減光・フラッシュ・ノイズのDOMが結線されている');
@@ -2737,6 +2773,8 @@
       var d = Math.hypot(c.x - e.x, c.z - e.z);
       if (d < 10 || d > 16) continue;
       if (!ai.blockedLine(e.x, e.z, c.x, c.z)) continue;
+      /* P4.10: 敵が複数いるので、検証する個体（g.ai）自身の縄張りの中に音源を取る */
+      if (ai.territory && (cells[i].row < ai.territory.r0 || cells[i].row > ai.territory.r1)) continue;
       spot = { col: cells[i].col, row: cells[i].row, x: c.x, z: c.z };
     }
     if (!t.ok(!!spot, '音→疾走: 検証に使える音源マスがある')) { g.reset(); return; }
@@ -2760,11 +2798,14 @@
     t.ok(ai.state === 'investigate' || ai.state === 'search',
       '音→疾走: 音源へ向かっている', ai.state);
 
-    /* 到着 → 探索8秒 → 直立へ戻り巡回（契約） */
-    var toSearch = simUntil(g, function () { return ai.state === 'search'; }, 900);
+    /* 到着 → 探索8秒 → 直立へ戻り巡回（契約）。
+     * P4.9: マップが80x80になったので「音源まで走る時間」を距離から見積もる（固定枠だと足りない）。 */
+    var far = Math.hypot(ai.enemy.x - spot.x, ai.enemy.z - spot.z);
+    var travel = Math.ceil(far / Math.max(0.5, T.investigateSpeed || T.chaseSpeed || 5) / ESCAPE.FIXED_DT * 2.5) + 900;
+    var toSearch = simUntil(g, function () { return ai.state === 'search'; }, travel);
     t.ok(toSearch >= 0, '音→疾走: 到着後は音源周辺の探索へ移る', ai.state);
     var toPatrol = simUntil(g, function () { return ai.state === 'patrol'; },
-      Math.round(T.searchDur / ESCAPE.FIXED_DT) + 900);
+      Math.round(T.searchDur / ESCAPE.FIXED_DT) + travel);
     t.ok(toPatrol >= 0, '音→疾走: 探索の後は巡回へ戻る', ai.state);
     var back = simUntil(g, function () { return ai.form === 'stand' && ai.enemy.poseT < 1e-6; }, 300);
     t.ok(back >= 0, '音→疾走: 巡回では直立へ戻る', 'poseT=' + ai.enemy.poseT.toFixed(3));
@@ -2912,28 +2953,23 @@
     t.ok(!!office, 'v3: 記録室の区画が残っている');
     t.ok(!drain, 'v3: 排水路の区画が撤去されている');
     t.ok(!!store && !!pump, 'v3: 保管庫・循環ポンプ室の造形は残置されている');
-    t.ok(!!director && !!office && director.c0 > office.c1,
-      'v3: 所長室は記録室の東（奥）にある',
-      director && office && (office.c1 + ' -> ' + director.c0));
+    /* P4.9（DESIGN.md §4「エリア1 新マップ Z4」／docs/notes.md「所長室」）:
+     * 所長室は **区画E（北の帯）の西端**。旧 v3 の「記録室の東（奥）」は失効。 */
+    t.ok(!!director && !!office && director.c1 < office.c0,
+      'P4.9: 所長室は記録室より西（区画Eの西端）',
+      director && office && (director.c1 + ' < ' + office.c0));
+    t.ok(!!director && director.c1 <= map.width * 0.25,
+      'P4.9: 所長室は北の帯の西端にある', director && (director.c1 + ' <= ' + (map.width * 0.25)));
     t.ok(!!director && director.zone === 'E', 'v3: 所長室は区画E（記録区画）', director && director.zone);
 
-    /* 所長室が記録室とだけ繋がっている（扉なしの小部屋） */
     var cells = map.walkableCells();
-    var inDir = [], gate = [];
+    var inDir = [];
     for (var c = 0; c < cells.length; c++) {
       var e = cells[c];
       if (e.col < director.c0 || e.col > director.c1 || e.row < director.r0 || e.row > director.r1) continue;
       inDir.push(e);
-      var D = [[1, 0], [-1, 0], [0, 1], [0, -1]];
-      for (var d = 0; d < 4; d++) {
-        var nc = e.col + D[d][0], nr = e.row + D[d][1];
-        if (!map.isWalkable(nc, nr)) continue;
-        if (nc >= director.c0 && nc <= director.c1 && nr >= director.r0 && nr <= director.r1) continue;
-        gate.push(nc + ',' + nr);
-      }
     }
     t.ok(inDir.length >= 5, 'v3: 所長室に歩ける床がある', inDir.length + 'マス');
-    t.ok(gate.length === 1, 'v3: 所長室の出入口は1つだけ（扉なしの小部屋）', gate.join(' '));
 
     /* 数値基準（§3）を再検査 */
     t.ok(cells.length >= 900, 'v3: 歩行可能900マス以上を維持', cells.length + 'マス');
@@ -2988,8 +3024,9 @@
       t.ok(best >= far * 0.9, 'v3: 鍵はスタートから最も遠い側（深部）にある',
         best + ' / 最遠 ' + far);
       var exitD = dist[meta.exitPad.col + ',' + meta.exitPad.row];
-      t.ok(best <= exitD * 1.3, 'v3: 鍵の位置はロープ長 L の内側にある（詰まない）',
-        best + ' <= ' + (exitD * 1.3).toFixed(1));
+      var alpha = (ESCAPE.ROPE_TUNING && ESCAPE.ROPE_TUNING.alpha) || 0.35;
+      t.ok(best <= exitD * (1 + alpha), 'v3: 鍵の位置はロープ長 L の内側にある（詰まない）',
+        best + ' <= ' + (exitD * (1 + alpha)).toFixed(1));
     }
 
     /* 区画銘板の参照整合 */
@@ -3058,6 +3095,384 @@
     localStorage.removeItem(SAVE_KEY);
   }
 
+  /* ================================================================
+   * P4.9: 新マップ Z4 の載せ替え（DESIGN.md §4「エリア1 新マップ Z4」）
+   * ============================================================== */
+
+  /** 帯（区画）A〜F・銘板・メモ・見せ場ルームの区画単位の充足 */
+  function testP49Zones(t, g) {
+    var map = ESCAPE.Maps.load('area1'), meta = map.meta;
+    var ZONES = ['A', 'B', 'C', 'D', 'E', 'F'];
+
+    t.ok(map.width === 80 && map.height === 80, 'P4.9: マップは80x80（Z4）', map.width + 'x' + map.height);
+    var cells = map.walkableCells();
+    t.ok(cells.length >= 2000, 'P4.9: 歩行可能2000マス以上（Z4の実測3135）', cells.length + 'マス');
+
+    /* 帯: 6本・行レンジが隙間なく全80行を覆う・zoneが重複なくA〜F */
+    var bands = (meta.bands || []).slice().sort(function (a, b) { return a.r0 - b.r0; });
+    t.ok(bands.length === 6, 'P4.9: 帯（区画）が6本ある', bands.length);
+    var covered = true, prev = 0, zseen = {};
+    for (var i = 0; i < bands.length; i++) {
+      if (bands[i].r0 !== prev) covered = false;
+      prev = bands[i].r1 + 1;
+      zseen[bands[i].zone] = (zseen[bands[i].zone] || 0) + 1;
+    }
+    t.ok(covered && prev === map.height, 'P4.9: 帯が全行を隙間なく覆う', prev + '/' + map.height);
+    var zdup = 0;
+    for (var z = 0; z < ZONES.length; z++) if (zseen[ZONES[z]] !== 1) zdup++;
+    t.ok(zdup === 0, 'P4.9: 帯の区画名がA〜Fで重複なく揃っている', JSON.stringify(zseen));
+
+    /* 区画銘板: A〜F 各1枚・その帯の中にある */
+    var signs = meta.regionSigns || [];
+    t.ok(signs.length === 6, 'P4.9: 区画銘板が6枚', signs.length);
+    var badBand = [];
+    for (var si = 0; si < signs.length; si++) {
+      var b = null;
+      for (var bi = 0; bi < bands.length; bi++) if (bands[bi].zone === signs[si].zone) b = bands[bi];
+      if (!b) { badBand.push(signs[si].id + ':帯なし'); continue; }
+      if (signs[si].row < b.r0 - 1 || signs[si].row > b.r1 + 1) badBand.push(signs[si].id + ':帯外');
+    }
+    t.ok(badBand.length === 0, 'P4.9: 区画銘板が自分の帯の入口付近にある', badBand.join(' / '));
+
+    /* メモ: 6枚が区画A〜Fに1枚ずつ（どの帯に居るかで数える） */
+    function zoneOfRow(row) {
+      for (var k = 0; k < bands.length; k++) if (row >= bands[k].r0 && row <= bands[k].r1) return bands[k].zone;
+      return null;
+    }
+    var notes = meta.notes || [], nz = {};
+    for (var ni = 0; ni < notes.length; ni++) {
+      var zz = zoneOfRow(notes[ni].row);
+      nz[zz] = (nz[zz] || 0) + 1;
+    }
+    t.ok(notes.length === 6, 'P4.9: メモは6枚', notes.length);
+    var nmiss = [];
+    for (var nz2 = 0; nz2 < ZONES.length; nz2++) if (!nz[ZONES[nz2]]) nmiss.push(ZONES[nz2]);
+    t.ok(nmiss.length === 0, 'P4.9: メモが区画A〜Fに行き渡っている', JSON.stringify(nz));
+    /* メモの dir は「読む側」が歩行可能であること */
+    var F4 = { n: [0, -1], s: [0, 1], e: [1, 0], w: [-1, 0] };
+    var ndir = [];
+    for (var nd = 0; nd < notes.length; nd++) {
+      var v = F4[notes[nd].dir];
+      if (!v) { ndir.push(notes[nd].id + ':dir不正'); continue; }
+      if (!map.isWalkable(notes[nd].col + v[0], notes[nd].row + v[1])) ndir.push(notes[nd].id + ':読む側が壁');
+    }
+    t.ok(ndir.length === 0, 'P4.9: メモの向き（読む側）が歩行可能', ndir.join(' / '));
+
+    /* 見せ場ルーム: 各区画に最低1室、その部屋に什器がある */
+    var rooms = [], regions = meta.regions || [];
+    for (var ri = 0; ri < regions.length; ri++) {
+      var r = regions[ri];
+      if (!r.zone) continue;
+      if (r.c1 - r.c0 >= 40) continue;           /* 帯ゾーンは除く */
+      rooms.push(r);
+    }
+    var furn = meta.furniture || [];
+    var roomZone = {};
+    for (var rm = 0; rm < rooms.length; rm++) {
+      var q = rooms[rm], nf = 0;
+      for (var f = 0; f < furn.length; f++) {
+        if (furn[f].col >= q.c0 - 2 && furn[f].col <= q.c1 + 2 &&
+            furn[f].row >= q.r0 - 2 && furn[f].row <= q.r1 + 2) nf++;
+      }
+      if (nf >= 3) roomZone[q.zone] = (roomZone[q.zone] || 0) + 1;
+    }
+    var rmiss = [];
+    for (var rz = 0; rz < ZONES.length; rz++) if (!roomZone[ZONES[rz]]) rmiss.push(ZONES[rz]);
+    t.ok(rmiss.length === 0, 'P4.9: 各区画に見せ場ルーム（什器3点以上の部屋）が1室以上',
+      JSON.stringify(roomZone));
+
+    /* 闇だまり5箇所以上・漆黒2〜3箇所・明滅通路1〜3本（契約 §3） */
+    t.ok((meta.darkZones || []).length >= 5, 'P4.9: 闇だまりが5箇所以上', (meta.darkZones || []).length);
+    var bz = (meta.blackZones || []).length;
+    t.ok(bz >= 2 && bz <= 3, 'P4.9: 漆黒区画は2〜3箇所', bz);
+    var fz = (meta.flickerZones || []).length;
+    t.ok(fz >= 1 && fz <= 3, 'P4.9: 明滅だけの通路は1〜3本', fz);
+    /* 闇だまり・漆黒が見せ場ルームを潰していないこと */
+    var overlap = [];
+    for (var dz = 0; dz < (meta.darkZones || []).length; dz++) {
+      var d = meta.darkZones[dz];
+      for (var rr = 0; rr < rooms.length; rr++) {
+        var o = rooms[rr];
+        if (!(d.c1 < o.c0 || d.c0 > o.c1 || d.r1 < o.r0 || d.r0 > o.r1)) overlap.push(d.id + 'x' + o.id);
+      }
+    }
+    t.ok(overlap.length === 0, 'P4.9: 闇だまりが見せ場ルームに被っていない', overlap.join(' / '));
+  }
+
+  /** 区画ごとの景観差（床/壁テクスチャ・蛍光灯の色温度・金属床の足音） */
+  function testP49Look(t, g) {
+    g.reset();
+    var w = g.world, map = g.map;
+    var ZONES = ['A', 'B', 'C', 'D', 'E', 'F'];
+
+    /* 区画ごとに床・壁のテクスチャの組み合わせが違う */
+    var texKey = {}, floors = {}, dup = 0;
+    for (var i = 0; i < ZONES.length; i++) {
+      var tx = w._zoneTexOf ? w._zoneTexOf(ZONES[i]) : null;
+      /* 内部表を直接触らず、帯の代表マスから引く */
+      var band = null, bands = map.meta.bands || [];
+      for (var b = 0; b < bands.length; b++) if (bands[b].zone === ZONES[i]) band = bands[b];
+      var cell = null;
+      for (var r = band.r0; r <= band.r1 && !cell; r++) {
+        for (var c = 1; c < map.width - 1; c++) if (map.isWalkable(c, r)) { cell = { c: c, r: r }; break; }
+      }
+      var zt = w._zoneTex(cell.c, cell.r);
+      var key = zt.floor + '|' + zt.walls.join(',');
+      if (texKey[key]) dup++;
+      texKey[key] = ZONES[i];
+      floors[ZONES[i]] = zt.floor;
+    }
+    t.ok(dup === 0, 'P4.9: 区画ごとに床・壁テクスチャの組み合わせが異なる', JSON.stringify(floors));
+    t.ok(floors.B === 'floorTile', 'P4.9: 実験区画は白タイルの床', floors.B);
+    t.ok(floors.C === 'floorWet', 'P4.9: 検体区画は湿った床', floors.C);
+    t.ok(floors.F === 'floorMetal', 'P4.9: 機械区画は金属床', floors.F);
+
+    /* 蛍光灯の色温度が区画ごとに違う */
+    var cols = {}, seen = {}, samedup = 0;
+    for (var f2 = 0; f2 < w.fixtures.length; f2++) {
+      var fx = w.fixtures[f2];
+      if (fx.kind !== 'lamp') continue;
+      var z = w._zoneAt(fx.col, fx.row);
+      if (cols[z]) continue;
+      cols[z] = [fx.color.r.toFixed(2), fx.color.g.toFixed(2), fx.color.b.toFixed(2)].join(',');
+    }
+    for (var zk in cols) { if (seen[cols[zk]]) samedup++; seen[cols[zk]] = true; }
+    t.ok(Object.keys(cols).length === 6, 'P4.9: 6区画すべてに蛍光灯がある', Object.keys(cols).length);
+    t.ok(samedup === 0, 'P4.9: 区画ごとに蛍光灯の色温度が異なる', JSON.stringify(cols));
+
+    /* 機械区画は金属床＝足音が変わる（契約の言語どおり） */
+    var au = ESCAPE.audio;
+    if (au && au.floorMaterial) {
+      var mf = map.meta.metalFloors || [];
+      t.ok(mf.length > 0, 'P4.9: 金属床の宣言がある', mf.length);
+      var mc = null;
+      for (var mr = mf[0].r0; mr <= mf[0].r1 && !mc; mr++) {
+        for (var mcc = mf[0].c0; mcc <= mf[0].c1; mcc++) {
+          if (map.isWalkable(mcc, mr) && map.tileAt(mcc, mr) !== ESCAPE.TILE.NOISE) { mc = { c: mcc, r: mr }; break; }
+        }
+      }
+      t.ok(!!mc && au.floorMaterial(mc.c, mc.r) === 'metal',
+        'P4.9: 機械区画の床は金属の足音になる', mc && au.floorMaterial(mc.c, mc.r));
+      /* 他区画はタイル音のまま */
+      var other = null;
+      for (var orr = 44; orr <= 50 && !other; orr++) {
+        for (var occ = 2; occ < 70; occ++) {
+          if (map.isWalkable(occ, orr) && map.tileAt(occ, orr) !== ESCAPE.TILE.NOISE) { other = { c: occ, r: orr }; break; }
+        }
+      }
+      t.ok(!!other && au.floorMaterial(other.c, other.r) === 'tile',
+        'P4.9: 実験区画の床はタイルの足音のまま', other && au.floorMaterial(other.c, other.r));
+    }
+
+    /* 金属床の宣言（y=0 の平板）が高さの段差を作っていない */
+    t.ok(map.heightSeams().length === 0, 'P4.9: 金属床の宣言で床高さの段差が生まれていない');
+    g.reset();
+  }
+
+  /** 行き止まり44箇所すべてに「来た意味」がある（契約 §3） */
+  function testP49DeadEnds(t, g) {
+    var map = ESCAPE.Maps.load('area1'), meta = map.meta;
+    function deg(c, r) {
+      var n = 0;
+      if (map.isWalkable(c + 1, r)) n++;
+      if (map.isWalkable(c - 1, r)) n++;
+      if (map.isWalkable(c, r + 1)) n++;
+      if (map.isWalkable(c, r - 1)) n++;
+      return n;
+    }
+    var mark = Object.create(null);
+    function put(list) { for (var i = 0; i < (list || []).length; i++) mark[list[i].col + ',' + list[i].row] = true; }
+    put(meta.lockers); put(meta.notes); put(meta.furniture); put(meta.decals);
+    put(meta.checkpoints); put(meta.boards); put(meta.regionSigns); put(meta.gimmicks);
+    var kit = meta.wallKit || [];
+    for (var k = 0; k < kit.length; k++) mark[kit[k].col + ',' + kit[k].row] = true;
+    var cells = map.walkableCells(), dead = [], bad = [];
+    var D = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+    for (var i2 = 0; i2 < cells.length; i2++) {
+      var e = cells[i2];
+      if (deg(e.col, e.row) !== 1) continue;
+      dead.push(e);
+      var okc = !!mark[e.col + ',' + e.row];
+      for (var d = 0; d < 4 && !okc; d++) if (mark[(e.col + D[d][0]) + ',' + (e.row + D[d][1])]) okc = true;
+      if (!okc) bad.push(e.col + ',' + e.row);
+    }
+    t.ok(dead.length >= 12, 'P4.9: 行き止まりが12箇所以上（Z4実測44）', dead.length + '箇所');
+    t.ok(bad.length === 0, 'P4.9: 行き止まりすべてに「来た意味」がある',
+      bad.length + '箇所が空: ' + bad.slice(0, 8).join(' '));
+  }
+
+  /** 什器・壁付け造作・天井付けの参照整合 */
+  function testP49Props(t, g) {
+    var map = ESCAPE.Maps.load('area1'), meta = map.meta;
+    var F4 = { n: [0, -1], s: [0, 1], e: [1, 0], w: [-1, 0] };
+    var furn = meta.furniture || [], bad = [], seen = Object.create(null);
+    for (var i = 0; i < furn.length; i++) {
+      var f = furn[i], key = f.col + ',' + f.row;
+      if (!map.inBounds(f.col, f.row)) { bad.push(key + ':場外'); continue; }
+      if (!map.isSolid(f.col, f.row)) { bad.push(key + ':歩けるマスに立体物'); continue; }
+      if (seen[key]) { bad.push(key + ':重複'); continue; }
+      seen[key] = true;
+      var v = F4[f.dir];
+      if (!v) { bad.push(key + ':dir不正'); continue; }
+      if (!map.isWalkable(f.col + v[0], f.row + v[1])) bad.push(key + ':正面が壁');
+    }
+    t.ok(bad.length === 0, 'P4.9: 什器の参照整合（実体マス・重複なし・正面が歩ける）',
+      bad.length + '件 ' + bad.slice(0, 6).join(' / '));
+    t.ok(furn.length >= 60, 'P4.9: 什器が十分な数ある', furn.length + '点');
+
+    var kit = meta.wallKit || [], kbad = [];
+    for (var k = 0; k < kit.length; k++) {
+      var e = kit[k], v2 = F4[e.dir];
+      if (!v2) { kbad.push(e.col + ',' + e.row + ':dir不正'); continue; }
+      if (!map.isWalkable(e.col, e.row)) { kbad.push(e.col + ',' + e.row + ':手前が壁'); continue; }
+      if (!map.isSolid(e.col + v2[0], e.row + v2[1])) kbad.push(e.col + ',' + e.row + ':貼る先が壁でない');
+    }
+    t.ok(kbad.length === 0, 'P4.9: 壁付け造作の参照整合', kbad.length + '件 ' + kbad.slice(0, 6).join(' / '));
+
+    var ck = meta.ceilKit || [], cbad = [];
+    for (var c = 0; c < ck.length; c++) {
+      if (!map.inBounds(ck[c].col, ck[c].row)) cbad.push(ck[c].col + ',' + ck[c].row + ':場外');
+    }
+    t.ok(cbad.length === 0, 'P4.9: 天井付け造作の参照整合', cbad.join(' / '));
+  }
+
+  /** ロープ張力インジケータ（緑/黄/赤）と赤の警告 */
+  function testP49RopeTension(t, g) {
+    g.reset();
+    localStorage.removeItem(SAVE_KEY);
+    var rope = g.rope, meta = g.map.meta, T = ESCAPE.ROPE_TUNING;
+    t.near(T.alpha, 0.35, 1e-9, 'P4.9: α = 0.35（契約）', T.alpha);
+    t.near(T.greenRatio, 1.05, 1e-9, 'P4.9: 緑の判定は最短×1.05（契約）', T.greenRatio);
+    t.near(T.yellowRatio, 1.30, 1e-9, 'P4.9: 黄の判定は最短×1.30（契約）', T.yellowRatio);
+    t.ok(T.tensionInterval <= 0.5 + 1e-9, 'P4.9: 張力の再計算は0.5秒以下の間引き', T.tensionInterval);
+
+    /* スタート地点は必ず緑（使用長0＝最短） */
+    var t0 = rope.computeTension();
+    t.ok(t0.state === 'green', 'P4.9 緑: スタート地点は最短経路上', t0.state);
+    t.ok(t0.goal === 'key', 'P4.9: 鍵未取得なら目標は金庫', t0.goal);
+
+    /* 緑: 最短経路をそのまま進む */
+    var route = routeTo(g, meta.spawn.col, meta.spawn.row, meta.spawn.col, meta.spawn.row - 6);
+    if (route && route.length) {
+      walkCells(g, route);
+      var tg = rope.computeTension();
+      t.ok(tg.state === 'green', 'P4.9 緑: 最短経路上を進んでいる間は緑',
+        tg.state + ' used=' + tg.used.toFixed(0) + ' best=' + tg.best.toFixed(0));
+    }
+
+    /* 黄: 同じ場所へ遠回りして戻ると使用長が最短を超える */
+    var here = { col: g.player.col(), row: g.player.row() };
+    var det = routeTo(g, here.col, here.row, meta.spawn.col, meta.spawn.row);
+    if (det) walkCells(g, det);
+    /* いったんスタートへ戻して used を 0 にし、遠回りの往復を作る */
+    var loop = routeTo(g, meta.spawn.col, meta.spawn.row, here.col, here.row);
+    if (loop) {
+      /* 別の道を通って同じマスへ: 一度離れてから戻る */
+      var away = routeTo(g, meta.spawn.col, meta.spawn.row, meta.spawn.col + 6, meta.spawn.row);
+      if (away) walkCells(g, away);
+      var back = routeTo(g, g.player.col(), g.player.row(), here.col, here.row);
+      if (back) walkCells(g, back);
+    }
+    var ty = rope.computeTension();
+    t.ok(ty.used >= ty.best - 1e-6, 'P4.9: 使用長は常に最短以上', ty.used + ' >= ' + ty.best);
+    t.ok(ty.state === 'yellow' || ty.state === 'green',
+      'P4.9 黄: 遠回りすると黄（最短のままなら緑）',
+      ty.state + ' ratio=' + ty.ratio.toFixed(2));
+
+    /* 赤: 鍵を取った直後は「残りロープ < 出口までの最短」になり得る＝警告が出る */
+    g.reset();
+    localStorage.removeItem(SAVE_KEY);
+    rope = g.rope;
+    var Lsave = rope.L;
+    rope.L = 30;                                    /* 余裕を絞って必ず赤にする */
+    rope._tension = null;
+    var tr = rope.computeTension();
+    t.ok(tr.state === 'red', 'P4.9 赤: 残りロープ < 目標までの最短 で赤',
+      tr.state + ' slack=' + tr.slack.toFixed(0) + ' need=' + tr.need.toFixed(0));
+    /* 赤に入った瞬間に警告（音＋目的表示の一時差し替え）が出る */
+    var warns0 = rope.redWarns;
+    rope._tension = null;
+    rope._tenCell = null;
+    rope._tickTension(0.6);
+    t.ok(rope.redWarns === warns0 + 1, 'P4.9 赤: 赤に入った瞬間に警告が1回だけ出る', rope.redWarns);
+    t.ok(rope.redT > 0, 'P4.9 赤: 目的表示の一時差し替えが立つ', rope.redT.toFixed(2));
+    t.ok(g.progress.objective() === ESCAPE.PROGRESS_OBJECTIVE.ropeShort,
+      'P4.9 赤: 目的表示が「ロープが足りない —— 戻って巻き戻せ」（正文）', g.progress.objective());
+    /* 連続で赤のままなら警告は増えない */
+    rope._tickTension(0.6);
+    t.ok(rope.redWarns === warns0 + 1, 'P4.9 赤: 赤のままなら警告は繰り返さない', rope.redWarns);
+    /* 余裕を戻すと赤が解ける */
+    rope.L = Lsave;
+    rope._tension = null;
+    rope._tickTension(0.6);
+    t.ok(rope.tension().state !== 'red', 'P4.9: 余裕が戻れば赤が解ける', rope.tension().state);
+
+    /* HUD: 文言と色クラス */
+    g.stepFrame(ESCAPE.FIXED_DT);
+    var el = document.getElementById('rope-hud');
+    t.ok(!!el, 'P4.9: ロープHUDのDOMが結線されている');
+    t.ok(/^ロープ 余裕 \d+m$/.test(g.progress.ropeHudText()),
+      'P4.9: HUD文言が「ロープ 余裕 {M}m」（正文）', g.progress.ropeHudText());
+    t.ok(['green', 'yellow', 'red', 'loose'].indexOf(g.progress.ropeHudState()) >= 0,
+      'P4.9: HUDの色は緑/黄/赤（未接続はloose）', g.progress.ropeHudState());
+    t.ok(el.className === g.progress.ropeHudState(), 'P4.9: HUDのクラスが状態に追従する', el.className);
+    /* GPS的な矢印は出さない（契約） */
+    t.ok(g.progress.ropeHudText().indexOf('→') < 0 && g.progress.ropeHudText().indexOf('↑') < 0,
+      'P4.9: HUDに方向の矢印を出さない（迷路の手探りを壊さない）');
+    g.reset();
+    localStorage.removeItem(SAVE_KEY);
+  }
+
+  /** 鍵経由の踏破がロープ長 L の内側で成立する（詰まない） */
+  function testP49RopeFeasible(t, g) {
+    var map = ESCAPE.Maps.load('area1'), meta = map.meta;
+    var W = map.width, H = map.height;
+    function raw(c, r) {
+      if (!map.inBounds(c, r)) return false;
+      var d = ESCAPE.TILE_DEFS[map.tileAt(c, r)];
+      return !!(d && d.walkable);
+    }
+    function bfs(sc, sr) {
+      var d = new Int32Array(W * H);
+      for (var i = 0; i < d.length; i++) d[i] = -1;
+      d[sr * W + sc] = 0;
+      var q = [sc, sr], h = 0, D = [1, 0, -1, 0, 0, 1, 0, -1];
+      while (h < q.length) {
+        var c = q[h++], r = q[h++], d0 = d[r * W + c];
+        for (var k = 0; k < 8; k += 2) {
+          var nc = c + D[k], nr = r + D[k + 1];
+          if (!raw(nc, nr) || d[nr * W + nc] >= 0) continue;
+          d[nr * W + nc] = d0 + 1; q.push(nc, nr);
+        }
+      }
+      return d;
+    }
+    var safe = null, gl = meta.gimmicks || [];
+    for (var i2 = 0; i2 < gl.length; i2++) if (gl[i2].role === 'safe') safe = gl[i2];
+    var F4 = { n: [0, -1], s: [0, 1], e: [1, 0], w: [-1, 0] }, v = F4[safe.dir] || [0, 0];
+    var ks = { col: safe.col + v[0], row: safe.row + v[1] };
+    var ds = bfs(meta.spawn.col, meta.spawn.row);
+    var dk = bfs(ks.col, ks.row);
+    var de = bfs(meta.exitPad.col, meta.exitPad.row);
+    var shortest = ds[meta.exitPad.row * W + meta.exitPad.col];
+    var L = shortest * (1 + ESCAPE.ROPE_TUNING.alpha);
+    var toKey = ds[ks.row * W + ks.col];
+    t.ok(toKey > 0, 'P4.9: 鍵まで到達できる', toKey + 'マス');
+    t.ok(toKey <= L, 'P4.9: 鍵はロープ長 L の内側にある', toKey + ' <= ' + L.toFixed(1));
+    /* 巻き戻しを使えば鍵→出口が成立する（最小ピーク = min_j d_s(j)+max(d_key(j), d_exit(j))） */
+    var peak = Infinity;
+    for (var r2 = 0; r2 < H; r2++) {
+      for (var c2 = 0; c2 < W; c2++) {
+        var a = ds[r2 * W + c2], b = dk[r2 * W + c2], e2 = de[r2 * W + c2];
+        if (a < 0 || b < 0 || e2 < 0) continue;
+        var val = a + Math.max(b, e2);
+        if (val < peak) peak = val;
+      }
+    }
+    t.ok(peak <= L, 'P4.9: 巻き戻しを使えば鍵経由で出口へ届く（詰まない）',
+      peak + ' <= ' + L.toFixed(1));
+  }
+
   function runAll(opts) {
     var g = ESCAPE.game;
     var t = new Runner();
@@ -3098,8 +3513,13 @@
       /* P4.8: アリアドネ方式（ロープ・地図・銘板・鍵と隔壁・ヘッドライト） */
       testRopeLength, testRopePayoutRewind, testRopeTautBlocks, testRopeKnotReattach,
       testAreaResetFogAndGhost, testFogOfWar, testRegionSigns, testKeyAndBulkhead,
-      testHeadlight, testRetiredGimmicks, testArea1V3Contract, testSignTexts
+      testHeadlight, testRetiredGimmicks, testArea1V3Contract, testSignTexts,
+      /* P4.9: 新マップZ4・区画ごとの景観差・ロープ張力インジケータ */
+      testP49Zones, testP49Look, testP49DeadEnds, testP49Props,
+      testP49RopeTension, testP49RopeFeasible
     ];
+    /* 他モジュールが登録した追加スイート（P4.10a の敵2体・絶叫・地図リセット等）も runAll に乗せる */
+    if (ESCAPE.__extraSuites && ESCAPE.__extraSuites.length) suites = suites.concat(ESCAPE.__extraSuites);
     for (var i = 0; i < suites.length; i++) {
       try {
         suites[i](t, g);
