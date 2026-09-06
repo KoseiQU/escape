@@ -46,6 +46,7 @@
     this.map = this.game.map;
     this.explored = Object.create(null);
     this.exploredCount = 0;
+    this.wipes = 0;                         /* P4.10: 踏破を消した回数（捕獲・エリアリセット） */
     this.zones = Object.create(null);       /* 銘板で判明した区画（A〜F） */
     this.zoneCount = 0;
     this.regionsSeen = Object.create(null);
@@ -62,7 +63,16 @@
     this.explored = Object.create(null);
     this.exploredCount = 0;
     this.regionsSeen = Object.create(null);
+    this.wipes++;
     this._dirty = true;
+  };
+
+  /** P4.10（契約 §4「捕獲のたびに地図を真っ暗に戻す」・2026-09-04ユーザー指示）
+   *  捕獲のたびに fog of war の踏破を全消去する。エリアリセット（3回目）と同じ挙動。
+   *  残るもの: ロープの軌跡・結び目・錨（rope が持つ）／鍵の取得（progress が持つ）／
+   *            読んだ区画名（this.zones）。復帰後は自分のロープだけが頼りになる。 */
+  Minimap.prototype.onCapture = function () {
+    this.onAreaReset();
   };
 
   Minimap.prototype._resize = function () {
@@ -147,10 +157,17 @@
   Minimap.prototype.step = function () {
     var p = this.game.player;
     var col = p.col(), row = p.row();
-    this._mark(col, row);
-    this._mark(col + 1, row); this._mark(col - 1, row);
-    this._mark(col, row + 1); this._mark(col, row - 1);
-    this._enterRegion(col, row);
+    /* P4.10: 捕獲演出〜復帰の間は踏破を記録しない。
+       fog of war は「自分の足で歩いた記録」であって、引きずられている間の座標ではない。
+       ここを記録すると、捕獲で消したはずの区画が演出中に描き直されてしまう。 */
+    var st = this.game.stealth;
+    var frozen = !!(st && st.jail && st.jail.phase !== 'none');
+    if (!frozen) {
+      this._mark(col, row);
+      this._mark(col + 1, row); this._mark(col - 1, row);
+      this._mark(col, row + 1); this._mark(col, row - 1);
+      this._enterRegion(col, row);
+    }
 
     /* 「変更時のみ再描画」。プレイヤー印は 0.6m / 0.25rad 単位で追従させる */
     var rope = this.game.rope;
@@ -325,7 +342,7 @@
     var zs = [];
     for (var z in this.zones) zs.push(z);
     zs.sort();
-    return { explored: this.exploredCount, zones: zs, full: this.full };
+    return { explored: this.exploredCount, zones: zs, full: this.full, wipes: this.wipes };
   };
 
   ESCAPE.Minimap = Minimap;

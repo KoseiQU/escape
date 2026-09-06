@@ -64,6 +64,7 @@
     this.nearPos = new THREE.Vector3();
     this.dragDir = new THREE.Vector3(0, 0, -1);
     this.dragOrigin = new THREE.Vector3();
+    this.actor = null;                    /* P4.10: 捕まえた個体（演出の主役） */
     this._hard();
   }
 
@@ -112,10 +113,18 @@
 
   /* ---------------- 開始 / 終了 ---------------- */
 
-  /** mode: 'jail'（牢送り） / 'eaten'（3回目＝食われる） */
-  CaptureCinematic.prototype.begin = function (mode) {
-    var g = this.game, p = g.player, ai = g.ai;
+  /** 演出の主役（P4.10: 捕まえた個体）。未設定なら従来どおり game.ai */
+  CaptureCinematic.prototype.ai = function () {
+    return this.actor || this.game.ai;
+  };
+
+  /** mode: 'jail'（牢送り） / 'eaten'（3回目＝食われる）
+   *  byAi: P4.10 で捕まえた個体（顔アップ・赤い目・高解像度化はこの個体で動く） */
+  CaptureCinematic.prototype.begin = function (mode, byAi) {
+    var g = this.game, p = g.player;
+    var ai = byAi || g.ai;
     if (!ai || !ai.enemy) return false;
+    this.actor = ai;
     this._hard();
     this.mode = (mode === 'eaten') ? 'eaten' : 'jail';
     this.seq = (this.mode === 'eaten') ? SEQ_EAT : SEQ_JAIL;
@@ -184,7 +193,7 @@
 
   /** 演出を畳んで通常状態へ完全復帰（赤い目・高解像度・演出物を必ず戻す） */
   CaptureCinematic.prototype.end = function () {
-    var g = this.game, ai = g.ai;
+    var g = this.game, ai = this.ai();
     if (ai && ai.enemy) {
       var e = ai.enemy;
       e.setDetail('normal');
@@ -195,6 +204,7 @@
       if (e.maw) { e.maw.group.visible = false; if (e.maw.group.parent) e.maw.group.parent.remove(e.maw.group); }
       ai.cine = false;
     }
+    this.actor = null;
     this.camSpace.visible = false;
     this.props.visible = false;
     this._clearProps();
@@ -215,7 +225,7 @@
 
   CaptureCinematic.prototype.step = function (dt) {
     if (this.stage === 'none') return;
-    var g = this.game, ai = g.ai, e = ai.enemy;
+    var g = this.game, ai = this.ai(), e = ai.enemy;
     this.stageT += dt;
     this.total += dt;
     var dur = this.durOf(this.stage);
@@ -249,7 +259,7 @@
     this.stages.push(this.stage);
     this.stageT = 0;
     this._soundAt = 0;
-    var e = this.game.ai.enemy;
+    var e = this.ai().enemy;
     if (this.stage === 'grab') {
       e.grabHands.visible = true;
       sfx('cineGrab', { x: e.x, z: e.z });
@@ -270,7 +280,7 @@
   /* ---------------- 段階1: 追いつき（顔へ強制ズーム） ---------------- */
   CaptureCinematic.prototype._stepZoom = function () {
     var u = smooth01(this.stageT / Math.max(this.durOf('zoom'), 1e-4));
-    var e = this.game.ai.enemy;
+    var e = this.ai().enemy;
     this._faceOf(e);
     this._nearOf(this.T().cineZoomEnd);
     this.camPos.lerpVectors(this.eyePos, this.nearPos, u);
@@ -283,7 +293,7 @@
 
   /* ---------------- 段階2: 首掴み ---------------- */
   CaptureCinematic.prototype._stepGrab = function (dt) {
-    var g = this.game, e = g.ai.enemy, T = this.T();
+    var g = this.game, e = this.ai().enemy, T = this.T();
     var t = g.simTime;
     var u = this.stageT / Math.max(this.durOf('grab'), 1e-4);
     this._faceOf(e);
@@ -312,7 +322,7 @@
 
   /* ---------------- 段階3: 引きずり ---------------- */
   CaptureCinematic.prototype._beginDrag = function () {
-    var g = this.game, e = g.ai.enemy;
+    var g = this.game, e = this.ai().enemy;
     var p = g.player;
     this.dragOrigin.set(p.x, g.map.floorYAt(p.x, p.z), p.z);
     this.dragT = 0;
@@ -324,7 +334,7 @@
   };
 
   CaptureCinematic.prototype._stepDrag = function (dt) {
-    var g = this.game, e = g.ai.enemy, T = this.T(), map = g.map;
+    var g = this.game, e = this.ai().enemy, T = this.T(), map = g.map;
     var t = g.simTime;
     this.dragT += dt;
     var travel = Math.min(this.dragT * T.cineDragSpeed, this.dragMax);
@@ -365,7 +375,7 @@
 
   /* ---------------- 段階3'（3回目）: 食われる ---------------- */
   CaptureCinematic.prototype._stepMaw = function () {
-    var g = this.game, e = g.ai.enemy, T = this.T();
+    var g = this.game, e = this.ai().enemy, T = this.T();
     var t = g.simTime;
     var u = clamp(this.stageT / Math.max(this.durOf('maw'), 1e-4), 0, 1);
     var s = smooth01(u);
@@ -569,7 +579,8 @@
       mode: this.mode, stage: this.stage, stageT: this.stageT, total: this.total,
       mash: this.mash, fade: this.fade, fov: this.fov, done: this.done,
       stages: this.stages.slice(),
-      redEyes: !!(this.game.ai && this.game.ai.enemy && this.game.ai.enemy.redEyesVisible())
+      redEyes: !!(this.ai() && this.ai().enemy && this.ai().enemy.redEyesVisible()),
+      actor: this.actor ? this.actor.index : null
     };
   };
 

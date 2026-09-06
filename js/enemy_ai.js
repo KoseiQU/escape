@@ -114,7 +114,35 @@
     cineShake: 0.030,         // 揺れの基準振幅(rad)
     cineMashGain: 1.10,       // 連打で増える揺れの倍率（結果は変わらない）
     cineMashMax: 14,          // 連打の効き上限（回）
-    cineFadeIn: 0.34          // 暗転の落ちきり時間(s)
+    cineFadeIn: 0.34,         // 暗転の落ちきり時間(s)
+
+    /* ---- P4.10 敵2体（縄張り制）（契約 §4「敵2体・音の罠・地図リセット」） ---- */
+    enemyCount: 2,            // 同時に稼働する個体数
+    /* 個体差。index 0 が基準（= ENEMY_TUNING そのまま）、1 以降は差分だけ書く。
+       契約「敵②は追跡速度やや遅め」。読み出しは ai.T（原型鎖で基準へ落ちる）。 */
+    individuals: [
+      { name: '敵①', seed: 3 },
+      { name: '敵②', seed: 11, chaseSpeed: 4.70, patrolSpeed: 1.45, lockerHuntSpeed: 4.60 }
+    ],
+    /* 縄張りの外に出た時に戻る判断（追跡中は出てよい。見失ったら戻る） */
+    territoryStartClear: 18.0,   // 巡回地点をプレイヤーのスタートから離す最短距離(m)
+                              // （復帰＝スタート地点なので、契約§4「復帰直後に鉢合わせない」を保つ）
+    territoryMinPoints: 3,       // 縄張り内の巡回地点の最低数（足りなければ自動生成）
+    territoryMaxPoints: 6,
+    territorySpacing: 6,         // 自動生成する巡回地点どうしの最短マス距離
+
+    /* ---- P4.10-B 罠が鳴った瞬間（絶叫 → 猛スピード → 執拗な探索） ---- */
+    /* 罠と見なす音イベントの kind。ここに載る音だけが「絶叫＋猛スピード」を起こす */
+    /* 'step' は音地盤（ガラス片/金属板/水たまり）、'sensor' はセンサー警報＝いずれも既存の罠 */
+    trapKinds: ['trap', 'step', 'sensor', 'can', 'creak', 'wire', 'shelf', 'plank', 'locker'],
+    trapHearRadius: 999,      // 罠は施設全体に届く（契約「両方が反応」）
+    trapInvestigateSpeed: 6.50, // 罠に反応した調査の疾走(m/s)。通常の investigateSpeed=5.0 から
+    trapSearchDur: 14.00,     // 到着後の執拗な探索(s)。通常の searchDur=8.0 から
+    trapLockerPeekChance: 0.92, // 罠の探索中にロッカーを覗く確率（通常0.55から上げる）
+    trapPeekRadius: 13.0,     // 罠の探索中に覗く対象を探す半径(m)
+    farReactDelay: 1.20,      // 近い個体が先着する。遠い個体はこの秒数だけ遅れて動く(s)
+    farReactGap: 12.0,        // 「遠い個体」と見なす距離差(m)。これ未満なら同時に反応する
+    shriekCooldown: 3.00      // 絶叫の連打防止(s)
   };
 
   /** 音響フックの共通口。音響モジュールが無くても落ちない */
@@ -245,26 +273,280 @@
   };
 
   /* ================================================================
+   * P4.10 縄張り（契約 §4「敵2体（縄張り制）」）
+   *
+   * 縄張り＝マップの「帯」＝行範囲。定義の出どころは次の優先順で、
+   * 新マップに差し替わっても meta を見て自動追従する。
+   *   1. meta.territories / meta.enemyTerritories … 明示宣言（{r0,r1} / {rows:[a,b]}
+   *      / {zones:['A','B','C']} / {regions:['hall',...]} のいずれでも書ける）
+   *   2. meta.zoneBands … 区画帯（{zone,r0,r1}）の宣言があれば人数ぶんに束ねる
+   *   3. meta.regions の zone から帯を復元できる場合（帯どうしが行方向で重ならない時のみ）
+   *   4. どれも無ければ歩行可能な行範囲を人数ぶんに等分する（現行55x55マップ＝南半分/北半分）
+   * 並び順は「プレイヤーのスタートを含む帯」が先頭＝契約の 敵①(南寄り) 側。
+   * ============================================================== */
+
+  function Territory(id, r0, r1, zones) {
+    this.id = id;
+    this.r0 = Math.min(r0, r1);
+    this.r1 = Math.max(r0, r1);
+    this.zones = zones || [];
+  }
+  Territory.prototype.contains = function (col, row) {
+    return row >= this.r0 && row <= this.r1;
+  };
+  Territory.prototype.containsXZ = function (map, x, z) {
+    return this.contains(map.colOf(x), map.rowOf(z));
+  };
+
+  /** meta の1宣言を Territory へ正規化する */
+  function normTerritory(d, i, map) {
+    var meta = map.meta || {};
+    var r0 = null, r1 = null, zones = d.zones || d.zone && [d.zone] || [];
+    if (typeof d.r0 === 'number' && typeof d.r1 === 'number') { r0 = d.r0; r1 = d.r1; }
+    else if (d.rows && d.rows.length === 2) { r0 = d.rows[0]; r1 = d.rows[1]; }
+    else {
+      /* zones / regions から行範囲を組み立てる */
+      var ids = d.regions || [];
+      var list = meta.regions || [];
+      for (var k = 0; k < list.length; k++) {
+        var reg = list[k], hit = false;
+        for (var a = 0; a < zones.length; a++) if (reg.zone === zones[a]) hit = true;
+        for (var b = 0; b < ids.length; b++) if (reg.id === ids[b]) hit = true;
+        if (!hit) continue;
+        r0 = (r0 === null) ? reg.r0 : Math.min(r0, reg.r0);
+        r1 = (r1 === null) ? reg.r1 : Math.max(r1, reg.r1);
+      }
+    }
+    if (r0 === null) { r0 = 0; r1 = map.height - 1; }
+    return new Territory(d.id || ('t' + i), r0, r1, zones);
+  }
+
+  /** meta.regions の zone から「帯」を復元する。帯として成立しない時は null */
+  function bandsFromRegions(map) {
+    var list = (map.meta && map.meta.regions) || [];
+    var byZone = Object.create(null), order = [];
+    for (var i = 0; i < list.length; i++) {
+      var reg = list[i];
+      if (!reg.zone) continue;
+      if (!byZone[reg.zone]) { byZone[reg.zone] = { zone: reg.zone, r0: reg.r0, r1: reg.r1 }; order.push(reg.zone); }
+      else {
+        byZone[reg.zone].r0 = Math.min(byZone[reg.zone].r0, reg.r0);
+        byZone[reg.zone].r1 = Math.max(byZone[reg.zone].r1, reg.r1);
+      }
+    }
+    if (order.length < 2) return null;
+    var bands = [];
+    for (var j = 0; j < order.length; j++) bands.push(byZone[order[j]]);
+    bands.sort(function (a, b) { return a.r0 - b.r0; });
+    /* 帯として成立する＝行方向で重ならない（現行55x55マップはここで弾かれて等分へ落ちる） */
+    for (var k = 1; k < bands.length; k++) if (bands[k].r0 <= bands[k - 1].r1) return null;
+    return bands;
+  }
+
+  /** 帯の配列を n 個の連続した縄張りへ束ねる */
+  function groupBands(bands, n) {
+    var out = [], per = Math.ceil(bands.length / n);
+    for (var i = 0; i < n; i++) {
+      var slice = bands.slice(i * per, Math.min((i + 1) * per, bands.length));
+      if (!slice.length) slice = [bands[bands.length - 1]];
+      var r0 = slice[0].r0, r1 = slice[0].r1, zones = [];
+      for (var j = 0; j < slice.length; j++) {
+        r0 = Math.min(r0, slice[j].r0); r1 = Math.max(r1, slice[j].r1);
+        if (slice[j].zone) zones.push(slice[j].zone);
+      }
+      out.push(new Territory(zones.join('') || ('t' + i), r0, r1, zones));
+    }
+    /* 帯と帯の隙間（岩盤帯・境界の通り抜け口）を取りこぼさないよう境界を詰める */
+    for (var m = 1; m < out.length; m++) {
+      var mid = Math.floor((out[m - 1].r1 + out[m].r0) / 2);
+      out[m - 1].r1 = mid; out[m].r0 = mid + 1;
+    }
+    return out;
+  }
+
+  function resolveTerritories(map, n) {
+    var meta = map.meta || {}, out = [], i;
+    var decl = meta.territories || meta.enemyTerritories || null;
+    if (decl && decl.length) {
+      for (i = 0; i < n; i++) out.push(normTerritory(decl[i % decl.length], i, map));
+    } else {
+      var bands = (meta.zoneBands && meta.zoneBands.length >= 2) ? meta.zoneBands.slice() : bandsFromRegions(map);
+      if (bands && bands.length >= n) {
+        bands.sort(function (a, b) { return a.r0 - b.r0; });
+        out = groupBands(bands, n);
+      } else {
+        /* 歩行可能な行範囲を等分する */
+        var lo = map.height, hi = 0;
+        for (var r = 0; r < map.height; r++) {
+          for (var c = 0; c < map.width; c++) {
+            if (!map.isWalkable(c, r)) continue;
+            if (r < lo) lo = r;
+            if (r > hi) hi = r;
+            break;
+          }
+        }
+        if (lo > hi) { lo = 0; hi = map.height - 1; }
+        var span = (hi - lo + 1) / n;
+        for (i = 0; i < n; i++) {
+          out.push(new Territory('band' + i,
+            Math.round(lo + span * i),
+            (i === n - 1) ? hi : Math.round(lo + span * (i + 1)) - 1));
+        }
+      }
+    }
+    /* 契約: 先頭＝プレイヤーのスタートを含む帯（＝南寄り＝敵①の縄張り） */
+    var sp = meta.spawn || { col: 1, row: 1 };
+    for (i = 0; i < out.length; i++) {
+      if (out[i].contains(sp.col, sp.row)) {
+        var head = out.splice(i, 1)[0];
+        out.unshift(head);
+        break;
+      }
+    }
+    return out;
+  }
+
+  /* ---- 縄張りごとの巡回路（meta.patrol を帯で切り分け、足りなければ自動生成） ---- */
+
+  function planRoutes(map, terrs, rngSeed) {
+    var meta = map.meta || {}, T = ENEMY_TUNING;
+    var all = meta.patrol || [];
+    var sp = meta.spawn || { col: 1, row: 1 };
+    var reach = map.floodFrom(sp.col, sp.row);
+    var tile = map.tileSize;
+    var seed = rngSeed || 20260904;
+    function rand() { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; }
+    function farFromStart(col, row) {
+      return Math.hypot(col - sp.col, row - sp.row) * tile >= T.territoryStartClear;
+    }
+    var plans = [];
+    for (var i = 0; i < terrs.length; i++) {
+      var terr = terrs[i], pts = [];
+      for (var k = 0; k < all.length; k++) {
+        var p = all[k];
+        if (!terr.contains(p.col, p.row)) continue;
+        if (!map.isWalkable(p.col, p.row) || !reach[p.col + ',' + p.row]) continue;
+        if (!farFromStart(p.col, p.row)) continue;
+        pts.push({ col: p.col, row: p.row });
+      }
+      if (pts.length < T.territoryMinPoints) {
+        /* 帯の中の歩行可能マスから、互いに離れた地点を拾って巡回路を作る */
+        var cand = [];
+        for (var r = terr.r0; r <= terr.r1; r++) {
+          for (var c = 0; c < map.width; c++) {
+            if (!map.isWalkable(c, r) || map.isBlocked(c, r)) continue;
+            if (map.isCrawl && map.isCrawl(c, r)) continue;
+            if (!reach[c + ',' + r]) continue;
+            if (!farFromStart(c, r)) continue;
+            cand.push({ col: c, row: r });
+          }
+        }
+        /* 最遠点サンプリング（起点＝スタートから最も遠いマス＝復帰直後に鉢合わせない） */
+        var first = null, fd = -1;
+        for (var q = 0; q < cand.length; q++) {
+          var d0 = Math.hypot(cand[q].col - sp.col, cand[q].row - sp.row);
+          if (d0 > fd) { fd = d0; first = cand[q]; }
+        }
+        if (first) {
+          if (!pts.length) pts.push(first);
+          var guard = 0;
+          while (pts.length < T.territoryMaxPoints && guard++ < 64 && cand.length) {
+            var best = null, bd = -1;
+            for (var w = 0; w < cand.length; w++) {
+              var near = Infinity;
+              for (var v = 0; v < pts.length; v++) {
+                var dd = Math.hypot(cand[w].col - pts[v].col, cand[w].row - pts[v].row);
+                if (dd < near) near = dd;
+              }
+              if (near > bd) { bd = near; best = cand[w]; }
+            }
+            if (!best || bd < T.territorySpacing) break;
+            pts.push(best);
+          }
+        }
+      }
+      /* 近傍順に並べ替えて素直なループにする */
+      var route = [];
+      if (pts.length) {
+        var pool = pts.slice(), cur = pool.shift();
+        route.push(cur);
+        while (pool.length) {
+          var bi = 0, bdd = Infinity;
+          for (var z = 0; z < pool.length; z++) {
+            var d2 = Math.hypot(pool[z].col - cur.col, pool[z].row - cur.row);
+            if (d2 < bdd) { bdd = d2; bi = z; }
+          }
+          cur = pool.splice(bi, 1)[0];
+          route.push(cur);
+        }
+      }
+      plans.push({ territory: terr, route: route, rand: rand });
+    }
+    /* スポーン: meta.enemySpawns[i] > 縄張りに入る meta.enemySpawn > 巡回路の先頭 */
+    var spawns = meta.enemySpawns || null;
+    for (var m = 0; m < plans.length; m++) {
+      var pl = plans[m], s = null;
+      if (spawns && spawns[m]) s = spawns[m];
+      if (!s && meta.enemySpawn && pl.territory.contains(meta.enemySpawn.col, meta.enemySpawn.row)) {
+        s = meta.enemySpawn;
+      }
+      if (!s && pl.route.length) s = pl.route[0];
+      if (!s) s = meta.enemySpawn || sp;
+      pl.spawn = s;
+    }
+    /* 契約の互換: meta.enemySpawn を持つ個体を list[0]（= game.ai）にする。
+       既存の機械テスト「復帰: 敵が巡回起点にいる」と、P4.9 が meta.enemySpawns を
+       与えた場合の宣言順の両方を壊さない。 */
+    if (!spawns && meta.enemySpawn) {
+      for (var y = 0; y < plans.length; y++) {
+        if (plans[y].spawn === meta.enemySpawn) {
+          if (y > 0) plans.unshift(plans.splice(y, 1)[0]);
+          break;
+        }
+      }
+    }
+    return plans;
+  }
+
+  /* ================================================================
    * 敵AI
    * ============================================================== */
-  function EnemyAI(game) {
+  /** opts: { index, plan, tuning } — 個体差と縄張りは AIManager が配る */
+  function EnemyAI(game, opts) {
+    opts = opts || {};
     this.game = game;
-    this.T = ENEMY_TUNING;
+    this.index = opts.index || 0;
+    /* 個体差は原型鎖で基準へ落ちる（差分だけ持つ＝定数の集約は ENEMY_TUNING 1本のまま） */
+    this.T = opts.tuning || ENEMY_TUNING;
+    this.name = (this.T.name) || ('敵' + (this.index + 1));
+    this.plan = opts.plan || null;
+    this.manager = null;
     this.map = game.map;
-    this.enemy = new ESCAPE.Enemy({ seed: 3 });
+    this.enemy = new ESCAPE.Enemy({ seed: (this.T.seed || 3) });
+    this.enemy.group.name = 'enemy' + this.index;
     this.enemy.group.visible = true;
     game.scene.add(this.enemy.group);
     this.manual = false;          /* __enemyDebug が握っている間は駆動しない */
-    this.reset();
+    this.resetSelf();
   }
 
+  /** 複数個体では list[0]（= game.ai）が全体の窓口。個別は resetSelf */
   EnemyAI.prototype.reset = function () {
+    var m = this.manager;
+    if (m && m.list[0] === this) { m.reset(); return; }
+    this.resetSelf();
+  };
+
+  EnemyAI.prototype.resetSelf = function () {
     this.map = this.game.map;
     this.pf = new Pathfinder(this.map);
     this._lum = Object.create(null);
-    this._rng = 20260902;
+    this._rng = 20260902 + this.index * 7919;
     var meta = this.map.meta || {};
-    this.route = meta.patrol || [];
+    /* P4.10: 巡回は縄張りの中だけ。plan が無い（単体運用）なら従来どおり meta.patrol 全周 */
+    this.territory = this.plan ? this.plan.territory : null;
+    this.route = (this.plan && this.plan.route && this.plan.route.length)
+      ? this.plan.route : (meta.patrol || []);
     this.state = 'patrol';
     this.prevState = 'patrol';
     this.stateTime = 0;
@@ -294,8 +576,17 @@
     this.pauseT = 0;
     this.pauses = 0;
     this.pauseNext = this.T.patrolPauseFirst;
+    /* P4.10: 罠に反応した調査か（絶叫→猛スピード→執拗な探索） */
+    this.alert = false;
+    this.pending = null;         /* 遠い個体の反応待ち { x, z, t, alert } */
+    this.screams = 0;
+    this.trapAlerts = 0;
+    this.returns = 0;            /* 縄張りの外から戻った回数 */
+    this.outside = false;
+    this._shriekT = 0;
 
-    var sp = meta.enemySpawn || this.route[0] || meta.spawn || { col: 1, row: 1 };
+    var sp = (this.plan && this.plan.spawn) || meta.enemySpawn || this.route[0] ||
+      meta.spawn || { col: 1, row: 1 };
     this.spawn = sp;
     var e = this.enemy;
     e.setForm('stand', true);
@@ -500,7 +791,13 @@
   /* ---------------- 状態遷移 ---------------- */
 
   EnemyAI.prototype.toPatrol = function () {
+    /* P4.10: 追跡で縄張りを出ていたなら、巡回へ戻る＝自分の帯へ帰る（route が帯の中にある） */
+    if (this.territory && !this.territory.containsXZ(this.map, this.enemy.x, this.enemy.z)) {
+      this.returns++;
+      this.outside = true;
+    }
     this.state = 'patrol'; this.stateTime = 0;
+    this.alert = false;
     this.peekDone = false;
     this.lockerTarget = null;
     this.path = null; this.goal = null; this.repathT = 0;
@@ -510,10 +807,11 @@
     this.pauseT = 0;
     this.pauseNext = this.patrolTime + this.T.patrolPauseFirst;
   };
-  EnemyAI.prototype.toInvestigate = function (x, z) {
+  EnemyAI.prototype.toInvestigate = function (x, z, alert) {
     if (this.state === 'chase' || this.state === 'caught') return false;
     /* 見られたロッカーへ向かっている最中は、他の音では逸れない（駆け引きの筋を通す） */
     if (this.state === 'locker' && this.lockerTarget && this.lockerTarget.forced) return false;
+    this.alert = !!alert;
     this.state = 'investigate'; this.stateTime = 0;
     this.goal = null; this.path = null; this.repathT = 0;
     this.target = { x: x, z: z };
@@ -557,7 +855,8 @@
   /** 捕獲された（Stealth が牢送り演出を持つ） */
   EnemyAI.prototype.onCatch = function () {
     var st = this.game.stealth;
-    if (!st || !st.capture()) return;
+    /* P4.10: 捕まえた個体を渡す（演出・赤い目・高解像度顔はこの個体で動く） */
+    if (!st || !st.capture(this)) return;
     this.state = 'caught';
     this.stateTime = 0;
     this.speed = 0;
@@ -578,17 +877,67 @@
 
   /* ---------------- 聴覚 ---------------- */
 
-  EnemyAI.prototype._hear = function () {
-    var evs = ESCAPE.noise.consume();
-    if (!evs.length) return;
+  /** 音を聞き取れるか（罠は施設全体に届く＝契約「音の罠には両方が反応」） */
+  EnemyAI.prototype.hears = function (ev, alert) {
     var e = this.enemy;
+    var d = Math.hypot(ev.x - e.x, ev.z - e.z);
+    if (alert) return d <= Math.max(ev.radius, this.T.trapHearRadius);
+    return d <= ev.radius && d <= this.T.hearMax;
+  };
+
+  /**
+   * 音イベントを受け取る（配るのは AIManager。単体運用なら _hear が呼ぶ）。
+   * delay > 0 の個体は「遠い方」＝遅れて寄る（契約: 近い方が先着）。
+   */
+  EnemyAI.prototype.receiveNoise = function (ev, alert, delay) {
+    if (this.manual || this.cine || this.state === 'caught') return false;
+    if (delay > 0) {
+      this.pending = { x: ev.x, z: ev.z, alert: !!alert, t: delay };
+      return true;
+    }
+    return this._applyNoise(ev.x, ev.z, alert);
+  };
+
+  EnemyAI.prototype._applyNoise = function (x, z, alert) {
+    var was = this.state;
+    if (!this.toInvestigate(x, z, alert)) return false;
+    if (alert) {
+      this.trapAlerts++;
+      /* 契約 §4「罠が鳴った瞬間、敵の絶叫が施設全体に響く（方向が分かる立体音）」 */
+      this.shriek();
+    } else if (was === 'patrol') {
+      /* 通常の音は静かに向かう（形態遷移の骨鳴りは _applyForm 側） */
+    }
+    return true;
+  };
+
+  /** 絶叫（施設全体に届く。連打は cooldown で間引く） */
+  EnemyAI.prototype.shriek = function () {
+    if (this._shriekT > 0) return false;
+    this._shriekT = this.T.shriekCooldown;
+    this.screams++;
+    sfx('shriek', { x: this.enemy.x, z: this.enemy.z });
+    return true;
+  };
+
+  /** 単体運用（manager 無し）の互換経路。複数個体では AIManager が配る */
+  EnemyAI.prototype._hear = function () {
+    if (this.manager) return;
+    var evs = ESCAPE.noise.consume();
     for (var i = 0; i < evs.length; i++) {
       var ev = evs[i];
-      var d = Math.hypot(ev.x - e.x, ev.z - e.z);
-      if (d > ev.radius || d > this.T.hearMax) continue;
-      this.toInvestigate(ev.x, ev.z);
+      var alert = isTrapKind(ev.kind);
+      if (!this.hears(ev, alert)) continue;
+      this._applyNoise(ev.x, ev.z, alert);
     }
   };
+
+  /** 罠の音か（絶叫＋猛スピードを起こす kind） */
+  function isTrapKind(kind) {
+    var list = ENEMY_TUNING.trapKinds;
+    for (var i = 0; i < list.length; i++) if (list[i] === kind) return true;
+    return false;
+  }
 
   /* ---------------- 形態（上書き事故の防止つき） ---------------- */
 
@@ -612,10 +961,27 @@
 
   /* ---------------- 1ステップ ---------------- */
 
+  /** ゲームループの窓口。複数個体では list[0] が全体を回す（game.js は ai.step のみ呼ぶ） */
   EnemyAI.prototype.step = function (dt) {
+    var m = this.manager;
+    if (m && m.list[0] === this) { m.step(dt); return; }
+    this.stepSelf(dt);
+  };
+
+  EnemyAI.prototype.stepSelf = function (dt) {
     if (this.manual || this.cine) return;
     var g = this.game, T = this.T, e = this.enemy;
     this.stateTime += dt;
+    if (this._shriekT > 0) this._shriekT -= dt;
+    /* 遠い個体の反応待ち（近い方が先着してから遅れて寄る） */
+    if (this.pending) {
+      this.pending.t -= dt;
+      if (this.pending.t <= 0) {
+        var pn = this.pending;
+        this.pending = null;
+        this._applyNoise(pn.x, pn.z, pn.alert);
+      }
+    }
     this._hear();
 
     var st = g.stealth;
@@ -632,8 +998,10 @@
 
       case 'investigate':
         if (see) { this.toChase(); break; }
-        /* 契約 §4: 音源へ疾走 → 到着したら周辺を探索(searchDur) → 直立へ戻り巡回 */
-        if (this._moveTo(dt, this.target.x, this.target.z, T.investigateSpeed)) {
+        /* 契約 §4: 音源へ疾走 → 到着したら周辺を探索(searchDur) → 直立へ戻り巡回。
+           P4.10: 罠が鳴った時は猛スピード（investigateSpeed 5.0 → trapInvestigateSpeed 6.5） */
+        if (this._moveTo(dt, this.target.x, this.target.z,
+            this.alert ? T.trapInvestigateSpeed : T.investigateSpeed)) {
           this.arrived = true;
           this.lastSeen = { x: this.target.x, z: this.target.z };
           this.toSearch();
@@ -658,11 +1026,12 @@
 
       case 'search':
         if (see) { this.toChase(); break; }
-        if (this.stateTime >= T.searchDur) { this.toPatrol(); break; }
+        /* P4.10: 罠に反応した探索は執拗（searchDur 8 → trapSearchDur 14） */
+        if (this.stateTime >= (this.alert ? T.trapSearchDur : T.searchDur)) { this.toPatrol(); break; }
         /* 契約 §4「探索中の敵は近くのロッカーを1つ開けて覗く（ランダム）」 */
         if (!this.peekDone) {
           this.peekDone = true;
-          if (this.rand() < T.lockerPeekChance) {
+          if (this.rand() < (this.alert ? T.trapLockerPeekChance : T.lockerPeekChance)) {
             var pk = this._pickPeekLocker();
             if (pk) { this.toLockerHunt(pk.col, pk.row, false); break; }
           }
@@ -704,6 +1073,24 @@
   EnemyAI.prototype._patrolStep = function (dt) {
     if (!this.route.length) { this.speed = 0; return; }
     var T = this.T;
+    /* P4.10: 縄張りの外にいる間は寄り道しない＝まっすぐ自分の帯へ帰る。
+       巡回路は帯の中にしか無いので、次の巡回地点へ向かうこと自体が「帰還」になる。 */
+    if (this.territory) {
+      var inside = this.territory.containsXZ(this.map, this.enemy.x, this.enemy.z);
+      if (this.outside && inside) this.outside = false;
+      else if (!inside) {
+        this.outside = true;
+        this.patrolTime += dt;
+        this.pauseT = 0;
+        var back = this.route[this.routeIdx % this.route.length];
+        var bc = this.map.cellCenter(back.col, back.row);
+        if (this._moveTo(dt, bc.x, bc.z, T.patrolSpeed)) {
+          this.routeIdx = (this.routeIdx + 1) % this.route.length;
+          this.path = null; this.goal = null; this.repathT = 0;
+        }
+        return;
+      }
+    }
     /* 巡回のランダム停止（契約 §4「巡回のランダム停止で『目撃』演出を自然に起こす」）。
        止まっている間は通路の先を眺めるように向きだけ僅かに動かす。 */
     this.patrolTime += dt;
@@ -788,7 +1175,7 @@
     var inside = !!(st && st.locker && st.locker.col === lt.col && st.locker.row === lt.row);
     if (inside && lt.forced) {
       /* 契約 §4「見た場合は、そのロッカーを開けて引きずり出す（捕獲）」 */
-      if (st.captureFromLocker()) {
+      if (st.captureFromLocker(this)) {
         this.state = 'caught'; this.stateTime = 0; this.speed = 0; this.path = null;
         return;
       }
@@ -810,7 +1197,7 @@
       if (st && st.locker && st.locker.col === L.col && st.locker.row === L.row) continue;
       var c = map.cellCenter(L.col, L.row);
       var d = Math.hypot(c.x - e.x, c.z - e.z);
-      if (d > this.T.lockerPeekRadius) continue;
+      if (d > (this.alert ? this.T.trapPeekRadius : this.T.lockerPeekRadius)) continue;
       if (d < bd) { bd = d; best = L; }
     }
     return best;
@@ -826,13 +1213,132 @@
       dist: Math.hypot(p.x - e.x, p.z - e.z),
       sight: this.sightRange(p), lum: this.luminanceAt(p.x, p.z),
       alerts: this.alerts, heard: this.heard, stallT: this.stallT,
+      /* P4.10 */
+      index: this.index, name: this.name,
+      territory: this.territory ? (this.territory.id + ':' + this.territory.r0 + '-' + this.territory.r1) : null,
+      inTerritory: this.territory ? this.territory.containsXZ(this.map, e.x, e.z) : true,
+      routeLen: this.route.length, alert: this.alert, screams: this.screams,
+      trapAlerts: this.trapAlerts, returns: this.returns,
       manual: this.manual, cine: this.cine, lockerOpens: this.lockerOpens,
       lockerTarget: this.lockerTarget ? (this.lockerTarget.col + ',' + this.lockerTarget.row +
         (this.lockerTarget.forced ? ':forced' : ':peek')) : null
     };
   };
 
+  /* ================================================================
+   * P4.10 AIManager — 複数個体の窓口
+   *   - 音イベントの consume はここ1箇所だけ（個体ごとに consume すると
+   *     先に回った個体がイベントを持ち去る＝「片方しか反応しない」事故になる）
+   *   - game.js は従来どおり game.ai.step / game.ai.reset しか呼ばない。
+   *     list[0].step が全体を回す（上書き事故を作らないよう入口を1本に保つ）。
+   * ============================================================== */
+  function AIManager(game) {
+    this.game = game;
+    this.list = [];
+    this.T = ENEMY_TUNING;
+    this.noiseEvents = 0;
+    var n = Math.max(1, ENEMY_TUNING.enemyCount | 0);
+    var plans = this._plan(game.map, n);
+    for (var i = 0; i < n; i++) {
+      var ai = new EnemyAI(game, { index: i, plan: plans[i], tuning: tuningFor(i) });
+      ai.manager = this;
+      this.list.push(ai);
+    }
+  }
+
+  /** 個体差の定数（原型鎖で ENEMY_TUNING に落ちる） */
+  function tuningFor(i) {
+    var ind = (ENEMY_TUNING.individuals || [])[i];
+    if (!ind) return ENEMY_TUNING;
+    var t = Object.create(ENEMY_TUNING);
+    for (var k in ind) if (Object.prototype.hasOwnProperty.call(ind, k)) t[k] = ind[k];
+    return t;
+  }
+
+  AIManager.prototype._plan = function (map, n) {
+    this.territories = resolveTerritories(map, n);
+    return planRoutes(map, this.territories, 20260904);
+  };
+
+  AIManager.prototype.reset = function () {
+    var plans = this._plan(this.game.map, this.list.length);
+    for (var i = 0; i < this.list.length; i++) {
+      this.list[i].plan = plans[i];
+      this.list[i].resetSelf();
+    }
+    this.noiseEvents = 0;
+  };
+
+  AIManager.prototype.afterJail = function () {
+    for (var i = 0; i < this.list.length; i++) this.list[i].afterJail();
+  };
+
+  /** 音を全個体へ配る。近い順に反応し、遠い個体は farReactDelay ぶん遅れて寄る */
+  AIManager.prototype.dispatchNoise = function () {
+    var evs = ESCAPE.noise.consume();
+    if (!evs.length) return;
+    var T = ENEMY_TUNING;
+    for (var i = 0; i < evs.length; i++) {
+      var ev = evs[i];
+      var alert = isTrapKind(ev.kind);
+      this.noiseEvents++;
+      var resp = [];
+      for (var k = 0; k < this.list.length; k++) {
+        var ai = this.list[k];
+        if (ai.manual || ai.cine || ai.state === 'caught') continue;
+        if (!ai.hears(ev, alert)) continue;
+        resp.push({ ai: ai, d: Math.hypot(ev.x - ai.enemy.x, ev.z - ai.enemy.z) });
+      }
+      resp.sort(function (a, b) { return a.d - b.d; });
+      for (var m = 0; m < resp.length; m++) {
+        /* 明らかに遠い個体だけが「遅れて寄る」。僅差なら同時に走り出す
+           （＝近い方が先着するのは距離の差そのもの） */
+        var lag = (m > 0 && alert && (resp[m].d - resp[0].d) > T.farReactGap)
+          ? T.farReactDelay * m : 0;
+        resp[m].ai.receiveNoise(ev, alert, lag);
+      }
+    }
+  };
+
+  AIManager.prototype.step = function (dt) {
+    var st = this.game.stealth;
+    /* 捕獲演出中は全個体を止める。演出が画面を握っている間に別個体が歩き回ると、
+       復帰した瞬間に理不尽な再捕獲が起きる（契約 §6 の中断安全）。 */
+    var frozen = !!(st && st.jail && st.jail.phase !== 'none');
+    if (frozen) ESCAPE.noise.consume();      /* 溜め込まない */
+    else this.dispatchNoise();
+    for (var i = 0; i < this.list.length; i++) {
+      var ai = this.list[i];
+      if (frozen && ai.state !== 'caught' && !ai.cine) { ai.speed = 0; continue; }
+      ai.stepSelf(dt);
+    }
+  };
+
+  /** 捕まえた個体（演出の主役）。captor が未設定なら list[0] */
+  AIManager.prototype.captor = function () {
+    for (var i = 0; i < this.list.length; i++) if (this.list[i].state === 'caught') return this.list[i];
+    return this.list[0];
+  };
+
+  AIManager.prototype.nearest = function (x, z) {
+    var best = null, bd = Infinity;
+    for (var i = 0; i < this.list.length; i++) {
+      var e = this.list[i].enemy;
+      var d = Math.hypot(e.x - x, e.z - z);
+      if (d < bd) { bd = d; best = this.list[i]; }
+    }
+    return best;
+  };
+
+  AIManager.prototype.info = function () {
+    var out = [];
+    for (var i = 0; i < this.list.length; i++) out.push(this.list[i].info());
+    return out;
+  };
+
   ESCAPE.EnemyAI = EnemyAI;
+  ESCAPE.AIManager = AIManager;
+  ESCAPE.Territory = Territory;
   ESCAPE.ENEMY_TUNING = ENEMY_TUNING;
 
   /* ================================================================
@@ -884,6 +1390,7 @@
     this._pryT = 0;              /* 格子こじ開け音の間引き用タイマー */
     this.cine = null;            /* P4.6: 進行中の捕獲シネマティック */
     this.lockerSeen = false;     /* 直近のロッカー侵入を見られていたか */
+    this.capturedBy = null;      /* P4.10: 捕まえた個体（演出の主役） */
     this.lockerCaptures = 0;
     this.restarts = 0;
     if (this.game.cinematic) this.game.cinematic.reset();
@@ -983,10 +1490,18 @@
 
   Stealth.prototype.enterLocker = function (col, row) {
     var p = this.game.player, map = this.map;
-    var ai = this.game.ai;
     /* 契約 §4「敵がプレイヤーがロッカーに入るのを見た場合は開けて引きずり出す」。
-       判定は「入る瞬間」＝ プレイヤーをまだ隠す前にここで1度だけ取る。 */
-    var seen = !!(ai && !ai.cine && ai.state !== 'caught' && ai.canSeePlayer());
+       判定は「入る瞬間」＝ プレイヤーをまだ隠す前にここで1度だけ取る。
+       P4.10: 見たのがどちらの個体でも成立する（見た個体が開けに来る）。 */
+    var list = this.game.ais ? this.game.ais.list : (this.game.ai ? [this.game.ai] : []);
+    var ai = null;
+    for (var q = 0; q < list.length; q++) {
+      var cand = list[q];
+      if (cand.manual || cand.cine || cand.state === 'caught') continue;
+      if (cand.canSeePlayer()) { ai = cand; break; }
+    }
+    var seen = !!ai;
+    if (!ai) ai = this.game.ai;
     var c = map.cellCenter(col, row);
     var n = this._lockerDir(col, row);
     /* 目線は扉のすぐ内側（world._locker の箱の中）。扉の割れ目・通気スリットごしに覗く絵になる */
@@ -1010,11 +1525,11 @@
   };
 
   /** ロッカーごと開けられて引きずり出される（AI._openLocker から） */
-  Stealth.prototype.captureFromLocker = function () {
+  Stealth.prototype.captureFromLocker = function (byAi) {
     if (!this.locker || this.jail.phase !== 'none') return false;
     this.exitLocker();
     this.lockerCaptures++;
-    return this.capture();
+    return this.capture(byAi);
   };
 
   Stealth.prototype.exitLocker = function () {
@@ -1140,15 +1655,23 @@
 
   /* ---------------- 牢送り ---------------- */
 
-  /** 敵に捕まった。演出中なら false（多重捕獲の防止） */
-  Stealth.prototype.capture = function () {
+  /** 敵に捕まった。演出中なら false（多重捕獲の防止）。byAi = 捕まえた個体（P4.10） */
+  Stealth.prototype.capture = function (byAi) {
     if (this.jail.phase !== 'none') return false;
     if (this.locker) return false;
     this.captures++;
     var J = this.jail;
     J.phase = 'grab'; J.t = 0; J.pry = 0;
     J.reset = (this.captures >= this.T.captureLimit);
+    this.capturedBy = byAi || this.game.ai;
     this.game.player.speed = 0;
+    /* P4.10（契約 §4「捕獲のたびに地図を真っ暗に戻す」）: fog of war の踏破を全消去。
+       ロープの軌跡・結び目・錨（rope が持つ）／鍵の取得（progress が持つ）／
+       読んだ区画名（minimap.zones）は残る＝復帰後は自分のロープだけが頼りになる。 */
+    if (this.game.minimap && this.game.minimap.onCapture) this.game.minimap.onCapture();
+    /* 消した状態を保存する（次のセーブ機会まで古い踏破が残り、再読み込みで
+       地図が戻ってしまうのを防ぐ）。鍵・読んだメモ・ロープは save の中で保持される。 */
+    if (this.game.progress && this.game.progress.save) this.game.progress.save();
     /* P4.8（契約 §4「捕獲時」）: 掴まれた瞬間にロープ端が床に落ちて結び目になる。
        復帰後は自分の敷いたロープを辿って結び目まで戻り「拾って結ぶ」で再接続する。 */
     if (this.game.rope) this.game.rope.dropKnot();
@@ -1157,7 +1680,7 @@
     /* P4.6: 捕獲シネマティック（毎回）。3回目は「食われる」に差し替わる。
        演出モジュールが無い環境では従来の短い暗転にフォールバックする。 */
     var cine = this.game.cinematic;
-    this.cine = (cine && cine.begin(J.reset ? 'eaten' : 'jail')) ? cine : null;
+    this.cine = (cine && cine.begin(J.reset ? 'eaten' : 'jail', this.capturedBy)) ? cine : null;
     return true;
   };
 
@@ -1217,7 +1740,11 @@
       return;
     }
     this._toStart();
-    if (g.ai) g.ai.afterJail();
+    /* P4.10: 全個体を巡回起点へ戻す（片方だけ戻すと、もう1体がスタート地点に
+       張り付いたままになり復帰した瞬間に再捕獲される） */
+    if (g.ais) g.ais.afterJail();
+    else if (g.ai) g.ai.afterJail();
+    this.capturedBy = null;
     J.phase = 'wake';
   };
 
@@ -1347,7 +1874,9 @@
     /* P4: 位置とチェックポイントのみ巻き戻す。仕掛け進行(電源/コード/隔壁)は保持する
        （契約 §4: 牢送りは「進行状態は保持のまま自力脱出して再開」） */
     if (g.progress && g.progress.onAreaReset) g.progress.onAreaReset();
-    if (g.ai) g.ai.reset();
+    this.capturedBy = null;
+    if (g.ais) g.ais.reset();
+    else if (g.ai) g.ai.reset();
   };
 
   /* ---------------- 演出メッシュ ---------------- */
@@ -1483,7 +2012,10 @@
     var g = ESCAPE.game;
     if (!g || !ESCAPE.Enemy) return;
     g.progress = g.progress || { flags: {} };
-    g.ai = new EnemyAI(g);
+    /* P4.10: 敵は複数体（縄張り制）。game.ai は従来どおり先頭個体を指す＝
+       game.js / 既存の検証フックはそのまま動き、全体の駆動は list[0] が回す。 */
+    g.ais = new AIManager(g);
+    g.ai = g.ais.list[0];
     /* P4.6: 捕獲シネマティック。Stealth より先に作る（Stealth.reset が参照する） */
     if (ESCAPE.CaptureCinematic) g.cinematic = new ESCAPE.CaptureCinematic(g);
     g.stealth = new Stealth(g);
@@ -1516,11 +2048,586 @@
         return ESCAPE.game.ai.luminanceAt(c.x, c.z);
       },
       noise: function (col, row, radius) { return ESCAPE.noise.emitCell(col, row, radius, 'debug'); },
+      /* ---- P4.10 複数個体 ---- */
+      ais: function () { return ESCAPE.game.ais; },
+      at: function (i) { return ESCAPE.game.ais.list[i | 0]; },
+      infoAll: function () { return ESCAPE.game.ais.info(); },
+      territories: function () {
+        var ts = ESCAPE.game.ais.territories, out = [];
+        for (var i = 0; i < ts.length; i++) out.push({ id: ts[i].id, r0: ts[i].r0, r1: ts[i].r1, zones: ts[i].zones });
+        return out;
+      },
+      /** 個体 i をマス指定で置く */
+      placeAt: function (i, col, row, yawDeg, state) {
+        var ai = ESCAPE.game.ais.list[i | 0];
+        ai.enemy.placeCell(col, row, yawDeg === undefined ? 180 : yawDeg, ai.map);
+        ai.path = null; ai.goal = null; ai.repathT = 0;
+        if (state) { ai.state = state; ai.stateTime = 0; }
+        return ai.info();
+      },
+      trap: function (col, row, radius) { return ESCAPE.noise.emitCell(col, row, radius || 24, 'trap'); },
       interact: function () { return ESCAPE.game.stealth.onInteract(); },
       cine: function () { return ESCAPE.game.cinematic ? ESCAPE.game.cinematic.info() : null; },
       reset: function () { ESCAPE.game.ai.reset(); ESCAPE.game.stealth.reset(); }
     };
   }
+
+
+  /* ================================================================
+   * P4.10 機械テスト（契約 §4「敵2体・音の罠・地図リセット」）
+   *
+   * test.js への結線が済むまでの受け皿として、スイートはここで自前登録する。
+   *   ESCAPE.__extraSuites … runAll が拾う登録配列（[fn(t, g), ...]）
+   *   window.__test.runExtra() … 単独実行（test.js を触らずに全通過を示せる）
+   * 署名は test.js の suites と同じ (t, g) なので、結線は runAll 側の1行で済む。
+   * ============================================================== */
+  ESCAPE.__extraSuites = ESCAPE.__extraSuites || [];
+
+  var DT = function () { return ESCAPE.FIXED_DT; };
+
+  function sim(g, n) { for (var i = 0; i < n; i++) g.stepFrame(ESCAPE.FIXED_DT); }
+  function simUntil(g, cond, maxFrames) {
+    for (var i = 0; i < maxFrames; i++) {
+      if (cond()) return i;
+      g.stepFrame(ESCAPE.FIXED_DT);
+    }
+    return cond() ? maxFrames : -1;
+  }
+  function placePlayer(g, col, row, yawDeg) {
+    var c = g.map.cellCenter(col, row), p = g.player;
+    p.x = c.x; p.z = c.z; p.y = g.map.floorYAt(c.x, c.z);
+    p.yaw = (yawDeg || 0) * Math.PI / 180;
+    p.pitch = 0; p.speed = 0; p.crouching = false;
+  }
+  function putEnemy(ai, col, row, yawDeg) {
+    ai.enemy.placeCell(col, row, yawDeg === undefined ? 180 : yawDeg, ai.map);
+    ai.path = null; ai.goal = null; ai.repathT = 0;
+  }
+  /** プレイヤーを敵から見えない状態にする（ロッカー）。駆け引きを止めずに巡回だけを見たい時用 */
+  function hidePlayer(g) {
+    var list = (g.map.meta && g.map.meta.lockers) || [];
+    var best = null, bd = -1;
+    for (var i = 0; i < list.length; i++) {
+      var c = g.map.cellCenter(list[i].col, list[i].row);
+      var d = Infinity;
+      var ais = g.ais.list;
+      for (var k = 0; k < ais.length; k++) {
+        d = Math.min(d, Math.hypot(ais[k].enemy.x - c.x, ais[k].enemy.z - c.z));
+      }
+      if (d > bd) { bd = d; best = list[i]; }
+    }
+    if (!best) return false;
+    var cc = g.map.cellCenter(best.col, best.row);
+    g.player.x = cc.x; g.player.z = cc.z;
+    return g.stealth.enterLocker(best.col, best.row) && g.stealth.hidden();
+  }
+  /** 敵から 8〜18m 離れ、視線が通らないマスを探す（音源用） */
+  function noiseSpot(g, ai, near, far) {
+    var cells = g.map.walkableCells(), e = ai.enemy;
+    for (var i = 0; i < cells.length; i++) {
+      var c = g.map.cellCenter(cells[i].col, cells[i].row);
+      var d = Math.hypot(c.x - e.x, c.z - e.z);
+      if (d < near || d > far) continue;
+      if (!ai.blockedLine(e.x, e.z, c.x, c.z)) continue;
+      return { col: cells[i].col, row: cells[i].row, x: c.x, z: c.z, dist: d };
+    }
+    return null;
+  }
+
+  /* ---------------- A: 敵2体・縄張り ---------------- */
+
+  function testEnemyPairContract(t, g) {
+    g.reset();
+    var T = ENEMY_TUNING;
+    t.ok(T.enemyCount === 2, 'P4.10 敵2体: 稼働個体数は2（契約）', T.enemyCount);
+    t.ok(!!g.ais && g.ais.list.length === 2, 'P4.10 敵2体: AIManager が2個体を持つ',
+      g.ais ? g.ais.list.length : 'なし');
+    if (!g.ais || g.ais.list.length < 2) return;
+    var a0 = g.ais.list[0], a1 = g.ais.list[1];
+    t.ok(g.ai === a0, 'P4.10 敵2体: game.ai は先頭個体を指す（既存の結線を壊さない）');
+    t.ok(a0.enemy !== a1.enemy, 'P4.10 敵2体: 個体ごとに実体（モデル）を持つ');
+    t.ok(a0.enemy.group.visible && a1.enemy.group.visible, 'P4.10 敵2体: 2体ともシーンに出ている');
+    t.ok(a0.enemy.group.parent === g.scene && a1.enemy.group.parent === g.scene,
+      'P4.10 敵2体: 2体ともシーンに追加されている');
+
+    /* 個体差（契約「敵②は追跡速度やや遅め」）。定数は ENEMY_TUNING に配列で集約 */
+    t.ok((T.individuals || []).length >= 2, 'P4.10 個体差: ENEMY_TUNING.individuals に配列で集約',
+      (T.individuals || []).length + '件');
+    t.ok(a1.T.chaseSpeed < a0.T.chaseSpeed, 'P4.10 個体差: 敵②の追跡速度は敵①より遅い',
+      a1.T.chaseSpeed + ' < ' + a0.T.chaseSpeed);
+    t.near(a0.T.chaseSpeed, T.chaseSpeed, 1e-9, 'P4.10 個体差: 敵①は基準値のまま');
+    t.ok(a1.T.chaseSpeed > ESCAPE.Player.SPEED_WALK,
+      'P4.10 個体差: 遅めでも歩きより速い（逃げ切れてしまわない）', a1.T.chaseSpeed);
+
+    /* 縄張り＝帯（行範囲）。重ならないこと */
+    var t0 = a0.territory, t1 = a1.territory;
+    t.ok(!!t0 && !!t1, 'P4.10 縄張り: 個体ごとに縄張りが割り当たっている');
+    if (!t0 || !t1) return;
+    t.ok(t0.r1 < t1.r0 || t1.r1 < t0.r0, 'P4.10 縄張り: 2つの帯は行方向で重ならない',
+      t0.r0 + '-' + t0.r1 + ' / ' + t1.r0 + '-' + t1.r1);
+    t.ok((t0.r1 - t0.r0) >= 4 && (t1.r1 - t1.r0) >= 4, 'P4.10 縄張り: どちらの帯にも幅がある');
+
+    /* 巡回路は自分の帯の中だけ */
+    for (var i = 0; i < 2; i++) {
+      var ai = g.ais.list[i], out = 0;
+      t.ok(ai.route.length >= 3, 'P4.10 縄張り: 個体' + (i + 1) + 'の巡回地点が3以上',
+        ai.route.length + '地点');
+      for (var k = 0; k < ai.route.length; k++) {
+        var n = ai.route[k];
+        if (!ai.territory.contains(n.col, n.row)) out++;
+        if (!g.map.isWalkable(n.col, n.row)) out++;
+      }
+      t.ok(out === 0, 'P4.10 縄張り: 個体' + (i + 1) + 'の巡回地点は全て自分の帯の歩行可能マス', out + '件が違反');
+      t.ok(ai.territory.containsXZ(g.map, ai.enemy.x, ai.enemy.z),
+        'P4.10 縄張り: 個体' + (i + 1) + 'は自分の帯から始まる',
+        g.map.colOf(ai.enemy.x) + ',' + g.map.rowOf(ai.enemy.z));
+    }
+    /* 復帰＝スタート地点。巡回地点がスタートに張り付いていないこと（鉢合わせ防止） */
+    var sp = g.map.meta.spawn, tooNear = 0;
+    for (var m = 0; m < 2; m++) {
+      var r = g.ais.list[m].route;
+      for (var q = 0; q < r.length; q++) {
+        if (Math.hypot(r[q].col - sp.col, r[q].row - sp.row) * g.map.tileSize < T.territoryStartClear) tooNear++;
+      }
+    }
+    t.ok(tooNear === 0, 'P4.10 縄張り: 巡回地点はスタート地点から離れている（復帰直後に鉢合わせない）',
+      tooNear + '地点が近すぎ');
+    g.reset();
+  }
+
+  function testTerritoryPatrol(t, g) {
+    g.reset();
+    if (!t.ok(hidePlayer(g), 'P4.10 巡回: 検証用にプレイヤーを隠せる')) { g.reset(); return; }
+    var a0 = g.ais.list[0], a1 = g.ais.list[1];
+    var s0 = { x: a0.enemy.x, z: a0.enemy.z }, s1 = { x: a1.enemy.x, z: a1.enemy.z };
+    var out0 = 0, out1 = 0, chase = 0;
+    for (var i = 0; i < 1800; i++) {
+      g.stepFrame(ESCAPE.FIXED_DT);
+      if (!a0.territory.containsXZ(g.map, a0.enemy.x, a0.enemy.z)) out0++;
+      if (!a1.territory.containsXZ(g.map, a1.enemy.x, a1.enemy.z)) out1++;
+      if (a0.state === 'chase' || a1.state === 'chase') chase++;
+    }
+    t.ok(chase === 0, 'P4.10 巡回: 隠れている間は追跡が起きない（検証条件が成立）', chase + 'フレーム');
+    t.ok(out0 === 0, 'P4.10 巡回: 敵①は30秒の巡回で縄張りを出ない', out0 + 'フレーム逸脱');
+    t.ok(out1 === 0, 'P4.10 巡回: 敵②は30秒の巡回で縄張りを出ない', out1 + 'フレーム逸脱');
+    var d0 = Math.hypot(a0.enemy.x - s0.x, a0.enemy.z - s0.z);
+    var d1 = Math.hypot(a1.enemy.x - s1.x, a1.enemy.z - s1.z);
+    t.ok(d0 > 2.0, 'P4.10 巡回: 敵①が実際に巡回している', d0.toFixed(1) + 'm');
+    t.ok(d1 > 2.0, 'P4.10 巡回: 敵②が実際に巡回している', d1.toFixed(1) + 'm');
+    var sep = Math.hypot(a0.enemy.x - a1.enemy.x, a0.enemy.z - a1.enemy.z);
+    t.ok(sep > 4.0, 'P4.10 巡回: 2体が別々の場所を巡回している', sep.toFixed(1) + 'm');
+    g.stealth.exitLocker();
+    g.reset();
+  }
+
+  /* ---------------- B: 罠 → 絶叫 → 猛スピード ---------------- */
+
+  function testTrapTuning(t, g) {
+    var T = ENEMY_TUNING;
+    t.near(T.investigateSpeed, 5.00, 1e-9, 'P4.10 罠: 通常の調査速度は5.0m/sのまま');
+    t.near(T.trapInvestigateSpeed, 6.50, 1e-9, 'P4.10 罠: 罠に反応した調査は6.5m/s（契約）');
+    t.near(T.searchDur, 8.00, 1e-9, 'P4.10 罠: 通常の探索は8秒のまま');
+    t.near(T.trapSearchDur, 14.00, 1e-9, 'P4.10 罠: 罠の後の探索は14秒（契約の延長）');
+    t.ok(T.trapLockerPeekChance > T.lockerPeekChance,
+      'P4.10 罠: 罠の探索中はロッカーを覗く確率が上がる',
+      T.trapLockerPeekChance + ' > ' + T.lockerPeekChance);
+    t.ok(T.trapPeekRadius > T.lockerPeekRadius, 'P4.10 罠: 覗く対象を探す半径も広がる',
+      T.trapPeekRadius + ' > ' + T.lockerPeekRadius);
+    t.ok(T.trapHearRadius > 200, 'P4.10 罠: 罠の音は施設全体に届く', T.trapHearRadius);
+    t.ok(isTrapKind('trap') && isTrapKind('step') && isTrapKind('sensor'),
+      'P4.10 罠: 音地盤・センサー・罠が「罠の音」として扱われる');
+    t.ok(!isTrapKind('gimmick') && !isTrapKind('debug'),
+      'P4.10 罠: 仕掛け音や検証用の音は絶叫を起こさない（既存挙動を保つ）');
+  }
+
+  function testTrapBothRespond(t, g) {
+    g.reset();
+    if (!t.ok(hidePlayer(g), 'P4.10 罠: 検証用にプレイヤーを隠せる')) { g.reset(); return; }
+    var a0 = g.ais.list[0], a1 = g.ais.list[1], au = ESCAPE.audio;
+    var spot = noiseSpot(g, a0, 8, 16);
+    if (!t.ok(!!spot, 'P4.10 罠: 検証に使える音源マスがある')) { g.reset(); return; }
+    var d0 = Math.hypot(spot.x - a0.enemy.x, spot.z - a0.enemy.z);
+    var d1 = Math.hypot(spot.x - a1.enemy.x, spot.z - a1.enemy.z);
+    var screams0 = a0.screams + a1.screams;
+    var fired = (au && au.fired && au.fired.shriek) || 0;
+
+    /* 罠が鳴る（半径は既定＝罠なので施設全体に届く） */
+    ESCAPE.noise.emit(spot.x, spot.z, ENEMY_TUNING.runNoiseRadius, 'trap');
+    sim(g, 1);
+    t.ok(a0.state === 'investigate' && a0.alert === true,
+      'P4.10 罠: 近い個体が即座に罠へ反応する', a0.state + '/alert=' + a0.alert);
+    var far = (a1.state === 'investigate') || !!a1.pending;
+    t.ok(far, 'P4.10 罠: 遠い個体も反応する（両方が反応する＝契約）',
+      a1.state + '/pending=' + (a1.pending ? a1.pending.t.toFixed(2) : 'なし'));
+    t.ok(d1 > d0, 'P4.10 罠: 検証条件（敵②の方が音源から遠い）', d0.toFixed(1) + ' / ' + d1.toFixed(1));
+    t.ok((a0.screams + a1.screams) > screams0, 'P4.10 罠: 絶叫が上がる',
+      (a0.screams + a1.screams) + '回');
+    t.ok(((au && au.fired && au.fired.shriek) || 0) > fired,
+      'P4.10 罠: 絶叫の音（shriek）が鳴る指示が出る');
+    t.ok((au.events && au.events.shriek) > 0, 'P4.10 罠: 音響イベント shriek が記録される');
+
+    /* 遠い個体も遅れて調査に入る */
+    var came = simUntil(g, function () { return a1.state === 'investigate' || a1.state === 'search'; },
+      Math.ceil((ENEMY_TUNING.farReactDelay + 1.5) / ESCAPE.FIXED_DT));
+    t.ok(came >= 0, 'P4.10 罠: 遅れて寄る個体も必ず音源へ向かう', a1.state);
+    t.ok(a1.alert === true, 'P4.10 罠: 遠い個体も「罠に反応した」状態になる', a1.alert);
+
+    /* 近い方が先着する */
+    var arr0 = -1, arr1 = -1;
+    for (var i = 0; i < 3000 && (arr0 < 0 || arr1 < 0); i++) {
+      g.stepFrame(ESCAPE.FIXED_DT);
+      if (arr0 < 0 && Math.hypot(a0.enemy.x - spot.x, a0.enemy.z - spot.z) < 1.6) arr0 = i;
+      if (arr1 < 0 && Math.hypot(a1.enemy.x - spot.x, a1.enemy.z - spot.z) < 1.6) arr1 = i;
+    }
+    t.ok(arr0 >= 0, 'P4.10 罠: 近い個体が音源へ到着する', arr0 + 'フレーム');
+    t.ok(arr0 >= 0 && (arr1 < 0 || arr0 < arr1),
+      'P4.10 罠: 近い方が先着する', '敵①' + arr0 + ' / 敵②' + arr1);
+    g.stealth.exitLocker();
+    g.reset();
+  }
+
+  /** 罠の音の方が「通常の音」より速く走る（investigate 5.0 → 6.5 の実測比較） */
+  function testTrapSprintSpeed(t, g) {
+    function run(kind) {
+      g.reset();
+      hidePlayer(g);
+      var ai = g.ai;
+      var spot = noiseSpot(g, ai, 12, 20);
+      if (!spot) return null;
+      ESCAPE.noise.emit(spot.x, spot.z, 40, kind);
+      sim(g, 1);
+      if (ai.state !== 'investigate') return null;
+      simUntil(g, function () { return ai.enemy.state !== 'trans'; }, 300);
+      var x0 = ai.enemy.x, z0 = ai.enemy.z, N = 40;
+      sim(g, N);
+      var v = Math.hypot(ai.enemy.x - x0, ai.enemy.z - z0) / (N * ESCAPE.FIXED_DT);
+      var alert = ai.alert;
+      g.stealth.exitLocker();
+      return { v: v, alert: alert, state: ai.state };
+    }
+    var normal = run('test');
+    var trap = run('trap');
+    if (!t.ok(!!normal && !!trap, 'P4.10 猛スピード: 比較に使える音源マスがある')) { g.reset(); return; }
+    t.ok(normal.alert === false, 'P4.10 猛スピード: 通常の音では alert にならない');
+    t.ok(trap.alert === true, 'P4.10 猛スピード: 罠の音では alert になる');
+    t.ok(trap.v > normal.v * 1.15, 'P4.10 猛スピード: 罠の時の方が明確に速い',
+      trap.v.toFixed(2) + ' vs ' + normal.v.toFixed(2) + ' m/s');
+    var ratio = ENEMY_TUNING.trapInvestigateSpeed / ENEMY_TUNING.investigateSpeed;
+    t.ok(trap.v / normal.v > ratio * 0.85, 'P4.10 猛スピード: 実測比が定数比（6.5/5.0）に見合う',
+      (trap.v / normal.v).toFixed(2) + ' vs ' + ratio.toFixed(2));
+    g.reset();
+  }
+
+  /** 到着後の探索が延長される（8秒では巡回に戻らない） */
+  function testTrapSearchIsLong(t, g) {
+    g.reset();
+    if (!t.ok(hidePlayer(g), 'P4.10 執拗な探索: 検証用にプレイヤーを隠せる')) { g.reset(); return; }
+    var ai = g.ai;
+    var spot = noiseSpot(g, ai, 8, 14);
+    if (!t.ok(!!spot, 'P4.10 執拗な探索: 検証に使える音源マスがある')) { g.reset(); return; }
+    ESCAPE.noise.emit(spot.x, spot.z, 40, 'trap');
+    sim(g, 1);
+    var toSearch = simUntil(g, function () { return ai.state === 'search' || ai.state === 'locker'; }, 1800);
+    t.ok(toSearch >= 0, 'P4.10 執拗な探索: 到着後に探索へ移る', ai.state);
+    var frames = Math.ceil((ENEMY_TUNING.searchDur + 0.6) / ESCAPE.FIXED_DT);
+    var backEarly = simUntil(g, function () { return ai.state === 'patrol'; }, frames);
+    t.ok(backEarly < 0, 'P4.10 執拗な探索: 通常の探索時間(8秒)では巡回へ戻らない', ai.state);
+    t.ok(ai.alert === true, 'P4.10 執拗な探索: 罠の反応が続いている', ai.alert);
+    /* いつかは必ず巡回へ戻る（探索が終わらない＝詰みを作らない） */
+    var back = simUntil(g, function () { return ai.state === 'patrol'; },
+      Math.ceil((ENEMY_TUNING.trapSearchDur * 3 + 30) / ESCAPE.FIXED_DT));
+    t.ok(back >= 0, 'P4.10 執拗な探索: 最後は巡回へ戻る（探索が終わらない状態を作らない）', ai.state);
+    t.ok(ai.alert === false, 'P4.10 執拗な探索: 巡回へ戻れば罠の反応は解ける');
+    g.stealth.exitLocker();
+    g.reset();
+  }
+
+  /** 追跡では縄張りを出てよい。見失ったら自分の帯へ帰る */
+  function testTerritoryLeaveAndReturn(t, g) {
+    g.reset();
+    var a0 = g.ais.list[0], a1 = g.ais.list[1];
+    /* 敵①を自分の帯の境界へ、プレイヤーを帯の外（敵②の帯）へ置いて追跡させる */
+    var map = g.map, terr = a0.territory;
+    var edge = null, out = null;
+    var cells = map.walkableCells();
+    for (var i = 0; i < cells.length && !edge; i++) {
+      var c = cells[i];
+      if (c.row !== terr.r1) continue;
+      /* 帯の外側（+2行）に見通せる歩行可能マスがあること */
+      for (var d = 2; d <= 4 && !edge; d++) {
+        if (!map.isWalkable(c.col, c.row + d) || map.isBlocked(c.col, c.row + d)) continue;
+        var p0 = map.cellCenter(c.col, c.row), p1 = map.cellCenter(c.col, c.row + d);
+        if (a0.blockedLine(p0.x, p0.z, p1.x, p1.z)) continue;
+        edge = { col: c.col, row: c.row };
+        out = { col: c.col, row: c.row + d };
+      }
+    }
+    if (!t.ok(!!edge, 'P4.10 縄張り復帰: 帯の境界に検証点がある')) { g.reset(); return; }
+    /* 敵②は遠くへ退避させる（この検証は敵①だけを見る） */
+    putEnemy(a1, a1.route[0].col, a1.route[0].row, 0);
+    a1.manual = true;
+    putEnemy(a0, edge.col, edge.row, 180);
+    placePlayer(g, out.col, out.row, 0);
+    a0.enemy.facing = yawOf(0, 1);       /* 帯の外＝行が増える方向を向く */
+    sim(g, 2);
+    var chased = simUntil(g, function () { return a0.state === 'chase'; }, 240);
+    t.ok(chased >= 0, 'P4.10 縄張り復帰: 帯の外のプレイヤーを追跡する', a0.state);
+    var leftFrames = simUntil(g, function () {
+      return !a0.territory.containsXZ(g.map, a0.enemy.x, a0.enemy.z);
+    }, 600);
+    t.ok(leftFrames >= 0, 'P4.10 縄張り復帰: 追跡中は縄張りを出てよい',
+      g.map.rowOf(a0.enemy.z) + '行 / 帯' + terr.r0 + '-' + terr.r1);
+
+    /* 見失わせる: プレイヤーを隠す → 探索を経て巡回へ → 自分の帯へ帰る */
+    hidePlayer(g);
+    var backPatrol = simUntil(g, function () { return a0.state === 'patrol'; },
+      Math.ceil((ENEMY_TUNING.giveUpTime + ENEMY_TUNING.searchDur + 12) / ESCAPE.FIXED_DT));
+    t.ok(backPatrol >= 0, 'P4.10 縄張り復帰: 見失えば探索を経て巡回へ戻る', a0.state);
+    var home = simUntil(g, function () {
+      return a0.territory.containsXZ(g.map, a0.enemy.x, a0.enemy.z);
+    }, 3000);
+    t.ok(home >= 0, 'P4.10 縄張り復帰: 自分の縄張りへ帰る',
+      g.map.rowOf(a0.enemy.z) + '行 / 帯' + terr.r0 + '-' + terr.r1);
+
+    /* 「外に居るまま巡回へ戻された」ときに帰還の判断が立つこと（直接検査） */
+    putEnemy(a0, out.col, out.row, 0);
+    var r0 = a0.returns;
+    a0.toPatrol();
+    t.ok(a0.returns === r0 + 1 && a0.outside === true,
+      'P4.10 縄張り復帰: 帯の外で巡回に戻ると「帰る」判断になる', a0.returns + '/outside=' + a0.outside);
+    var home2 = simUntil(g, function () {
+      return a0.territory.containsXZ(g.map, a0.enemy.x, a0.enemy.z) && a0.outside === false;
+    }, 3000);
+    t.ok(home2 >= 0, 'P4.10 縄張り復帰: 寄り道せず帯まで帰りきる', a0.outside);
+    a1.manual = false;
+    g.stealth.exitLocker();
+    g.reset();
+  }
+
+  /* ---------------- 捕獲: 個体の特定と演出の整合 ---------------- */
+
+  function testCaptureByEitherEnemy(t, g) {
+    for (var idx = 0; idx < 2; idx++) {
+      g.reset();
+      var captor = g.ais.list[idx], other = g.ais.list[1 - idx];
+      /* 捕まえる個体をプレイヤーの目の前に、もう1体は自分の巡回起点で待たせる */
+      var sp = g.map.meta.spawn;
+      var open = null, cells = g.map.walkableCells();
+      for (var i = 0; i < cells.length && !open; i++) {
+        var c = cells[i];
+        if (!g.map.isWalkable(c.col + 1, c.row) || g.map.isBlocked(c.col + 1, c.row)) continue;
+        if (!g.map.isWalkable(c.col + 2, c.row) || g.map.isBlocked(c.col + 2, c.row)) continue;
+        if (Math.hypot(c.col - sp.col, c.row - sp.row) < 6) continue;
+        open = c;
+      }
+      if (!t.ok(!!open, 'P4.10 捕獲個体: 検証に使える見通しの3マスがある')) { g.reset(); return; }
+      other.manual = true;
+      putEnemy(captor, open.col, open.row, -90);
+      placePlayer(g, open.col + 2, open.row, 0);
+      sim(g, 1);
+      g.player.x = captor.enemy.x + 0.55; g.player.z = captor.enemy.z;
+      sim(g, 1);
+
+      var label = '敵' + (idx + 1);
+      t.ok(g.stealth.jail.phase === 'grab', 'P4.10 捕獲個体: ' + label + 'に捕まると演出が始まる',
+        g.stealth.jail.phase);
+      t.ok(g.stealth.capturedBy === captor, 'P4.10 捕獲個体: 捕まえた個体が記録される',
+        g.stealth.capturedBy ? g.stealth.capturedBy.name : 'なし');
+      t.ok(g.cinematic.actor === captor, 'P4.10 捕獲個体: 演出の主役が捕まえた個体',
+        g.cinematic.actor ? g.cinematic.actor.name : 'なし');
+      t.ok(captor.state === 'caught' && captor.cine === true,
+        'P4.10 捕獲個体: 捕まえた個体が演出に入る', captor.state);
+      t.ok(other.state !== 'caught' && other.cine === false,
+        'P4.10 捕獲個体: もう1体は演出に巻き込まれない', other.state);
+      t.ok(captor.enemy.detailHi === true, 'P4.10 捕獲個体: 高解像度化されるのは捕まえた個体');
+      t.ok(other.enemy.detailHi === false, 'P4.10 捕獲個体: もう1体は通常解像度のまま');
+
+      var red = false;
+      var done = simUntil(g, function () {
+        if (captor.enemy.redEyesVisible()) red = true;
+        return g.stealth.jail.phase === 'none';
+      }, Math.ceil(g.cinematic.totalDur('jail') / ESCAPE.FIXED_DT) + 600);
+      t.ok(red, 'P4.10 捕獲個体: 赤い目は捕まえた個体に出る');
+      t.ok(done >= 0, 'P4.10 捕獲個体: 演出が終わって操作に戻る', g.stealth.jail.phase);
+      t.ok(captor.enemy.detailHi === false && captor.enemy.activeTriangles() === captor.enemy.triangles,
+        'P4.10 捕獲個体: 演出ぶんが残らない');
+      t.ok(captor.cine === false && g.cinematic.actor === null,
+        'P4.10 捕獲個体: 演出の主役が解除される');
+      t.ok(g.player.col() === sp.col && g.player.row() === sp.row,
+        'P4.10 捕獲個体: 復帰先はスタート地点', g.player.col() + ',' + g.player.row());
+      /* 両個体が巡回起点へ戻る（片方が張り付いたままにならない） */
+      t.ok(captor.state === 'patrol' && other.state === 'patrol',
+        'P4.10 捕獲個体: 捕獲後は2体とも巡回へ戻る', captor.state + '/' + other.state);
+      var inHome = captor.territory.containsXZ(g.map, captor.enemy.x, captor.enemy.z);
+      t.ok(inHome, 'P4.10 捕獲個体: 復帰後は自分の縄張りに戻っている');
+      other.manual = false;
+      g.reset();
+    }
+  }
+
+  /* ---------------- C: 捕獲のたびに地図を真っ暗に ---------------- */
+
+  function testCaptureWipesMap(t, g) {
+    g.reset();
+    var mm = g.minimap, rope = g.rope, st = g.stealth;
+    if (!t.ok(!!mm, 'P4.10 地図リセット: ミニマップが組み込まれている')) { g.reset(); return; }
+    var sp = g.map.meta.spawn;
+    placePlayer(g, sp.col, sp.row, 0);
+    sim(g, 2);
+    var base = mm.exploredCount;      /* スタート地点だけを踏破した状態＝「ほぼ真っ暗」の基準 */
+
+    /* 遠くまで歩き回って踏破を作る（製品と同じ記録経路＝minimap.step を通す） */
+    var cells = g.map.walkableCells(), far = [];
+    for (var i = 0; i < cells.length && far.length < 20; i++) {
+      var c = cells[i];
+      if (Math.hypot(c.col - sp.col, c.row - sp.row) < 14) continue;
+      placePlayer(g, c.col, c.row, 0);
+      mm.step(0);
+      far.push(c);
+    }
+    if (!t.ok(far.length >= 10, 'P4.10 地図リセット: 検証用に遠方の踏破を作れる', far.length)) { g.reset(); return; }
+    mm.learnZone('C');
+    g.progress.gimmick.key = true;
+    var explored = mm.exploredCount, zones = mm.info().zones.join('');
+    var stack = rope.stack.length, ghosts = rope.ghosts.length, wipes = mm.wipes;
+    t.ok(explored > base + 10, 'P4.10 地図リセット: 検証用に踏破が溜まっている', explored + ' / 基準' + base);
+    var known = 0;
+    for (var k = 0; k < far.length; k++) if (mm.isExplored(far[k].col, far[k].row)) known++;
+    t.ok(known === far.length, 'P4.10 地図リセット: 遠方のマスが踏破済みになっている', known + '/' + far.length);
+
+    t.ok(st.capture(g.ais.list[1]) === true, 'P4.10 地図リセット: 捕獲が始まる');
+    t.ok(mm.exploredCount === 0, 'P4.10 地図リセット: 捕獲の瞬間に踏破が全消去される',
+      mm.exploredCount + ' / ' + explored);
+    t.ok(mm.wipes === wipes + 1, 'P4.10 地図リセット: 消去が1回だけ走る', mm.wipes);
+    t.ok(mm.info().zones.join('') === zones, 'P4.10 地図リセット: 読んだ区画名は残る',
+      mm.info().zones.join(''));
+    t.ok(rope.stack.length === stack, 'P4.10 地図リセット: ロープの軌跡は残る',
+      rope.stack.length + ' / ' + stack);
+    t.ok(rope.ghosts.length === ghosts, 'P4.10 地図リセット: 古い軌跡も残る');
+    t.ok(rope.knots.length === 1, 'P4.10 地図リセット: 結び目は落ちて残る', rope.knots.length);
+    t.ok(g.progress.gimmick.key === true, 'P4.10 地図リセット: 鍵の取得は残る');
+
+    var done = simUntil(g, function () { return st.jail.phase === 'none'; },
+      Math.ceil(g.cinematic.totalDur('jail') / ESCAPE.FIXED_DT) + 600);
+    t.ok(done >= 0, 'P4.10 地図リセット: 演出が終わる', st.jail.phase);
+    var left = 0;
+    for (var m = 0; m < far.length; m++) if (mm.isExplored(far[m].col, far[m].row)) left++;
+    t.ok(left === 0, 'P4.10 地図リセット: 復帰後、歩いた先の記憶は残っていない', left + '/' + far.length);
+    t.ok(mm.exploredCount <= base + 6, 'P4.10 地図リセット: 復帰直後の地図はスタート周辺だけ',
+      mm.exploredCount + ' / 基準' + base);
+    t.ok(mm.knowsZone('C') === true, 'P4.10 地図リセット: 復帰後も区画名は残っている');
+    t.ok(g.progress.gimmick.key === true, 'P4.10 地図リセット: 復帰後も鍵は残っている');
+    t.ok(rope.knots.length === 1 && rope.isAttached() === false,
+      'P4.10 地図リセット: 結び目を拾い直す動線は生きている');
+
+    /* 2回目の捕獲でも同じように消える（毎回＝契約） */
+    var w2 = mm.wipes;
+    for (var q = 0; q < far.length; q++) { placePlayer(g, far[q].col, far[q].row, 0); mm.step(0); }
+    t.ok(mm.exploredCount > base, 'P4.10 地図リセット: 歩けばまた踏破が増える', mm.exploredCount);
+    st.capture(g.ais.list[0]);
+    t.ok(mm.exploredCount === 0 && mm.wipes === w2 + 1,
+      'P4.10 地図リセット: 2回目の捕獲でも消える（毎回）', mm.exploredCount + ' / wipes' + mm.wipes);
+    simUntil(g, function () { return st.jail.phase === 'none'; },
+      Math.ceil(g.cinematic.totalDur('jail') / ESCAPE.FIXED_DT) + 600);
+    g.reset();
+  }
+
+  /* ---------------- 絶叫の音（OfflineAudioContext の数値判定） ---------------- */
+
+  function testShriekAudio(t, g) {
+    var A = ESCAPE.Audio;
+    t.ok(typeof A.VOICES.shriek === 'function', 'P4.10 絶叫: 音色 shriek が定義されている');
+    if (!t.ok(A.ready(), 'P4.10 絶叫: レンダキャッシュが揃っている（prewarm完了）',
+      A.prewarmError() || '')) return;
+    var m = A.cache.shriek, sc = A.cache.scream;
+    if (!t.ok(!!m, 'P4.10 絶叫: shriek が事前レンダされている')) return;
+    t.ok(m.rms >= 0.008 && m.peak >= 0.10 && m.peak <= 1.0 && !m.clipped,
+      'P4.10 絶叫: RMS/peak が範囲内', 'rms=' + m.rms.toFixed(4) + ' peak=' + m.peak.toFixed(4));
+    t.ok(m.onset >= 0 && m.onset < 0.30, 'P4.10 絶叫: 時間内に発音する', 'onset=' + m.onset.toFixed(3));
+    t.ok(m.activeRatio > sc.activeRatio,
+      'P4.10 絶叫: 形態遷移の悲鳴より長く尾を引く（施設に響く）',
+      m.activeRatio.toFixed(3) + ' > ' + sc.activeRatio.toFixed(3));
+    t.ok(Math.abs(m.rms - sc.rms) > 1e-6, 'P4.10 絶叫: 既存の悲鳴とは別の音色');
+
+    /* 方向が分かる立体音＝距離で消えず、左右のパンは付く（純関数で判定） */
+    t.ok(typeof A.shriekGainAt === 'function', 'P4.10 絶叫: 距離減衰が純関数で検査できる');
+    var near = A.shriekGainAt(2), mid = A.shriekGainAt(40), far = A.shriekGainAt(120);
+    t.ok(near > mid && mid > far, 'P4.10 絶叫: 距離で減衰する（近さは分かる）',
+      near.toFixed(3) + ' > ' + mid.toFixed(3) + ' > ' + far.toFixed(3));
+    t.ok(far > 0.15, 'P4.10 絶叫: 施設の端（120m）でも聞こえる音量が残る', far.toFixed(3));
+    t.ok(A.attenuationFor(120, 34) === 0, 'P4.10 絶叫: 通常の敵の音は同じ距離では届かない');
+    var right = A.panFor(0, 0, 0, 10, 0), left = A.panFor(0, 0, 0, -10, 0);
+    t.ok(right > 0.5 && left < -0.5, 'P4.10 絶叫: 左右のパンで方向が分かる',
+      left.toFixed(2) + ' / ' + right.toFixed(2));
+  }
+
+  ESCAPE.__extraSuites.push(
+    testEnemyPairContract,
+    testTerritoryPatrol,
+    testTrapTuning,
+    testTrapBothRespond,
+    testTrapSprintSpeed,
+    testTrapSearchIsLong,
+    testTerritoryLeaveAndReturn,
+    testCaptureByEitherEnemy,
+    testCaptureWipesMap,
+    testShriekAudio
+  );
+
+  /* 単独実行（test.js への結線が済むまでの納品形）。
+     t の署名は test.js の Runner と同じ（ok / near）。 */
+  function ExtraRunner() { this.results = []; this.passed = 0; this.failed = 0; }
+  ExtraRunner.prototype.ok = function (cond, name, detail) {
+    var pass = !!cond;
+    this.results.push({ name: name, pass: pass, detail: detail === undefined ? '' : String(detail) });
+    if (pass) this.passed++; else this.failed++;
+    return pass;
+  };
+  ExtraRunner.prototype.near = function (v, want, eps, name, detail) {
+    return this.ok(Math.abs(v - want) <= eps, name,
+      detail === undefined ? (v + ' vs ' + want) : detail);
+  };
+
+  function runExtra(opts) {
+    var g = ESCAPE.game, t = new ExtraRunner();
+    if (!g) { t.ok(false, 'ゲームが初期化されている'); return t; }
+    var au = ESCAPE.audio, was = au ? au.testMode : false;
+    if (au) { au.testMode = true; au.panic(); }
+    g.reset();
+    var list = ESCAPE.__extraSuites;
+    for (var i = 0; i < list.length; i++) {
+      try { list[i](t, g); }
+      catch (err) { t.ok(false, list[i].name + ' で例外', err && err.message); }
+    }
+    g.reset();
+    if (au) { au.testMode = was; }
+    var out = { passed: t.passed, failed: t.failed, total: t.results.length, results: t.results };
+    if (!(opts && opts.quiet) && global.console) {
+      console.log('[__test.runExtra] ' + t.passed + '/' + t.results.length + ' 通過, 失敗 ' + t.failed);
+      for (var j = 0; j < t.results.length; j++) {
+        if (!t.results[j].pass) console.error('[__test.runExtra] FAIL: ' + t.results[j].name + ' — ' + t.results[j].detail);
+      }
+    }
+    return out;
+  }
+
+  function runExtraAsync(opts) {
+    var A = ESCAPE.Audio;
+    var wait = (A && A.prewarm) ? A.prewarm() : null;
+    if (wait && wait.then) return wait.then(function () { return runExtra(opts); });
+    return global.Promise ? global.Promise.resolve(runExtra(opts)) : runExtra(opts);
+  }
+
+  ESCAPE.runExtraSuites = runExtra;
+  global.__extraTest = { run: runExtra, runAsync: runExtraAsync, suites: ESCAPE.__extraSuites };
+  function bindExtra() {
+    if (global.__test && !global.__test.runExtra) {
+      global.__test.runExtra = runExtra;
+      global.__test.runExtraAsync = runExtraAsync;
+    }
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', bindExtra);
+  else bindExtra();
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', install);

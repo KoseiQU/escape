@@ -30,6 +30,9 @@
    * ============================================================== */
   var STORE_KEY = 'escape.audio.v1';
   var MAX_VOICES = 20;            /* 同時発音数の上限（スマホ想定） */
+  /* P4.10: 罠発火の絶叫は施設全体に届く（80x80マップの対角=226mより大きく取る） */
+  var SHRIEK_MAX_DIST = 400;
+  var SHRIEK_ATTEN_FLOOR = 0.34;  /* 遠くても必ずこの音量では届く（方向は pan で分かる） */
   var NOISE_SECONDS = 2.0;        /* 共有ノイズバッファの長さ */
   var DEFAULT_VOLUME = 0.75;
 
@@ -404,6 +407,36 @@
       chain([n, fn, swell(ctx, t0, 0.20 * lv, 0.02, dur * 0.3, dur * 0.6), dest]);
       startStop(n, t0, dur + 0.2);
       return dur + 0.25;
+    },
+
+    /**
+     * P4.10（契約 §4「罠が鳴った瞬間、敵の絶叫が施設全体に響く」）。
+     * scream より長く・低い成分を足して遠くまで届かせる。方向は _route の
+     * StereoPanner が付ける（この関数は音色だけを作る純関数のまま）。
+     */
+    shriek: function (ctx, dest, t0, p) {
+      var lv = (p.level === undefined) ? 1 : p.level;
+      var dur = (p.dur === undefined) ? 1.60 : p.dur;
+      /* 上に伸びる悲鳴（scream をそのまま重ねて芯にする） */
+      VOICES.scream(ctx, dest, t0, { level: 1.15 * lv, dur: dur * 0.62 });
+      /* 遠くまで届く低い唸り（壁越しのローパスでも残る帯域） */
+      var mults = [0.5, 0.755, 1.007];
+      for (var i = 0; i < mults.length; i++) {
+        var o = osc(ctx, 'sawtooth', 120 * mults[i]);
+        o.frequency.setValueAtTime(96 * mults[i], t0);
+        o.frequency.exponentialRampToValueAtTime(210 * mults[i], t0 + dur * 0.30);
+        o.frequency.exponentialRampToValueAtTime(78 * mults[i], t0 + dur);
+        var f = bq(ctx, 'lowpass', 900, 1.2);
+        chain([o, f, swell(ctx, t0, (0.30 / (i + 1)) * lv, 0.05, dur * 0.45, dur * 0.50), dest]);
+        startStop(o, t0, dur + 0.25);
+      }
+      /* 息の擦れ（尾を引かせて「施設に響く」感じを作る） */
+      var n = noiseSrc(ctx, 1.0);
+      var fn = bq(ctx, 'bandpass', 1500, 0.8);
+      fn.frequency.exponentialRampToValueAtTime(480, t0 + dur);
+      chain([n, fn, swell(ctx, t0, 0.16 * lv, 0.04, dur * 0.5, dur * 0.55), dest]);
+      startStop(n, t0, dur + 0.25);
+      return dur + 0.30;
     },
 
     /** 発見スティング（不協和音の刺し音） */
@@ -883,6 +916,8 @@
     { key: 'lever',       name: 'lever', params: {}, sec: 3.4 },
     { key: 'alarm',       name: 'alarm', params: {}, sec: 2.4 },
     { key: 'scream',      name: 'scream', params: {}, sec: 1.4 },
+    /* P4.10 罠発火の絶叫（施設全体に響く） */
+    { key: 'shriek',      name: 'shriek', params: {}, sec: 2.2 },
     { key: 'boneCrack',   name: 'boneCrack', params: {}, sec: 1.4 },
     { key: 'capture',     name: 'capture', params: {}, sec: 2.2 },
     { key: 'drip',        name: 'drip', params: { r: 0.5 }, sec: 0.8 },
@@ -1137,6 +1172,12 @@
     return clamp(right / d, -1, 1) * PAN_WIDTH;
   }
 
+  /** P4.10: 絶叫の距離減衰（下限つき）。施設の端でも必ず聞こえることを数値で示す */
+  function shriekGainAt(d) {
+    if (d >= SHRIEK_MAX_DIST) return 0;
+    return Math.max(attenuationFor(d, SHRIEK_MAX_DIST), SHRIEK_ATTEN_FLOOR * (1 - d / SHRIEK_MAX_DIST));
+  }
+
   Engine.prototype._occluded = function (x, z) {
     var g = this.game;
     if (!g || !g.ai || !g.ai.blockedLine) return false;
@@ -1159,6 +1200,9 @@
     if (d >= maxD) return 0;
     var occ = (p.occlude !== false) && this._occluded(p.x, p.z);
     var att = attenuationFor(d, maxD) * (occ ? OCCLUDE_GAIN : 1);
+    /* P4.10: 施設全体に届く音（罠発火の絶叫）は距離で消えきらない下限を持つ。
+       方向（StereoPanner）と距離感（ローパス）はそのまま効く＝どこから来たかは分かる。 */
+    if (p.attenFloor) att = Math.max(att, p.attenFloor * (1 - d / maxD));
     var lpf = lowpassFor(d, occ);
     var lp = bq(ctx, 'lowpass', lpf, 0.7);
     var dg = gainOf(ctx, att);
@@ -1233,6 +1277,17 @@
         break;
       case 'lose':                 /* 追跡解除 */
         this.play('chaseRelease', { gain: 0.75 });
+        break;
+      /* P4.10（契約 §4「罠が鳴った瞬間」）: 敵の絶叫が施設全体に響く。
+         方向が分かる立体音＝空間化はするが、遮蔽で消さない・遠くても届く
+         （maxDist を施設の対角より大きく取る）。 */
+      case 'shriek':
+        this.play('shriek', {
+          x: p.x, z: p.z, bus: 'enemy', priority: 1, gain: 1.0,
+          maxDist: SHRIEK_MAX_DIST, occlude: false, attenFloor: SHRIEK_ATTEN_FLOOR
+        });
+        this._flash(0.22, 0.34);
+        this.fx.shakeImpulse = Math.max(this.fx.shakeImpulse, 0.42);
         break;
       case 'form':                 /* 形態遷移（骨鳴り＋絶叫） */
         this.play('boneCrack', { x: p.x, z: p.z, bus: 'enemy', priority: 1, gain: 1.0, maxDist: 34 });
@@ -1354,6 +1409,7 @@
     this.dragAcc = 0;
     this.moanT = 5.0;
     this.jointT = 3.0;
+    this._eSt = null;            /* P4.10: 個体ごとの気配の累積器（作り直す） */
     this.dripT = 4.0;
     this.metalT = 12.0;
     this.duckT = 0;
@@ -1628,61 +1684,82 @@
     }
   };
 
-  /* 敵の気配（距離減衰・壁越しでも聞こえる）＋心拍 */
+  /* 敵の気配（距離減衰・壁越しでも聞こえる）＋心拍。
+     P4.10: 敵は複数体。気配は個体ごとに（累積器も個体ごとに持つ＝
+     1本の累積器を2体で奪い合うと足音が飛ぶ）、心拍は最も近い個体で決める。 */
+  Engine.prototype._enemyState = function (i) {
+    if (!this._eSt) this._eSt = [];
+    if (!this._eSt[i]) this._eSt[i] = { prev: 'patrol', dragAcc: 0, moanT: 5.0 + i * 1.7, jointT: 3.0 + i * 1.1 };
+    return this._eSt[i];
+  };
+
   Engine.prototype._stepEnemy = function (dt, quiet) {
-    var g = this.game, ai = g.ai;
-    if (!ai || !ai.enemy) return;
-    var e = ai.enemy, p = g.player;
-    var d = Math.hypot(e.x - p.x, e.z - p.z);
-    var chase = (ai.state === 'chase');
-    var caught = (ai.state === 'caught');
+    var g = this.game;
+    var list = (g.ais && g.ais.list) ? g.ais.list : (g.ai ? [g.ai] : []);
+    if (!list.length) return;
+    var p = g.player;
+    var nd = Infinity, nearChase = false;
+    for (var i = 0; i < list.length; i++) {
+      var ai = list[i];
+      if (!ai || !ai.enemy) continue;
+      var e = ai.enemy;
+      var d = Math.hypot(e.x - p.x, e.z - p.z);
+      var chase = (ai.state === 'chase');
+      var caught = (ai.state === 'caught');
+      var st = this._enemyState(i);
 
-    /* 形態遷移の検出（AI が setForm した瞬間にアニメ状態が 'trans' になる） */
-    if (e.state === 'trans' && this._prevEnemyState !== 'trans' && e.transDir > 0) {
-      this.event('form', { x: e.x, z: e.z });
-    }
-    this._prevEnemyState = e.state;
-
-    if (quiet || caught) { this.dragAcc = 0; return; }
-
-    /* 引きずる足 / 疾走の爪音: 移動距離で発火する */
-    if (ai.speed > 0.05) {
-      this.dragAcc += ai.speed * dt;
-      var stride = chase ? 0.62 : 0.95;
-      if (this.dragAcc >= stride) {
-        this.dragAcc -= stride;
-        var lv = chase ? 1.0 : 0.85;
-        this.play(chase ? 'enemyClaw' : 'enemyDrag',
-          { x: e.x, z: e.z, bus: 'enemy', gain: lv, r: this._rand(), maxDist: chase ? 34 : 26 });
+      /* 形態遷移の検出（AI が setForm した瞬間にアニメ状態が 'trans' になる） */
+      if (e.state === 'trans' && st.prev !== 'trans' && e.transDir > 0) {
+        this.event('form', { x: e.x, z: e.z });
       }
-    } else {
-      this.dragAcc = Math.min(this.dragAcc, 0.5);
-    }
+      st.prev = e.state;
+      if (i === 0) this._prevEnemyState = e.state;   /* 既存フックとの互換 */
 
-    /* 低い呻き（壁越しでも「近くにいる」が分かる情報源） */
-    this.moanT -= dt;
-    if (this.moanT <= 0) {
-      this.moanT = chase ? (2.6 + this._rand() * 2.0) : (6.5 + this._rand() * 7.0);
-      if (d < 32) this.play('enemyMoan', { x: e.x, z: e.z, bus: 'enemy', gain: chase ? 1.0 : 0.8, r: this._rand(), maxDist: 34 });
-    }
-    /* 時折の関節の音 */
-    this.jointT -= dt;
-    if (this.jointT <= 0) {
-      this.jointT = 3.2 + this._rand() * 5.0;
-      if (d < 20) this.play('enemyJoint', { x: e.x, z: e.z, bus: 'enemy', gain: 0.7, r: this._rand(), maxDist: 22 });
-    }
+      if (quiet || caught) { st.dragAcc = 0; continue; }
+      if (d < nd) { nd = d; nearChase = chase; }
 
-    /* 心拍（距離で速まる）。累積器は発火時にしか減らさない＝毎フレームのレート変更で鳴らなくならない */
-    var want = chase || d < 8.5;
+      /* 引きずる足 / 疾走の爪音: 移動距離で発火する */
+      if (ai.speed > 0.05) {
+        st.dragAcc += ai.speed * dt;
+        var stride = chase ? 0.62 : 0.95;
+        if (st.dragAcc >= stride) {
+          st.dragAcc -= stride;
+          var lv = chase ? 1.0 : 0.85;
+          this.play(chase ? 'enemyClaw' : 'enemyDrag',
+            { x: e.x, z: e.z, bus: 'enemy', gain: lv, r: this._rand(), maxDist: chase ? 34 : 26 });
+        }
+      } else {
+        st.dragAcc = Math.min(st.dragAcc, 0.5);
+      }
+
+      /* 低い呻き（壁越しでも「近くにいる」が分かる情報源） */
+      st.moanT -= dt;
+      if (st.moanT <= 0) {
+        st.moanT = chase ? (2.6 + this._rand() * 2.0) : (6.5 + this._rand() * 7.0);
+        if (d < 32) this.play('enemyMoan', { x: e.x, z: e.z, bus: 'enemy', gain: chase ? 1.0 : 0.8, r: this._rand(), maxDist: 34 });
+      }
+      /* 時折の関節の音 */
+      st.jointT -= dt;
+      if (st.jointT <= 0) {
+        st.jointT = 3.2 + this._rand() * 5.0;
+        if (d < 20) this.play('enemyJoint', { x: e.x, z: e.z, bus: 'enemy', gain: 0.7, r: this._rand(), maxDist: 22 });
+      }
+      if (i === 0) { this.dragAcc = st.dragAcc; this.moanT = st.moanT; this.jointT = st.jointT; }
+    }
+    if (quiet || nd === Infinity) { this.hbT = 0; return; }
+
+    /* 心拍（最も近い個体との距離で速まる）。
+       累積器は発火時にしか減らさない＝毎フレームのレート変更で鳴らなくならない */
+    var want = nearChase || nd < 8.5;
     if (want) {
-      var bpm = clamp(158 - d * 3.6, 74, 158);
+      var bpm = clamp(158 - nd * 3.6, 74, 158);
       this.hbT += dt;
       var period = 60 / bpm;
       if (this.hbT >= period) {
         this.hbT -= period;
         if (this.hbT > period) this.hbT = 0;    /* 大きな dt で溜まりすぎない */
-        var near = clamp(1 - d / 16, 0.25, 1);
-        this.play('heartbeat', { level: 0.35 + near * 0.6, bus: 'self', priority: chase ? 1 : 0 });
+        var near = clamp(1 - nd / 16, 0.25, 1);
+        this.play('heartbeat', { level: 0.35 + near * 0.6, bus: 'self', priority: nearChase ? 1 : 0 });
       }
     } else {
       this.hbT = 0;
@@ -1691,13 +1768,20 @@
 
   /* 恐怖演出（DOMオーバーレイ＋カメラ揺れ。ポストプロセス不要） */
   Engine.prototype._stepFx = function (dt, quiet, jail) {
-    var g = this.game, ai = g.ai, fx = this.fx;
-    var dreadTarget = 0;
-    if (ai && ai.enemy) {
+    var g = this.game, fx = this.fx;
+    /* P4.10: 恐怖の度合いは「個体ごとに出して最も強いもの」を採る
+       （1体ぶんで上書きすると、もう1体が真後ろに居ても静かになる） */
+    var list = (g.ais && g.ais.list) ? g.ais.list : (g.ai ? [g.ai] : []);
+    var dreadTarget = 0, anyChase = false;
+    for (var ei = 0; ei < list.length; ei++) {
+      var ai = list[ei];
+      if (!ai || !ai.enemy) continue;
       var d = Math.hypot(ai.enemy.x - g.player.x, ai.enemy.z - g.player.z);
       var near = clamp(1 - (d - 1.5) / 13, 0, 1);
-      dreadTarget = (ai.state === 'chase') ? Math.max(0.62, near) : near * 0.72;
-      if (ai.state === 'investigate' || ai.state === 'search') dreadTarget = Math.max(dreadTarget, near * 0.85);
+      var want = (ai.state === 'chase') ? Math.max(0.62, near) : near * 0.72;
+      if (ai.state === 'investigate' || ai.state === 'search') want = Math.max(want, near * 0.85);
+      if (ai.state === 'chase') anyChase = true;
+      if (want > dreadTarget) dreadTarget = want;
     }
     if (jail) dreadTarget = 0;
     var k = 1 - Math.exp(-3.2 * dt);
@@ -1711,7 +1795,7 @@
     fx.shake = fx.dread * fx.dread * 0.0085 + fx.shakeImpulse * 0.022;
 
     /* 追跡中のFOV微増 */
-    var fovWant = (ai && ai.state === 'chase') ? 7.5 : 0;
+    var fovWant = anyChase ? 7.5 : 0;
     fx.fovAdd = lerp(fx.fovAdd, fovWant, 1 - Math.exp(-2.2 * dt));
     if (fovWant === 0 && fx.fovAdd < 0.01) fx.fovAdd = 0;   /* 収束させて投影行列の再計算を止める */
 
@@ -1804,6 +1888,10 @@
     attenuationFor: attenuationFor,
     lowpassFor: lowpassFor,
     panFor: panFor,
+    /* P4.10: 施設全体に届く絶叫の音量（純関数。機械テストはここを直接検査する） */
+    shriekGainAt: shriekGainAt,
+    SHRIEK_MAX_DIST: SHRIEK_MAX_DIST,
+    SHRIEK_ATTEN_FLOOR: SHRIEK_ATTEN_FLOOR,
     ATTEN_MAX: ATTEN_MAX,
     OCCLUDE_GAIN: OCCLUDE_GAIN,
     prewarm: prewarm,
