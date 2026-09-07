@@ -216,7 +216,15 @@
     var field = (goal === 'exit') ? this._dToExit : this._dToKey;
     var needTiles = (field && field[idx] >= 0) ? field[idx] : -1;
     var need = (needTiles >= 0) ? needTiles * T : 0;
+    /* 遠回り率の基準最短（契約 P4.11 項目2 追記）:
+       鍵未取得＝スタート→現在地の最短／鍵取得後＝スタート→鍵の最短＋鍵→現在地の最短
+       （鍵に寄った分を遠回りに数えない。最短で鍵→出口へ戻る間は緑のまま） */
     var bestTiles = this._dFromSpawn ? this._dFromSpawn[idx] : -1;
+    if (goal === 'exit' && this._dToKey && this._keyStandCell && this._dFromSpawn) {
+      var kIdx = this._keyStandCell.row * this._W + this._keyStandCell.col;
+      var sk = this._dFromSpawn[kIdx], kh = this._dToKey[idx];
+      if (sk >= 0 && kh >= 0) bestTiles = sk + kh;
+    }
     var best = (bestTiles >= 0) ? bestTiles * T : 0;
     var ratio = (best > 1e-6) ? (this.used / best) : 1;
     var lowSlack = slack < this.L * this.T.redSlackRatio;

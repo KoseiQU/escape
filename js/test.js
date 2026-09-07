@@ -3609,14 +3609,13 @@
       'P4.11 項目2: 最短ルートで鍵まで黄にならない',
       '緑' + scanA.states.green + '/黄' + scanA.states.yellow + '/赤' + scanA.states.red +
       ' 最大遠回り率=' + scanA.maxRatio.toFixed(3));
-    /* 後半（鍵→出口）は「鍵を取りに寄った分」が遠回り率に乗るため黄が出る。
-       契約の緑判定（使用長 ≤ スタート→現在地の最短×1.10）の定義上そうなる。
-       ここで守るべきは「赤にならない・詰まない」。数値は detail に残す。 */
+    /* 後半（鍵→出口）: 契約P4.11項目2追記（2026-09-07）で基準最短が
+       「スタート→鍵＋鍵→現在地」になったため、最短で戻る間は緑のまま。 */
     g.progress.gimmick.key = true;
     var scanB = ropeScan(g, keyToExit);
     t.ok(scanB.blocked < 0, 'P4.11: 鍵→出口でロープが尽きない（詰まない）', scanB.blocked);
-    t.ok(scanB.worst !== 'red',
-      'P4.11 項目2: 最短ルートで鍵→出口まで赤にならない',
+    t.ok(scanB.worst === 'green',
+      'P4.11 項目2: 最短ルートで鍵→出口まで黄にならない（基準最短は鍵経由）',
       '緑' + scanB.states.green + '/黄' + scanB.states.yellow + '/赤' + scanB.states.red +
       ' 最大遠回り率=' + scanB.maxRatio.toFixed(3) +
       ' 使用=' + scanB.used.toFixed(0) + 'm/L=' + rope.L.toFixed(0) +
