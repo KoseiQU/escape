@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>voice-samples render</title>
+</head>
+<body>
+<pre id="log">ready</pre>
+<script src="../samples.js"></script>
+<script>
+(function () {
+  'use strict';
+  var S = window.ESCAPE.VOICE_SAMPLES;
+  var SR = 48000;
+  var T0 = 0.02;          /* 頭の余白（レンダ開始から音を出すまで） */
+  var PAD = 0.90;         /* 尾を取りこぼさない余白 */
+  var FLOOR = 0.0008;     /* この振幅を下回ったら「鳴り終わり」 */
+
+  function offline(sec) {
+    var C = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+    return new C(2, Math.ceil(SR * sec), SR);
+  }
+
+  /** 1案をレンダして AudioBuffer を返す。useNorm=false で較正用（norm を掛けない） */
+  function render(item, useNorm) {
+    var sec = item.dur + T0 + PAD;
+    var ctx = offline(sec);
+    var master = ctx.createGain();
+    master.gain.value = S.MASTER;
+    master.connect(ctx.destination);
+    S.build(ctx, master, T0, item, useNorm);
+    return ctx.startRendering();
+  }
+
+  function analyze(buf) {
+    var L = buf.getChannelData(0), R = buf.getChannelData(1);
+    var n = buf.length, i, a, peak = 0;
+    var s0 = Math.round(T0 * SR);
+    for (i = s0; i < n; i++) {
+      a = Math.abs(L[i]); if (a > peak) peak = a;
+      a = Math.abs(R[i]); if (a > peak) peak = a;
+    }
+    /* 立ち上がり: ピークの50%に最初に届いた時刻 */
+    var half = peak * 0.5, t50 = -1;
+    for (i = s0; i < n; i++) {
+      if (Math.abs(L[i]) >= half || Math.abs(R[i]) >= half) { t50 = (i - s0) / SR; break; }
+    }
+    /* 持続長: ピークの2%(-34dB)を最後に上回った時刻 */
+    var th = peak * 0.02, tEnd = 0, j;
+    for (j = n - 1; j >= s0; j--) {
+      if (Math.abs(L[j]) >= th || Math.abs(R[j]) >= th) { tEnd = (j - s0) / SR; break; }
+    }
+    /* WAV の切り出し末尾: 完全に無音になる点 */
+    var cut = n - 1;
+    for (j = n - 1; j >= s0; j--) {
+      if (Math.abs(L[j]) >= FLOOR || Math.abs(R[j]) >= FLOOR) { cut = j; break; }
+    }
+    cut = Math.min(n - 1, cut + Math.round(0.05 * SR));
+    return { peak: peak, t50: t50, dur: tEnd, s0: s0, cut: cut };
+  }
+
+  function encodeWav(buf, s0, s1) {
+    var L = buf.getChannelData(0), R = buf.getChannelData(1);
+    var n = s1 - s0 + 1;
+    var bytes = 44 + n * 4;
+    var ab = new ArrayBuffer(bytes);
+    var v = new DataView(ab);
+    function str(o, s) { for (var i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); }
+    str(0, 'RIFF'); v.setUint32(4, bytes - 8, true); str(8, 'WAVE');
+    str(12, 'fmt '); v.setUint32(16, 16, true);
+    v.setUint16(20, 1, true);            /* PCM */
+    v.setUint16(22, 2, true);            /* 2ch */
+    v.setUint32(24, SR, true);
+    v.setUint32(28, SR * 4, true);       /* byte rate */
+    v.setUint16(32, 4, true);            /* block align */
+    v.setUint16(34, 16, true);           /* 16bit */
+    str(36, 'data'); v.setUint32(40, n * 4, true);
+    var o = 44;
+    for (var i = 0; i < n; i++) {
+      var l = Math.max(-1, Math.min(1, L[s0 + i]));
+      var r = Math.max(-1, Math.min(1, R[s0 + i]));
+      v.setInt16(o, l < 0 ? l * 0x8000 : l * 0x7FFF, true); o += 2;
+      v.setInt16(o, r < 0 ? r * 0x8000 : r * 0x7FFF, true); o += 2;
+    }
+    return ab;
+  }
+
+  /** 較正: norm を掛けずにレンダして、狙いのピークに載せる norm を返す */
+  window.__CALIBRATE = function () {
+    var out = {};
+    return S.LIST.reduce(function (chain, item) {
+      return chain.then(function () {
+        return render(item, false).then(function (buf) {
+          var m = analyze(buf);
+          out[item.id] = +(S.PEAK_TARGET / m.peak).toFixed(5);
+        });
+      });
+    }, Promise.resolve()).then(function () { return out; });
+  };
+
+
+  /** 頭出しの検証用: 先頭 sec 秒のピークを返す（案5のしゃくり上げの調整に使う） */
+  window.__HEAD = function (id, sec) {
+    var item = S.itemById(id);
+    return render(item, true).then(function (buf) {
+      var L = buf.getChannelData(0), R = buf.getChannelData(1);
+      var s0 = Math.round(T0 * SR), s1 = Math.min(buf.length - 1, s0 + Math.round(sec * SR));
+      var full = analyze(buf);
+      var h = 0, i, a;
+      for (i = s0; i <= s1; i++) {
+        a = Math.abs(L[i]); if (a > h) h = a;
+        a = Math.abs(R[i]); if (a > h) h = a;
+      }
+      return { head: +h.toFixed(4), peak: +full.peak.toFixed(4), ratio: +(h / full.peak).toFixed(3), t50ms: +(full.t50 * 1000).toFixed(1), dur: +full.dur.toFixed(3) };
+    });
+  };
+
+  /** 本番: 較正済みの norm でレンダ → 数値を測る → WAV をサーバへ保存 */
+  window.__RENDER_ALL = function (save) {
+    var out = [];
+    return S.LIST.reduce(function (chain, item) {
+      return chain.then(function () {
+        return render(item, true).then(function (buf) {
+          var m = analyze(buf);
+          var rec = {
+            id: item.id, label: item.label,
+            peak: +m.peak.toFixed(4),
+            t50ms: +(m.t50 * 1000).toFixed(1),
+            dur: +m.dur.toFixed(3),
+            want: item.dur,
+            wavSec: +((m.cut - m.s0 + 1) / SR).toFixed(3)
+          };
+          out.push(rec);
+          if (!save) return;
+          var ab = encodeWav(buf, m.s0, m.cut);
+          return fetch('save/' + item.id + '.wav', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/octet-stream' },
+            body: ab
+          }).then(function (r) { rec.saved = r.status; });
+        });
+      });
+    }, Promise.resolve()).then(function () {
+      document.getElementById('log').textContent = JSON.stringify(out, null, 1);
+      return out;
+    });
+  };
+}());
+</script>
+</body>
+</html>

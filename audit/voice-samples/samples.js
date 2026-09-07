@@ -1,0 +1,722 @@
+/* ESCAPE — 声サンプル6案（聴き比べ用）
+ *
+ * 位置づけ:
+ *   audit 専用。製品コード（js/audio.js・js/voice.js）には一切触れない。
+ *   採用が決まった案の関数だけを、そのまま js/audio.js の VOICES に移植できるよう、
+ *   署名を製品と揃えてある ＝ function (ctx, dest, t0, p) -> およその長さ(s)。
+ *
+ * 制約（契約 DESIGN.md §2「$0構成」）:
+ *   外部音源・speechSynthesis は使わない。すべてオシレータ＋ノイズバッファから生成する。
+ *   乱数は lcg（種固定）だけを使う ＝ OfflineAudioContext のレンダと実再生が同じ音になる。
+ *   ctx は AudioContext / OfflineAudioContext のどちらでも動く。
+ *
+ * 音量:
+ *   各案の音色は「内部の釣り合い」だけを持ち、絶対音量は SAMPLES[].norm が決める。
+ *   再生経路は  voice -> gain(norm) -> master(0.8) -> destination  で、
+ *   norm は「master 0.8 を通した後のピークが 0.885 になる」値に較正してある
+ *   （案ごとの音量差でユーザーが誤解しないため。較正は tools/calibrate で実測）。
+ */
+(function (global) {
+  'use strict';
+  var ESCAPE = global.ESCAPE || (global.ESCAPE = {});
+
+  var MASTER = 0.8;          /* 製品の想定マスター音量 */
+  var PEAK_TARGET = 0.885;   /* 較正の狙い（0.85〜0.92 の中央） */
+
+  /* ================================================================
+   * 小物（js/audio.js と同じ作法）
+   * ============================================================== */
+  function clamp(v, a, b) { return v < a ? a : (v > b ? b : v); }
+
+  function lcg(seed) {
+    var s = seed >>> 0;
+    return function () {
+      s = (s * 1664525 + 1013904223) >>> 0;
+      return s / 4294967296;
+    };
+  }
+
+  function noiseBuffer(ctx) {
+    if (ctx.__vsNoise) return ctx.__vsNoise;
+    var n = Math.max(1, Math.floor(ctx.sampleRate * 3.0));
+    var buf = ctx.createBuffer(1, n, ctx.sampleRate);
+    var d = buf.getChannelData(0);
+    var rnd = lcg(20260907);
+    for (var i = 0; i < n; i++) d[i] = rnd() * 2 - 1;
+    try { ctx.__vsNoise = buf; } catch (e) { /* 代入できない環境は都度生成 */ }
+    return buf;
+  }
+
+  function gainOf(ctx, v) { var g = ctx.createGain(); g.gain.value = v; return g; }
+
+  function bq(ctx, type, f, q) {
+    var b = ctx.createBiquadFilter();
+    b.type = type;
+    b.frequency.value = f;
+    if (q !== undefined) b.Q.value = q;
+    return b;
+  }
+
+  function osc(ctx, type, f) {
+    var o = ctx.createOscillator();
+    o.type = type;
+    o.frequency.value = f;
+    return o;
+  }
+
+  function noiseSrc(ctx, rate) {
+    var s = ctx.createBufferSource();
+    s.buffer = noiseBuffer(ctx);
+    s.loop = true;
+    if (rate) s.playbackRate.value = rate;
+    return s;
+  }
+
+  /** 打撃系の包絡（指数減衰） */
+  function hit(ctx, t0, peak, attack, decay) {
+    var g = ctx.createGain();
+    var p = Math.max(peak, 0.0004);
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(p, t0 + Math.max(attack, 0.001));
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + Math.max(attack, 0.001) + Math.max(decay, 0.01));
+    return g;
+  }
+
+  /** 持続系の包絡（立ち上がり→維持→減衰） */
+  function swell(ctx, t0, peak, a, hold, r) {
+    var g = ctx.createGain();
+    var p = Math.max(peak, 0.0004);
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(p, t0 + Math.max(a, 0.001));
+    g.gain.setValueAtTime(p, t0 + Math.max(a, 0.001) + hold);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + Math.max(a, 0.001) + hold + r);
+    return g;
+  }
+
+  function chain(nodes) {
+    for (var i = 0; i < nodes.length - 1; i++) nodes[i].connect(nodes[i + 1]);
+    return nodes[nodes.length - 1];
+  }
+
+  function startStop(node, t0, dur) {
+    try { node.start(t0); } catch (e) { /* 既に開始済み */ }
+    try { node.stop(t0 + dur); } catch (e) { /* stop 非対応 */ }
+  }
+
+  /** 歪み（声を「人だったもの」に寄せる）。k が大きいほど潰れる */
+  function shaper(ctx, k) {
+    var ws = ctx.createWaveShaper();
+    var n = 1024, c = new Float32Array(n), d = Math.tanh(k);
+    for (var i = 0; i < n; i++) {
+      var x = (i * 2) / (n - 1) - 1;
+      c[i] = Math.tanh(k * x) / d;
+    }
+    ws.curve = c;
+    try { ws.oversample = '4x'; } catch (e) { /* 非対応 */ }
+    return ws;
+  }
+
+  /** 定位。StereoPanner が無い環境では素通しの gain を返す */
+  function panOf(ctx, v) {
+    if (!ctx.createStereoPanner) return gainOf(ctx, 1);
+    var p = ctx.createStereoPanner();
+    p.pan.value = clamp(v, -1, 1);
+    return p;
+  }
+
+  /** ごく短い時間差で左右に開く（頭内定位を避ける）。入力ノードを返す */
+  function widen(ctx, dest, spread, lagMs, side) {
+    var inp = gainOf(ctx, 1);
+    if (!ctx.createStereoPanner) { inp.connect(dest); return inp; }
+    var s = (side === undefined) ? 1 : side;
+    var a = panOf(ctx, -spread * s);
+    var b = panOf(ctx, spread * s);
+    var dl = ctx.createDelay(0.05);
+    dl.delayTime.value = (lagMs === undefined ? 6 : lagMs) / 1000;
+    var bg = gainOf(ctx, 0.82);
+    inp.connect(a); a.connect(dest);
+    inp.connect(dl); dl.connect(bg); bg.connect(b); b.connect(dest);
+    return inp;
+  }
+
+  /** 生成した遅延ループの残響（音源ファイルは使わない）。送り先のノードを返す */
+  function reverb(ctx, dest, taps, fb, lpHz, wetGain) {
+    var send = gainOf(ctx, 1);
+    var wet = gainOf(ctx, wetGain);
+    for (var i = 0; i < taps.length; i++) {
+      var dl = ctx.createDelay(0.6);
+      dl.delayTime.value = taps[i];
+      var lp = bq(ctx, 'lowpass', lpHz, 0.8);
+      var g = gainOf(ctx, fb);
+      send.connect(dl); dl.connect(lp); lp.connect(g); g.connect(dl);
+      lp.connect(wet);
+    }
+    wet.connect(dest);
+    return send;
+  }
+
+  /**
+   * 母音のフォルマント帯域（f0 -> f1 へ動く）。src を dst へ通す。
+   * specs: [{a: 開始Hz, b: 終了Hz, q, g}]
+   */
+  function formants(ctx, src, dst, specs, t0, dur, bend) {
+    var k = (bend === undefined) ? 0.60 : bend;
+    for (var i = 0; i < specs.length; i++) {
+      var s = specs[i];
+      var b = bq(ctx, 'bandpass', s.a, s.q);
+      b.frequency.setValueAtTime(s.a, t0);
+      b.frequency.exponentialRampToValueAtTime(Math.max(s.b, 20), t0 + dur * k);
+      var g = gainOf(ctx, s.g);
+      src.connect(b); b.connect(g); g.connect(dst);
+    }
+  }
+
+  /** ビブラート（LFO を周波数に足す） */
+  function vibrato(ctx, target, t0, dur, rate, depth) {
+    var l = osc(ctx, 'sine', rate);
+    var a = gainOf(ctx, depth);
+    l.connect(a); a.connect(target);
+    startStop(l, t0, dur + 0.05);
+    return l;
+  }
+
+  /* ================================================================
+   * VS — 6案の音色（署名は製品の VOICES と同じ）
+   * ============================================================== */
+  var VS = {
+
+    /* ------------------------------------------------------------
+     * 案1: 耳元の囁き（強化版）
+     *   現行 whisper の骨格（帯域ノイズを拍で刻む）を保ったまま音圧を上げ、
+     *   拍頭に子音の破裂（短いノイズバースト）を置いて「言葉の形」を立てる。
+     *   定位は左耳→右耳へ回り込む。フェードインはせず1拍目からいきなり最大。
+     * ---------------------------------------------------------- */
+    earWhisper: function (ctx, dest, t0, p) {
+      var lv = (p.level === undefined) ? 1 : p.level;
+      var beats = (p.beats === undefined) ? 5 : p.beats;
+      var SYL = 0.200, ON = 0.150, ATK = 0.004;
+      var span = beats * SYL;
+      var FORM = [2300, 3100, 1750, 2700, 3500, 2050, 2900];
+
+      var out = gainOf(ctx, 1);
+      var dry = gainOf(ctx, 0.86); out.connect(dry); dry.connect(dest);
+      out.connect(reverb(ctx, dest, [0.029, 0.041, 0.058], 0.52, 2800, 0.30));
+
+      /* 左耳 -> 右耳へ回り込む */
+      var pan = panOf(ctx, -0.95);
+      if (pan.pan) {
+        pan.pan.setValueAtTime(-0.95, t0);
+        pan.pan.linearRampToValueAtTime(0.95, t0 + span);
+      }
+      pan.connect(out);
+
+      /* 主帯域（1.4〜6kHz。拍ごとに中心が変わる＝子音の色） */
+      var n = noiseSrc(ctx, 0.95);
+      var hp = bq(ctx, 'highpass', 1300, 0.7);
+      var bp = bq(ctx, 'bandpass', FORM[0], 0.85);
+      var g = ctx.createGain(); g.gain.setValueAtTime(0.0002, t0);
+      /* 歯擦音 */
+      var n2 = noiseSrc(ctx, 1.3);
+      var bp2 = bq(ctx, 'bandpass', 4700, 1.5);
+      var g2 = ctx.createGain(); g2.gain.setValueAtTime(0.0002, t0);
+
+      for (var i = 0; i < beats; i++) {
+        var ts = t0 + i * SYL;
+        /* 「小さく始まって近づく」はやめ、頭から鳴らす（0.88→1.0 の微増だけ） */
+        var pk = lv * (0.88 + 0.12 * (beats === 1 ? 1 : i / (beats - 1)));
+        bp.frequency.setValueAtTime(FORM[i % FORM.length], ts);
+        bp2.frequency.setValueAtTime(4300 + (i % 3) * 800, ts);
+        g.gain.setValueAtTime(0.0002, ts);
+        g.gain.linearRampToValueAtTime(pk, ts + ATK);
+        g.gain.linearRampToValueAtTime(pk * 0.66, ts + ON * 0.70);
+        g.gain.linearRampToValueAtTime(0.0002, ts + ON);
+        g2.gain.setValueAtTime(0.0002, ts);
+        g2.gain.linearRampToValueAtTime(pk * 0.52, ts + ATK * 0.8);
+        g2.gain.linearRampToValueAtTime(0.0002, ts + ON * 0.80);
+
+        /* 子音の破裂（拍頭） */
+        var cn = noiseSrc(ctx, 1.5 + (i % 3) * 0.25);
+        chain([cn, bq(ctx, 'bandpass', 3400 + (i % 4) * 950, 3.2),
+          hit(ctx, ts, 0.95 * lv, 0.0015, 0.030), pan]);
+        startStop(cn, ts, 0.055);
+      }
+      chain([n, hp, bp, g, pan]);
+      startStop(n, t0, span + 0.10);
+      chain([n2, bp2, g2, pan]);
+      startStop(n2, t0, span + 0.10);
+
+      /* 耳のすぐ後ろの息（低域） */
+      var nb = noiseSrc(ctx, 0.42);
+      chain([nb, bq(ctx, 'lowpass', 340, 0.7),
+        swell(ctx, t0, 0.22 * lv, 0.020, span * 0.60, 0.30), pan]);
+      startStop(nb, t0, span + 0.40);
+
+      return span + 0.30;
+    },
+
+    /* ------------------------------------------------------------
+     * 案2: 女の絶叫
+     *   のこぎり波を歪ませ、母音フォルマントを a→i へ動かす。
+     *   基音 600→1400Hz へ跳ね上がるグライド＋6Hzビブラート、息のノイズを混ぜる。
+     *   立ち上がり10ms＝聞いた瞬間に最大。
+     * ---------------------------------------------------------- */
+    femaleScream: function (ctx, dest, t0, p) {
+      var lv = (p.level === undefined) ? 1 : p.level;
+      var dur = (p.dur === undefined) ? 1.05 : p.dur;
+
+      var out = widen(ctx, dest, 0.55, 7);
+      var env = ctx.createGain();
+      env.gain.setValueAtTime(0.0004, t0);
+      env.gain.exponentialRampToValueAtTime(1.0 * lv, t0 + 0.010);
+      env.gain.setValueAtTime(1.0 * lv, t0 + dur * 0.52);
+      env.gain.exponentialRampToValueAtTime(0.34 * lv, t0 + dur * 0.86);
+      env.gain.exponentialRampToValueAtTime(0.0006, t0 + dur);
+      env.connect(out);
+
+      /* 声帯: 基音 600 -> 1400 へ跳ね上がって落ちる */
+      var o = osc(ctx, 'sawtooth', 600);
+      o.frequency.setValueAtTime(580, t0);
+      o.frequency.exponentialRampToValueAtTime(1400, t0 + dur * 0.30);
+      o.frequency.exponentialRampToValueAtTime(1280, t0 + dur * 0.70);
+      o.frequency.exponentialRampToValueAtTime(720, t0 + dur);
+      vibrato(ctx, o.frequency, t0, dur, 6.0, 58);
+      /* 裏返り（少しだけ上に張り付く第2声） */
+      var o2 = osc(ctx, 'sawtooth', 900);
+      o2.frequency.setValueAtTime(880, t0);
+      o2.frequency.exponentialRampToValueAtTime(2080, t0 + dur * 0.30);
+      o2.frequency.exponentialRampToValueAtTime(1060, t0 + dur);
+      vibrato(ctx, o2.frequency, t0, dur, 6.4, 74);
+
+      var drive = gainOf(ctx, 2.4);
+      var ws = shaper(ctx, 3.4);
+      o.connect(drive);
+      var d2 = gainOf(ctx, 1.1); o2.connect(d2); d2.connect(drive);
+      drive.connect(ws);
+      startStop(o, t0, dur + 0.10);
+      startStop(o2, t0, dur + 0.10);
+
+      /* 母音 a -> i */
+      formants(ctx, ws, env, [
+        { a: 820, b: 330, q: 5.5, g: 1.00 },
+        { a: 1250, b: 2450, q: 6.0, g: 0.80 },
+        { a: 2900, b: 3150, q: 7.0, g: 0.34 }
+      ], t0, dur, 0.58);
+      /* 潰れた芯（帯域を通さない分も少し混ぜる＝叫びの生々しさ） */
+      var raw = gainOf(ctx, 0.20); ws.connect(raw); raw.connect(env);
+
+      /* 息（喉の擦れ） */
+      var n = noiseSrc(ctx, 1.0);
+      var fn = bq(ctx, 'bandpass', 2600, 0.9);
+      fn.frequency.exponentialRampToValueAtTime(1100, t0 + dur);
+      chain([n, fn, swell(ctx, t0, 0.30 * lv, 0.012, dur * 0.45, dur * 0.50), out]);
+      startStop(n, t0, dur + 0.10);
+
+      return dur + 0.15;
+    },
+
+    /* ------------------------------------------------------------
+     * 案3: 化け物の咆哮
+     *   低い唸り（60〜90Hz のこぎり＋矩形サブ）から 0.6 秒で高い金切り声
+     *   （1.8〜2.6kHz）へ裂ける。歪み強め。後半は不規則に震える。
+     * ---------------------------------------------------------- */
+    beastRoar: function (ctx, dest, t0, p) {
+      var lv = (p.level === undefined) ? 1 : p.level;
+      var dur = (p.dur === undefined) ? 1.50 : p.dur;
+      var split = dur * 0.40;          /* ここで裂ける（≒0.6s） */
+      var out = widen(ctx, dest, 0.42, 9);
+
+      /* --- 低い唸り（頭から最大。ここが「近い」と分かる音圧） --- */
+      var gEnv = ctx.createGain();
+      gEnv.gain.setValueAtTime(0.0004, t0);
+      gEnv.gain.exponentialRampToValueAtTime(0.92 * lv, t0 + 0.006);
+      gEnv.gain.setValueAtTime(0.92 * lv, t0 + split * 0.85);
+      gEnv.gain.exponentialRampToValueAtTime(0.30 * lv, t0 + dur * 0.80);
+      gEnv.gain.exponentialRampToValueAtTime(0.0006, t0 + dur);
+      gEnv.connect(out);
+
+      var gd = gainOf(ctx, 2.8);
+      var gws = shaper(ctx, 4.2);
+      var glp = bq(ctx, 'lowpass', 320, 1.4);
+      glp.frequency.setValueAtTime(300, t0);
+      glp.frequency.exponentialRampToValueAtTime(1500, t0 + split);
+      glp.frequency.exponentialRampToValueAtTime(600, t0 + dur);
+      chain([gd, gws, glp, gEnv]);
+
+      var g1 = osc(ctx, 'sawtooth', 74);
+      g1.frequency.setValueAtTime(88, t0);
+      g1.frequency.exponentialRampToValueAtTime(62, t0 + split);
+      g1.frequency.exponentialRampToValueAtTime(70, t0 + dur);
+      vibrato(ctx, g1.frequency, t0, dur, 4.4, 5);
+      g1.connect(gd); startStop(g1, t0, dur + 0.10);
+
+      var g2 = osc(ctx, 'square', 45);
+      g2.frequency.setValueAtTime(52, t0);
+      g2.frequency.exponentialRampToValueAtTime(38, t0 + dur);
+      var g2g = gainOf(ctx, 0.55); g2.connect(g2g); g2g.connect(gd);
+      startStop(g2, t0, dur + 0.10);
+
+      /* サブ（腹に来る成分） */
+      var sub = osc(ctx, 'sine', 42);
+      sub.frequency.setValueAtTime(46, t0);
+      sub.frequency.exponentialRampToValueAtTime(32, t0 + dur);
+      chain([sub, swell(ctx, t0, 0.55 * lv, 0.008, dur * 0.55, dur * 0.42), out]);
+      startStop(sub, t0, dur + 0.10);
+
+      /* --- 裂ける金切り声（1.8〜2.6kHz） --- */
+      var sEnv = ctx.createGain();
+      sEnv.gain.setValueAtTime(0.0004, t0);
+      sEnv.gain.setValueAtTime(0.0004, t0 + split - 0.012);
+      sEnv.gain.exponentialRampToValueAtTime(0.85 * lv, t0 + split + 0.014);
+      sEnv.gain.exponentialRampToValueAtTime(0.42 * lv, t0 + dur * 0.86);
+      sEnv.gain.exponentialRampToValueAtTime(0.0006, t0 + dur);
+      sEnv.connect(out);
+
+      var sd = gainOf(ctx, 2.0);
+      var sws = shaper(ctx, 2.8);
+      sd.connect(sws);
+      formants(ctx, sws, sEnv, [
+        { a: 1800, b: 2600, q: 7.0, g: 1.00 },
+        { a: 2400, b: 3400, q: 8.0, g: 0.55 }
+      ], t0 + split, dur - split, 0.55);
+
+      var s1 = osc(ctx, 'sawtooth', 620);
+      s1.frequency.setValueAtTime(300, t0);
+      s1.frequency.setValueAtTime(300, t0 + split - 0.012);
+      s1.frequency.exponentialRampToValueAtTime(880, t0 + split + 0.10);
+      s1.frequency.exponentialRampToValueAtTime(640, t0 + dur);
+      s1.connect(sd); startStop(s1, t0, dur + 0.10);
+
+      /* --- 後半の不規則な震え（種固定の階段状ゲイン） --- */
+      var tr = ctx.createGain();
+      tr.gain.setValueAtTime(1, t0);
+      var rnd = lcg(48611);
+      var tt = t0 + split + 0.10;
+      while (tt < t0 + dur) {
+        tr.gain.setValueAtTime(0.34 + rnd() * 0.80, tt);
+        tt += 0.024 + rnd() * 0.040;
+      }
+      tr.gain.setValueAtTime(1, t0 + dur);
+      /* 震えは金切り声側だけに掛ける */
+      sEnv.disconnect();
+      sEnv.connect(tr); tr.connect(out);
+
+      /* 喉の擦れ */
+      var n = noiseSrc(ctx, 0.8);
+      var fn = bq(ctx, 'bandpass', 900, 0.9);
+      fn.frequency.exponentialRampToValueAtTime(2600, t0 + dur * 0.7);
+      chain([n, fn, swell(ctx, t0, 0.20 * lv, 0.010, dur * 0.55, dur * 0.40), out]);
+      startStop(n, t0, dur + 0.10);
+
+      return dur + 0.15;
+    },
+
+    /* ------------------------------------------------------------
+     * 案4: 子供の笑い声
+     *   「ひ・ひ・ひ・ひ」を 9Hz のパルス包絡で刻む母音（i のフォルマント）。
+     *   基音は笑うほど上がる（350→500Hz）。残響は長め。
+     *   遠くから近づく2段（この案だけフェード可）。最後に息を吸う。
+     * ---------------------------------------------------------- */
+    childLaugh: function (ctx, dest, t0, p) {
+      var lv = (p.level === undefined) ? 1 : p.level;
+      var dur = (p.dur === undefined) ? 1.60 : p.dur;
+      var body = dur - 0.30;           /* 最後の 0.30 は息を吸う音 */
+      var RATE = 9.0;
+      var nPulse = Math.round(body * RATE);
+
+      var out = widen(ctx, dest, 0.35, 5);
+      /* 長めの残響（遠くの廊下） */
+      var rev = reverb(ctx, out, [0.061, 0.083, 0.113, 0.149], 0.46, 2200, 0.34);
+
+      /* 遠→近の2段（この案だけ許された段付き） */
+      var near = ctx.createGain();
+      near.gain.setValueAtTime(0.30, t0);
+      near.gain.setValueAtTime(0.30, t0 + body * 0.30);
+      near.gain.linearRampToValueAtTime(1.0, t0 + body * 0.42);
+      near.gain.setValueAtTime(1.0, t0 + dur);
+      near.connect(out); near.connect(rev);
+
+      var drive = gainOf(ctx, 1.5);
+      var ws = shaper(ctx, 1.8);
+      drive.connect(ws);
+
+      var env = ctx.createGain();
+      env.gain.setValueAtTime(0.0004, t0);
+      env.connect(near);
+      formants(ctx, ws, env, [
+        { a: 330, b: 300, q: 6.0, g: 1.00 },
+        { a: 2200, b: 2600, q: 7.5, g: 0.72 },
+        { a: 3200, b: 3400, q: 8.0, g: 0.28 }
+      ], t0, body, 0.9);
+
+      var o = osc(ctx, 'triangle', 350);
+      o.frequency.setValueAtTime(350, t0);
+      var o2 = osc(ctx, 'sawtooth', 350);
+      o2.frequency.setValueAtTime(350, t0);
+      var o2g = gainOf(ctx, 0.55); o2.connect(o2g); o2g.connect(drive);
+      o.connect(drive);
+
+      for (var i = 0; i < nPulse; i++) {
+        var ts = t0 + i * (1 / RATE);
+        var k = (nPulse === 1) ? 1 : i / (nPulse - 1);
+        var f0 = 350 + 150 * k;           /* 笑うほど上がる */
+        o.frequency.setValueAtTime(f0, ts);
+        o2.frequency.setValueAtTime(f0 * 1.005, ts);
+        var pk = lv * (0.72 + 0.28 * k);
+        env.gain.setValueAtTime(0.0004, ts);
+        env.gain.linearRampToValueAtTime(pk, ts + 0.010);
+        env.gain.exponentialRampToValueAtTime(0.0004, ts + (1 / RATE) * 0.80);
+        /* 息の粒（ひ の h） */
+        var cn = noiseSrc(ctx, 1.2);
+        chain([cn, bq(ctx, 'bandpass', 3000 + (i % 3) * 600, 4.0),
+          hit(ctx, ts, 0.30 * lv * (0.6 + 0.4 * k), 0.002, 0.026), near]);
+        startStop(cn, ts, 0.05);
+      }
+      startStop(o, t0, body + 0.10);
+      startStop(o2, t0, body + 0.10);
+
+      /* 最後に息を吸う（上がっていく擦過ノイズ） */
+      var ib = t0 + body + 0.02;
+      var ni = noiseSrc(ctx, 0.7);
+      var fi = bq(ctx, 'bandpass', 420, 1.6);
+      fi.frequency.setValueAtTime(380, ib);
+      fi.frequency.exponentialRampToValueAtTime(1900, ib + 0.26);
+      chain([ni, fi, swell(ctx, ib, 0.62 * lv, 0.030, 0.10, 0.16), out]);
+      startStop(ni, ib, 0.32);
+
+      return dur + 0.25;
+    },
+
+    /* ------------------------------------------------------------
+     * 案5: すすり泣きから絶叫
+     *   頭に鋭いしゃくり上げ（一瞬の破裂）を置いてから、低いすすり泣きへ落とす。
+     *   1.2 秒後に案2の絶叫が被さる ＝「静→爆」。
+     *   （頭の破裂は「立ち上がりが急」の要件と「静→爆」を両立させるため）
+     * ---------------------------------------------------------- */
+    sobToScream: function (ctx, dest, t0, p) {
+      var lv = (p.level === undefined) ? 1 : p.level;
+      var total = (p.dur === undefined) ? 2.40 : p.dur;
+      var burst = 1.20;                 /* ここで絶叫に変わる */
+      var out = widen(ctx, dest, 0.40, 8);
+
+      /* --- 頭のしゃくり上げ（息が詰まる音） --- */
+      var ho = osc(ctx, 'sawtooth', 300);
+      ho.frequency.setValueAtTime(320, t0);
+      ho.frequency.exponentialRampToValueAtTime(180, t0 + 0.16);
+      var hws = shaper(ctx, 2.2);
+      var hd = gainOf(ctx, 1.6);
+      var hEnv = ctx.createGain();
+      hEnv.gain.setValueAtTime(0.0004, t0);
+      hEnv.gain.exponentialRampToValueAtTime(1.39 * lv, t0 + 0.008);
+      hEnv.gain.exponentialRampToValueAtTime(0.0006, t0 + 0.19);
+      chain([ho, hd, hws, bq(ctx, 'bandpass', 640, 2.0), hEnv, out]);
+      startStop(ho, t0, 0.24);
+      var hn = noiseSrc(ctx, 1.1);
+      chain([hn, bq(ctx, 'bandpass', 1500, 1.2), hit(ctx, t0, 0.76 * lv, 0.003, 0.10), out]);
+      startStop(hn, t0, 0.16);
+
+      /* --- 低いすすり泣き（揺れる基音 200〜260Hz・鼻にかかる） --- */
+      var sEnv = ctx.createGain();
+      sEnv.gain.setValueAtTime(0.0004, t0 + 0.20);
+      sEnv.connect(out);
+      var so = osc(ctx, 'sawtooth', 230);
+      var sd = gainOf(ctx, 1.3);
+      var sws = shaper(ctx, 1.6);
+      so.connect(sd); sd.connect(sws);
+      /* 鼻音: 低い F1 と、鼻腔の反共振（notch） */
+      var nb1 = bq(ctx, 'bandpass', 300, 4.0);
+      var nb2 = bq(ctx, 'bandpass', 1050, 5.0);
+      var ntc = bq(ctx, 'notch', 700, 2.0);
+      sws.connect(ntc);
+      ntc.connect(nb1); nb1.connect(sEnv);
+      var nb2g = gainOf(ctx, 0.45); ntc.connect(nb2); nb2.connect(nb2g); nb2g.connect(sEnv);
+      vibrato(ctx, so.frequency, t0, burst, 5.2, 9);
+      startStop(so, t0 + 0.18, burst - 0.18 + 0.05);
+
+      /* 4回のしゃくり（揺れる基音＋息） */
+      var rnd = lcg(31337);
+      var sobs = 4, i;
+      for (i = 0; i < sobs; i++) {
+        var ts = t0 + 0.24 + i * 0.235;
+        var f0 = 200 + rnd() * 60;
+        so.frequency.setValueAtTime(f0, ts);
+        so.frequency.linearRampToValueAtTime(f0 * 0.84, ts + 0.20);
+        var pk = 0.16 * lv * (0.8 + 0.2 * (i / (sobs - 1)));
+        sEnv.gain.setValueAtTime(0.0004, ts);
+        sEnv.gain.linearRampToValueAtTime(pk, ts + 0.035);
+        sEnv.gain.exponentialRampToValueAtTime(0.0004, ts + 0.19);
+        var bn = noiseSrc(ctx, 0.5);
+        chain([bn, bq(ctx, 'lowpass', 700, 0.8), hit(ctx, ts, 0.075 * lv, 0.020, 0.14), out]);
+        startStop(bn, ts, 0.20);
+      }
+
+      /* --- 絶叫（案2をそのまま被せる） --- */
+      VS.femaleScream(ctx, dest, t0 + burst, { level: lv, dur: total - burst - 0.05 });
+
+      return total + 0.15;
+    },
+
+    /* ------------------------------------------------------------
+     * 案6: 耳元で名を呼ぶような声
+     *   母音だけの呼びかけ（「ぁー…」の長い母音）を耳元定位（片耳に強く・
+     *   ごく短い遅延で反対耳）で鳴らし、短く「っ」で止める。
+     *   最後に息が耳にかかる近接ノイズ。
+     * ---------------------------------------------------------- */
+    earCall: function (ctx, dest, t0, p) {
+      var lv = (p.level === undefined) ? 1 : p.level;
+      var dur = (p.dur === undefined) ? 1.40 : p.dur;
+      var side = (p.side === undefined) ? 1 : p.side;   /* +1 = 右耳 */
+      var stop = 1.02;                                  /* ここで「っ」で切れる */
+
+      /* 耳元: 片耳に強く、反対耳へは 0.4ms 遅れて小さく */
+      var out = gainOf(ctx, 1);
+      var near = panOf(ctx, 0.92 * side);
+      near.connect(dest);
+      var far = panOf(ctx, -0.92 * side);
+      var fd = ctx.createDelay(0.02); fd.delayTime.value = 0.0004;
+      var fg = gainOf(ctx, 0.34);
+      out.connect(near);
+      out.connect(fd); fd.connect(fg); fg.connect(far); far.connect(dest);
+      /* 至近の残響（部屋鳴りはほぼ無し＝耳のすぐ横） */
+      out.connect(reverb(ctx, dest, [0.023, 0.037], 0.42, 2400, 0.16));
+
+      var env = ctx.createGain();
+      env.gain.setValueAtTime(0.0004, t0);
+      env.gain.exponentialRampToValueAtTime(1.0 * lv, t0 + 0.008);   /* 頭からいきなり */
+      env.gain.setValueAtTime(1.0 * lv, t0 + stop * 0.55);
+      env.gain.linearRampToValueAtTime(0.78 * lv, t0 + stop - 0.012);
+      env.gain.linearRampToValueAtTime(0.0004, t0 + stop);           /* 「っ」で断ち切る */
+      env.connect(out);
+
+      var drive = gainOf(ctx, 1.7);
+      var ws = shaper(ctx, 2.0);
+      drive.connect(ws);
+      /* 母音 ぁ→ぇ（呼びかけて尻すぼみになる） */
+      formants(ctx, ws, env, [
+        { a: 700, b: 620, q: 5.0, g: 1.00 },
+        { a: 1150, b: 1500, q: 6.0, g: 0.62 },
+        { a: 2600, b: 2500, q: 7.0, g: 0.22 }
+      ], t0, stop, 0.8);
+
+      var o = osc(ctx, 'sawtooth', 196);
+      o.frequency.setValueAtTime(214, t0);
+      o.frequency.linearRampToValueAtTime(188, t0 + stop * 0.6);
+      o.frequency.linearRampToValueAtTime(178, t0 + stop);
+      vibrato(ctx, o.frequency, t0, stop, 5.6, 3.4);
+      o.connect(drive);
+      var o2 = osc(ctx, 'triangle', 98);
+      o2.frequency.setValueAtTime(107, t0);
+      o2.frequency.linearRampToValueAtTime(89, t0 + stop);
+      var o2g = gainOf(ctx, 0.5); o2.connect(o2g); o2g.connect(drive);
+      startStop(o, t0, stop + 0.05);
+      startStop(o2, t0, stop + 0.05);
+
+      /* 声に混じる息（近い） */
+      var nv = noiseSrc(ctx, 0.6);
+      chain([nv, bq(ctx, 'bandpass', 1400, 0.8),
+        swell(ctx, t0, 0.16 * lv, 0.010, stop * 0.6, 0.14), out]);
+      startStop(nv, t0, stop + 0.10);
+
+      /* 最後に息が耳にかかる（近接ノイズ。片耳だけ） */
+      var bt = t0 + stop + 0.10;
+      var nb = noiseSrc(ctx, 0.45);
+      var bf = bq(ctx, 'lowpass', 900, 0.7);
+      bf.frequency.setValueAtTime(1400, bt);
+      bf.frequency.exponentialRampToValueAtTime(420, bt + 0.26);
+      chain([nb, bf, swell(ctx, bt, 0.55 * lv, 0.022, 0.09, 0.15), near]);
+      startStop(nb, bt, 0.30);
+
+      return dur + 0.15;
+    }
+  };
+
+  /* ================================================================
+   * 6案のカタログ
+   *   norm は「master 0.8 を通した後のピーク」を PEAK_TARGET に揃える較正値。
+   *   dur は「狙いの持続長(s)」（検証は ±20% で見る）。
+   * ============================================================== */
+  var SAMPLES = [
+    {
+      id: '01_ear_whisper', voice: 'earWhisper', params: {},
+      label: '耳元の囁き（強化版）',
+      desc: '現行の囁きを3〜4倍の音圧に。拍頭に子音の破裂を置き、左耳から右耳へ回り込む。',
+      dur: 1.30, norm: 1
+    },
+    {
+      id: '02_female_scream', voice: 'femaleScream', params: {},
+      label: '女の絶叫',
+      desc: '基音600→1400Hzへ跳ね上がる歪んだ叫び。母音がa→iへ動き、6Hzで震える。',
+      dur: 1.05, norm: 1
+    },
+    {
+      id: '03_beast_roar', voice: 'beastRoar', params: {},
+      label: '化け物の咆哮',
+      desc: '腹に来る低い唸りが0.6秒で高い金切り声へ裂ける。後半は不規則に震える。',
+      dur: 1.50, norm: 1
+    },
+    {
+      id: '04_child_laugh', voice: 'childLaugh', params: {},
+      label: '子供の笑い声',
+      desc: '「ひ・ひ・ひ」を9Hzで刻む笑い。遠くから2段で近づき、最後に息を吸う。',
+      dur: 1.60, norm: 1
+    },
+    {
+      id: '05_sob_to_scream', voice: 'sobToScream', params: {},
+      label: 'すすり泣きから絶叫',
+      desc: 'しゃくり上げ一発のあと低いすすり泣き。1.2秒後にいきなり絶叫へ転じる。',
+      dur: 2.40, norm: 1
+    },
+    {
+      id: '06_ear_call', voice: 'earCall', params: {},
+      label: '耳元で名を呼ぶような声',
+      desc: '母音だけの呼びかけを片耳のすぐ横で。短く「っ」で切れ、息が耳にかかる。',
+      dur: 1.40, norm: 1
+    }
+  ];
+
+  /* 較正表（tools で実測して上書きする。1 のままなら未較正） */
+  var NORM = {
+    "01_ear_whisper": 1.47002,
+    "02_female_scream": 0.85156,
+    "03_beast_roar": 0.5816,
+    "04_child_laugh": 3.0337,
+    "05_sob_to_scream": 0.81168,
+    "06_ear_call": 1.63185
+  };
+
+  function itemById(id) {
+    for (var i = 0; i < SAMPLES.length; i++) if (SAMPLES[i].id === id) return SAMPLES[i];
+    return null;
+  }
+
+  function normOf(item) {
+    var n = NORM[item.id];
+    return (typeof n === 'number' && isFinite(n) && n > 0) ? n : (item.norm || 1);
+  }
+
+  /**
+   * 1案を組み立てる共通経路。ページ再生もオフラインレンダもここを通る
+   * ＝「聴いた音」と「WAV」が同じであることが構造的に保証される。
+   * dest には master（0.8）を渡すこと。
+   */
+  function build(ctx, dest, t0, item, useNorm) {
+    var g = gainOf(ctx, (useNorm === false) ? 1 : normOf(item));
+    g.connect(dest);
+    return VS[item.voice](ctx, g, t0, item.params || {});
+  }
+
+  ESCAPE.VOICE_SAMPLES = {
+    VS: VS,
+    LIST: SAMPLES,
+    NORM: NORM,
+    MASTER: MASTER,
+    PEAK_TARGET: PEAK_TARGET,
+    build: build,
+    itemById: itemById,
+    normOf: normOf,
+    /* 製品と同じセリフ3本（docs/notes.md「P4.13追加（声・軌跡）」の正文） */
+    LINES: ['みーつけた', 'そこにいるのね', '聞こえたよ']
+  };
+
+  if (typeof module === 'object' && module.exports) module.exports = ESCAPE.VOICE_SAMPLES;
+
+}(typeof window !== 'undefined' ? window : this));

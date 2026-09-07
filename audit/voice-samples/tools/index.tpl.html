@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>ESCAPE — 声サンプル 6案</title>
+<!--
+  聴き比べ用ページ（audit 専用・製品には未統合）。
+  外部読み込みは一切なし＝この1ファイルだけで動く（音は WebAudio で全生成）。
+  中身の音色は samples.js（同じフォルダ）と同一。ここへは tools/build.py が埋め込む。
+-->
+<style>
+  :root { --ink:#e9eef5; --dim:#8e9bad; --line:rgba(190,205,225,.20); }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html,body { margin:0; padding:0; background:#06080c; color:var(--ink); }
+  body {
+    font-family:-apple-system,BlinkMacSystemFont,"Hiragino Sans","Noto Sans JP",sans-serif;
+    min-height:100vh; padding:20px 14px 210px; -webkit-font-smoothing:antialiased;
+  }
+  .wrap { max-width:560px; margin:0 auto; }
+  h1 { font-size:17px; letter-spacing:.20em; font-weight:600; margin:2px 0 4px; }
+  .sub { font-size:12px; color:var(--dim); line-height:1.7; margin:0 0 18px; letter-spacing:.04em; }
+  .card {
+    border:1px solid var(--line); border-radius:4px; background:rgba(14,18,26,.72);
+    padding:13px 14px 14px; margin:0 0 12px;
+  }
+  .row { display:flex; align-items:center; gap:12px; }
+  .no {
+    flex:0 0 auto; width:30px; height:30px; border-radius:2px; display:grid; place-items:center;
+    font-size:13px; letter-spacing:0; color:#aab8ca; border:1px solid var(--line);
+    background:rgba(6,8,12,.6);
+  }
+  .ttl { flex:1 1 auto; font-size:15px; letter-spacing:.10em; }
+  .desc { font-size:12.5px; color:var(--dim); line-height:1.75; margin:9px 2px 12px; letter-spacing:.02em; }
+  .meta { font-size:11px; color:#68758a; letter-spacing:.06em; margin:-6px 2px 12px; }
+  button {
+    font:inherit; color:var(--ink); background:rgba(24,32,45,.9);
+    border:1px solid rgba(190,205,225,.30); border-radius:3px;
+    letter-spacing:.16em; cursor:pointer; -webkit-appearance:none;
+    transition:background .12s ease, border-color .12s ease;
+  }
+  button:active { background:rgba(52,70,96,.95); border-color:rgba(210,225,245,.55); }
+  button[disabled] { opacity:.42; }
+  .play { width:100%; height:56px; font-size:15px; }
+  .allbar { display:flex; gap:10px; margin:2px 0 20px; }
+  .allbar button { flex:1 1 0; height:54px; font-size:14px; }
+  .playing { border-color:rgba(255,120,120,.75); background:rgba(70,26,30,.9); }
+  .foot { font-size:11px; color:#5d6a7d; line-height:1.9; margin:22px 2px 0; letter-spacing:.04em; }
+
+  /* 解錠オーバーレイ（最初のタップで AudioContext を起こす） */
+  #gate {
+    position:fixed; inset:0; z-index:50; background:rgba(4,6,9,.94);
+    display:grid; place-items:center; text-align:center; padding:24px;
+  }
+  #gate .g1 { font-size:16px; letter-spacing:.22em; margin-bottom:14px; }
+  #gate .g2 { font-size:12.5px; color:var(--dim); line-height:2; letter-spacing:.06em; }
+  #gate.off { display:none; }
+
+  /* 製品と同じ見た目の字幕（index.html の #voice-sub をそのまま写した） */
+  #voice-sub {
+    position:fixed; left:50%; bottom:132px; transform:translateX(-50%); z-index:6;
+    font-size:15px; letter-spacing:.16em; white-space:nowrap;
+    padding:4px 16px; border-radius:2px;
+    color:#e9eef5; background:rgba(6,8,12,.52);
+    border:1px solid rgba(190,205,225,.20);
+    text-shadow:0 0 12px rgba(150,190,255,.45), 0 1px 5px rgba(0,0,0,.95);
+    opacity:0; visibility:hidden; pointer-events:none;
+    transition:opacity .28s ease;
+  }
+  #voice-sub.show { opacity:1; visibility:visible; }
+  /* 字幕の下に敷く暗がり（ページの明るさに埋もれないように） */
+  #vsShade {
+    position:fixed; left:0; right:0; bottom:0; height:210px; z-index:5; pointer-events:none;
+    background:linear-gradient(to top, rgba(4,6,9,.96) 22%, rgba(4,6,9,0));
+  }
+  #status {
+    position:fixed; left:50%; bottom:96px; transform:translateX(-50%); z-index:6;
+    font-size:11px; letter-spacing:.14em; color:#6f7d91; white-space:nowrap;
+  }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <h1>声サンプル 6案</h1>
+  <p class="sub">
+    音を出した時に聞こえる「声」の候補。すべて WebAudio の合成音で、外部の音源は使っていない。<br>
+    音量は6案とも同じピーク（マスター0.8想定・ピーク0.885）に揃えてあるので、大きさではなく<b>音色と怖さ</b>で選んでほしい。<br>
+    <b>イヤホン推奨</b>（左右の定位で作っている案がある）。
+  </p>
+
+  <div class="allbar">
+    <button id="btnAll">全案を順に再生</button>
+    <button id="btnStop">止める</button>
+  </div>
+
+  <div id="cards"></div>
+
+  <p class="foot">
+    字幕は製品と同じ見た目・同じ3本（みーつけた／そこにいるのね／聞こえたよ）から毎回ランダムに出る。<br>
+    同じフォルダの 01〜06 の WAV（48kHz・16bit・ステレオ）はこのページと同じ音。
+  </p>
+</div>
+
+<div id="vsShade"></div>
+<div id="voice-sub"></div>
+<div id="status"></div>
+
+<div id="gate">
+  <div>
+    <div class="g1">画面をタップして開始</div>
+    <div class="g2">音が出ます。イヤホン推奨。<br>音量は上げすぎないこと。</div>
+  </div>
+</div>
+
+<script>
+/* ==== samples.js（同一内容をここへ埋め込む＝1ファイルで動く） ==== */
+/* @@SAMPLES_JS@@ */
+</script>
+
+<script>
+(function () {
+  'use strict';
+  var S = window.ESCAPE.VOICE_SAMPLES;
+  var SUB_DELAY = 300, SUB_HOLD = 2500;   /* 製品と同じ: 0.3秒後に出て2.5秒で消える */
+
+  var ctx = null, master = null;
+  var subEl = document.getElementById('voice-sub');
+  var statEl = document.getElementById('status');
+  var subTimer = null, hideTimer = null;
+  var seqTimer = null, curBtn = null, curTimer = null;
+  var lastIdx = -1;
+
+  function unlock() {
+    if (ctx) return ctx;
+    var C = window.AudioContext || window.webkitAudioContext;
+    if (!C) return null;
+    ctx = new C();
+    master = ctx.createGain();
+    master.gain.value = S.MASTER;
+    master.connect(ctx.destination);
+    if (ctx.state === 'suspended' && ctx.resume) ctx.resume();
+    return ctx;
+  }
+
+  function pickLine() {
+    var i = Math.floor(Math.random() * S.LINES.length);
+    if (i >= S.LINES.length) i = S.LINES.length - 1;
+    if (i === lastIdx) i = (i + 1) % S.LINES.length;
+    lastIdx = i;
+    return S.LINES[i];
+  }
+
+  function showSub() {
+    var line = pickLine();
+    clearTimeout(subTimer); clearTimeout(hideTimer);
+    subTimer = setTimeout(function () {
+      subEl.textContent = line;
+      subEl.classList.add('show');
+      hideTimer = setTimeout(function () { subEl.classList.remove('show'); }, SUB_HOLD);
+    }, SUB_DELAY);
+    return line;
+  }
+
+  function clearMark() {
+    if (curBtn) { curBtn.classList.remove('playing'); curBtn.textContent = '再生'; curBtn = null; }
+  }
+
+  function play(item, btn) {
+    if (!unlock()) return 0;
+    clearTimeout(curTimer); clearMark();
+    var t0 = ctx.currentTime + 0.03;
+    var len = S.build(ctx, master, t0, item);
+    showSub();
+    statEl.textContent = item.label;
+    if (btn) { curBtn = btn; btn.classList.add('playing'); btn.textContent = '再生中'; }
+    curTimer = setTimeout(function () {
+      clearMark();
+      statEl.textContent = '';
+    }, (len + 0.15) * 1000);
+    window.__VS_LAST = { id: item.id, line: subEl.textContent, len: len };
+    return len;
+  }
+
+  function stopAll() {
+    clearTimeout(seqTimer); clearTimeout(curTimer);
+    clearTimeout(subTimer); clearTimeout(hideTimer);
+    clearMark();
+    subEl.classList.remove('show');
+    statEl.textContent = '';
+    if (ctx) {
+      /* 鳴っている音を切るため master を落として作り直す（node の個別停止は持たない） */
+      try { master.gain.setValueAtTime(0, ctx.currentTime); } catch (e) { master.gain.value = 0; }
+      var old = master;
+      master = ctx.createGain();
+      master.gain.value = S.MASTER;
+      master.connect(ctx.destination);
+      setTimeout(function () { try { old.disconnect(); } catch (e) {} }, 60);
+    }
+  }
+
+  /* --- カード生成 --- */
+  var host = document.getElementById('cards');
+  var btns = [];
+  S.LIST.forEach(function (item, i) {
+    var card = document.createElement('div');
+    card.className = 'card';
+
+    var row = document.createElement('div');
+    row.className = 'row';
+    var no = document.createElement('div');
+    no.className = 'no';
+    no.textContent = String(i + 1);
+    var ttl = document.createElement('div');
+    ttl.className = 'ttl';
+    ttl.textContent = item.label;
+    row.appendChild(no); row.appendChild(ttl);
+
+    var d = document.createElement('div');
+    d.className = 'desc';
+    d.textContent = item.desc;
+
+    var m = document.createElement('div');
+    m.className = 'meta';
+    m.textContent = item.dur.toFixed(2) + ' 秒 ／ ' + item.id + '.wav';
+
+    var b = document.createElement('button');
+    b.className = 'play';
+    b.textContent = '再生';
+    b.setAttribute('data-id', item.id);
+    b.addEventListener('click', function () { play(item, b); });
+
+    card.appendChild(row); card.appendChild(d); card.appendChild(m); card.appendChild(b);
+    host.appendChild(card);
+    btns.push(b);
+  });
+
+  /* --- 全案を順に再生 --- */
+  document.getElementById('btnAll').addEventListener('click', function () {
+    stopAll();
+    var i = 0;
+    (function step() {
+      if (i >= S.LIST.length) { statEl.textContent = ''; return; }
+      var item = S.LIST[i];
+      var len = play(item, btns[i]);
+      i++;
+      seqTimer = setTimeout(step, (len + 1.0) * 1000);
+    }());
+  });
+  document.getElementById('btnStop').addEventListener('click', stopAll);
+
+  /* --- 最初のタップで解錠 --- */
+  var gate = document.getElementById('gate');
+  function openGate() {
+    unlock();
+    gate.classList.add('off');
+  }
+  gate.addEventListener('click', openGate);
+  gate.addEventListener('touchstart', openGate, { passive: true });
+  window.addEventListener('keydown', openGate);
+
+  /* 機械テスト用の入口（Playwright から押す） */
+  window.__VS = {
+    play: function (id) {
+      unlock();
+      gate.classList.add('off');
+      var item = S.itemById(id);
+      if (!item) return null;
+      var idx = S.LIST.indexOf(item);
+      return play(item, btns[idx]);
+    },
+    sub: function () {
+      return { text: subEl.textContent, show: subEl.classList.contains('show') };
+    },
+    list: function () { return S.LIST.map(function (x) { return x.id; }); },
+    stop: stopAll
+  };
+}());
+</script>
+</body>
+</html>
