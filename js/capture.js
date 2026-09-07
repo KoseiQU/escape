@@ -3,7 +3,9 @@
  * 一人称のまま途切れなく繋ぐ。段階と長さは ENEMY_TUNING に集約（契約の指定）:
  *   1 zoom  0.4s  敵の顔へ強制ズーム＋大音量の刺し音
  *   2 grab  2.0s  視界に敵の手／激しい揺れ／呻き。連打で揺れが増す（結果は変わらない）
- *   3 drag  3.5s  床すれすれの仰向け視点。天井灯が流れ、視界の端に敵と自分の足
+ *   3 drag  3.5s  担ぎ運び（P4.12 項目3）。敵の肩に担がれ、頭の後ろ・高さ約1.8m から
+ *                 後方（来た通路）を見る。視界下部に敵の肩と髪、通路と天井灯が遠ざかる。
+ *                 段階IDは 'drag' のまま（既存の結線・記録を壊さないため。中身だけ差し替え）
  *   4 black 1.5s  暗転＋牢扉の金属音→鍵の音
  *   → 既存の牢システム（第4房・進行保持・こじ開け）へ接続
  * 3回目の捕獲は 3 を「食われる」(maw) に差し替え、暗転後にゲームオーバー画面へ。
@@ -14,6 +16,13 @@
  *   - 演出中は ai.cine = true。敵AIは駆動を止め、モデルの update は当モジュールが持つ。
  *   - 高解像度顔・赤い目・手・口は end() で必ず戻す（機械テストが演出外の残留を見る）。
  *   - 乱数は使わず simTime の三角関数で揺らす＝ __pump 駆動のスクショが決定的になる。
+ *   - P4.12: 敵の体格倍率（enemy.scale）は敵モデル側が毎フレーム決める。演出は
+ *     「顔の位置・カメラ距離」をその倍率で割り増して読む＝拡大後も構図が崩れない。
+ *
+ * ヘッドライトの扱い（契約 P4.12 項目3「点灯扱いで視界を確保」）:
+ *   js/headlight.js は演出中を消灯と判定する（唯一の点灯判定箇所・こちらからは触らない）。
+ *   代わりに担ぎ運びの間だけ、同じ流儀（加算合成の床のくさび＋空気のもや）の
+ *   演出専用ライトをこのモジュールが出す。暗くて通路が読めない絵を作らない。
  */
 (function (global) {
   'use strict';
@@ -52,7 +61,9 @@
     this._geos = [];
     this._mats = [];
     this.lamps = null;
-    this.feet = null;
+    this.shoulder = null;        /* P4.12: 担ぎ運びの「敵の肩と髪」 */
+    this.light = null;           /* P4.12: 演出用ヘッドライト（床のくさび） */
+    this.haze = null;            /* 同・空気のもや（camera空間） */
     this.camPos = new THREE.Vector3();
     this.camQuat = new THREE.Quaternion();
     this.q0 = new THREE.Quaternion();
@@ -80,6 +91,7 @@
     this.fade = 0;
     this.fov = 0;
     this.done = false;
+    this.carryLight = 0;       /* P4.12: 演出用ヘッドライトの強さ（0=消灯扱い） */
     this.stages = [];          /* 経過した段階の記録（機械テスト用） */
     this._soundAt = 0;
   };
@@ -155,6 +167,10 @@
     e.poseT = 0; e.transTime = 0;
     e.placeAt(p.x + dx * this.T().cineFaceDist, p.z + dz * this.T().cineFaceDist,
       yawOf(-dx, -dz), g.map);
+    /* P4.12 項目6: 体格倍率が乗ったぶんだけ据える距離も伸ばす（顔が画面を割らない）。
+       倍率はマスの天井にも依るので、一度置いて実値を読んでから置き直す。 */
+    e.placeAt(p.x + dx * this.T().cineFaceDist * e.scale, p.z + dz * this.T().cineFaceDist * e.scale,
+      yawOf(-dx, -dz), g.map);
     e.setDetail('hi');
     var self = this;
     this.headTilt.x = 0; this.headTilt.z = 0; this.headTilt.n = 0;
@@ -166,9 +182,9 @@
     e.update(0, g.simTime);
     e.syncLight(g.world, g.map);
     this._faceOf(e);
-    this._nearOf(this.T().cineZoomEnd);
+    this._nearOf(this._d(this.T().cineZoomEnd));
 
-    /* 引きずる方向: いま居るマスから最も長く抜けられる軸方向 */
+    /* 運ばれていく方向: いま居るマスから最も長く抜けられる軸方向 */
     this._pickDragDir();
     this.dragOrigin.set(p.x, p.y, p.z);
 
@@ -183,7 +199,6 @@
       this.camSpace.add(e.maw.group);
       e.maw.group.visible = false;
     }
-    this._buildFeet();
     this._buildLamps();
 
     /* 契約 1: 大音量の刺し音 */
@@ -273,6 +288,11 @@
       e.grabHands.visible = false;
       e.group.visible = true;
       if (e.maw) e.maw.group.visible = false;
+      /* 担ぎ運びの演出物は暗転で必ず畳む（残留を機械テストが見る） */
+      if (this.shoulder) this.shoulder.visible = false;
+      this.carryLight = 0;
+      if (this.light) this.light.visible = false;
+      if (this.haze) this.haze.visible = false;
       if (this.mode === 'eaten') sfx('bite', {});
     }
   };
@@ -282,7 +302,7 @@
     var u = smooth01(this.stageT / Math.max(this.durOf('zoom'), 1e-4));
     var e = this.ai().enemy;
     this._faceOf(e);
-    this._nearOf(this.T().cineZoomEnd);
+    this._nearOf(this._d(this.T().cineZoomEnd));
     this.camPos.lerpVectors(this.eyePos, this.nearPos, u);
     this._lookAtFace(this.camPos);
     this.camQuat.copy(this.q0).slerp(this.q1, u);
@@ -298,7 +318,7 @@
     var u = this.stageT / Math.max(this.durOf('grab'), 1e-4);
     this._faceOf(e);
     /* 顔が息づく距離で前後する */
-    var d = T.cineZoomEnd + 0.055 * Math.sin(t * 3.1) - 0.06 * u;
+    var d = this._d(T.cineZoomEnd) + this._d(0.055) * Math.sin(t * 3.1) - this._d(0.06) * u;
     this._nearOf(d);
     this.camPos.copy(this.nearPos);
     this._lookAtFace(this.camPos);
@@ -320,56 +340,70 @@
     if (dt) { /* dt は将来の物理用。いまは時刻駆動で決定的にしている */ }
   };
 
-  /* ---------------- 段階3: 引きずり ---------------- */
+  /* ---------------- 段階3: 担ぎ運び（P4.12 項目3） ----------------
+   * 敵の肩に担がれ、頭の後ろ・高さ約1.8m から後方（来た通路）を見る。
+   * 実移動はしない＝演出用のカメラ経路（dragOrigin から dragDir へ伸ばすだけ）。
+   * 敵の実体は進行方向の前方に置く（＝背後になる）ので、視界下部の「肩と髪」は
+   * camera 空間の演出物で作る。自分の足は担がれた側（敵の前）にあるので出さない。 */
   CaptureCinematic.prototype._beginDrag = function () {
     var g = this.game, e = this.ai().enemy;
     var p = g.player;
     this.dragOrigin.set(p.x, g.map.floorYAt(p.x, p.z), p.z);
     this.dragT = 0;
-    this._soundAt = 0.9;
+    this._soundAt = 0.55;
     this.headTilt.x = 0; this.headTilt.z = 0;
-    this.fov = 82;                     /* カットが変わる＝広角に切り替える */
+    this.fov = 78;                     /* カットが変わる＝通路が両端まで入る画角 */
     e.state = 'walk';
-    sfx('cineDrag', { x: e.x, z: e.z });
+    e.grabHands.visible = false;
+    this._buildShoulder().visible = true;
+    this.carryLight = 1;               /* 契約: ヘッドライト点灯扱い */
+    this._buildLight();
+    sfx('cineCarry', { x: e.x, z: e.z });
+    /* カットの切り替わる最初の1フレームを首掴みのカメラで描かない
+       （_advance は step() の最後＝camSpace 同期の後に走るので、ここで先に合わせる）。 */
+    this._stepDrag(0);
+    this.camSpace.position.copy(this.camPos);
+    this.camSpace.quaternion.copy(this.camQuat);
   };
 
   CaptureCinematic.prototype._stepDrag = function (dt) {
     var g = this.game, e = this.ai().enemy, T = this.T(), map = g.map;
     var t = g.simTime;
     this.dragT += dt;
-    var travel = Math.min(this.dragT * T.cineDragSpeed, this.dragMax);
-    var vx = this.dragOrigin.x + this.dragDir.x * travel;
-    var vz = this.dragOrigin.z + this.dragDir.z * travel;
+    var travel = Math.min(this.dragT * T.cineCarrySpeed, this.dragMax);
+    var d = this.dragDir;
+    /* 担がれている肩の側へ僅かにずらす（真後ろ一直線にしない） */
+    var rx = d.z, rz = -d.x;
+    var vx = this.dragOrigin.x + d.x * travel + rx * T.cineCarrySide;
+    var vz = this.dragOrigin.z + d.z * travel + rz * T.cineCarrySide;
     var fy = map.floorYAt(vx, vz);
-    /* 床すれすれの仰向け視点 */
-    this.camPos.set(vx, fy + T.cineDragEye + 0.018 * Math.sin(t * 7.3), vz);
-    /* 見上げる: ほぼ真上。ごく僅かに進行方向側へ倒すと、頭側を歩く敵のシルエットが
-       画面上端に入り、自分の足は下端に残る（契約 §4「視界の端に敵のシルエットと自分の足」）。
-       進行方向の逆へ倒すと敵が画角から外れる（実測で確認済み）。 */
-    _v.set(this.dragDir.x * 0.22, 0.975, this.dragDir.z * 0.22).normalize();
-    _v2.copy(this.camPos).add(_v);
-    _m.lookAt(this.camPos, _v2, this.dragDir);
-    this.camQuat.setFromRotationMatrix(_m);
-    this._shake(T.cineShake * 0.42, t * 0.8);
-    this.fov = 82;
+    /* 歩の上下動（担がれて揺すられる）。乱数は使わない＝スクショが決定的になる */
+    var bob = 0.035 * Math.sin(t * 4.6) + 0.012 * Math.sin(t * 9.1 + 0.7);
+    this.camPos.set(vx, fy + T.cineCarryEye + bob, vz);
+    /* 後方（来た通路）を見る。少し見下ろすと床と天井灯が同じ画に入る */
+    var yaw = yawOf(-d.x, -d.z);
+    _e.set(-T.cineCarryPitch + 0.030 * Math.sin(t * 4.6 + 1.2), yaw,
+      0.045 * Math.sin(t * 2.3) + 0.020 * Math.sin(t * 5.1 + 0.4), 'YXZ');
+    this.camQuat.setFromEuler(_e);
+    this._shake(T.cineShake * 0.30, t * 0.8);
+    this.fov = 78;
 
-    /* 敵は頭の側（＝画面の上）を歩いて引きずっていく。
-       距離は「見上げた画角の端にシルエットが入る」実測値（近すぎると画面外へ抜ける） */
-    e.placeAt(vx + this.dragDir.x * T.cineDragLead, vz + this.dragDir.z * T.cineDragLead,
-      yawOf(this.dragDir.x, this.dragDir.z), map);
+    /* 敵の実体は進行方向の前方（＝カメラの背後）を歩く。音・影・照明の整合のため実座標も動かす */
+    e.placeAt(this.dragOrigin.x + d.x * (travel + T.cineCarryLead),
+      this.dragOrigin.z + d.z * (travel + T.cineCarryLead),
+      yawOf(d.x, d.z), map);
     e.state = 'walk';
 
-    /* 天井灯が流れる（引きずられている距離はカメラより先に進める＝必ず流れる） */
-    this._streamLamps(this.dragT * T.cineDragSpeed);
-    /* 自分の足（camera空間で揺れる） */
-    if (this.feet) {
-      this.feet.visible = true;
-      this.feet.rotation.x = 0.10 * Math.sin(t * 2.9);
-      this.feet.rotation.z = 0.07 * Math.sin(t * 2.1 + 0.8);
-    }
+    /* 天井灯が遠ざかる（カメラの後方＝視界の奥へ流れていく） */
+    this._streamLamps(travel);
+    /* 担がれた視界: 敵の肩と髪が下部で揺れる */
+    this._stepShoulder(t);
+    /* 演出用ヘッドライト（契約: 点灯扱いで視界を確保） */
+    this._placeLight(vx, fy, vz, yaw);
+
     if (this.stageT >= this._soundAt) {
-      this._soundAt += 1.15;
-      sfx('cineDrag', { x: e.x, z: e.z });
+      this._soundAt += 0.78;           /* 敵の歩の間隔 */
+      sfx('cineCarry', { x: e.x, z: e.z });
     }
   };
 
@@ -381,7 +415,7 @@
     var s = smooth01(u);
     this._faceOf(e);
     /* 顔がさらに近づく（近づきすぎると顔の面の内側に入ってしまうので 0.30m で止める） */
-    this._nearOf(T.cineZoomEnd - (T.cineZoomEnd - T.cineMawDist) * s);
+    this._nearOf(this._d(T.cineZoomEnd - (T.cineZoomEnd - T.cineMawDist) * s));
     this.camPos.copy(this.nearPos);
     this._lookAtFace(this.camPos);
     this.camQuat.copy(this.q1);
@@ -421,13 +455,24 @@
 
   /* ---------------- 補助 ---------------- */
 
-  /** 敵の顔の中心（頭ノード＋顔面側へのオフセット） */
+  /** P4.12 項目6: 敵の体格倍率。顔の大きさに比例して寄り引きの距離を割り増す */
+  CaptureCinematic.prototype.bodyScale = function () {
+    var ai = this.ai();
+    var e = ai && ai.enemy;
+    return (e && typeof e.scale === 'number' && e.scale > 0) ? e.scale : 1;
+  };
+
+  /** 体格倍率を掛けた距離(m) */
+  CaptureCinematic.prototype._d = function (v) { return v * this.bodyScale(); };
+
+  /** 敵の顔の中心（頭ノード＋顔面側へのオフセット）。オフセットも体格倍率に乗る */
   CaptureCinematic.prototype._faceOf = function (e) {
     e.nodes.head.getWorldPosition(this.facePos);
+    var k = (typeof e.scale === 'number' && e.scale > 0) ? e.scale : 1;
     var f = { x: -Math.sin(e.facing), z: -Math.cos(e.facing) };
-    this.facePos.x += f.x * 0.055;
-    this.facePos.z += f.z * 0.055;
-    this.facePos.y += 0.015;
+    this.facePos.x += f.x * 0.055 * k;
+    this.facePos.z += f.z * 0.055 * k;
+    this.facePos.y += 0.015 * k;
     return this.facePos;
   };
 
@@ -520,6 +565,11 @@
     return grp;
   };
 
+  /**
+   * P4.12: 担ぎ運びのカメラは後方を見るので、灯りは「カメラより手前（＝進行方向の逆）」
+   * にだけ並べる。世界に固定したまま travel が伸びるぶん遠ざかり、一番遠いものが
+   * 一巡してカメラの直下へ戻る＝必ず流れて見える。
+   */
   CaptureCinematic.prototype._streamLamps = function (travel) {
     if (!this.lamps) return;
     var SP = 3.4, N = this.lamps.children.length;
@@ -527,7 +577,8 @@
     var d = this.dragDir;
     var yaw = Math.atan2(d.x, d.z);
     for (var i = 0; i < N; i++) {
-      var off = ((i * SP - travel) % span + span) % span - span * 0.35;
+      /* i*SP と合同で travel 以下の最大値＝カメラの後ろに等間隔で並ぶ */
+      var off = travel - (((travel - i * SP) % span) + span) % span;
       var n = this.lamps.children[i];
       n.position.set(this.dragOrigin.x + d.x * off, this.dragCeil, this.dragOrigin.z + d.z * off);
       n.rotation.y = yaw;
@@ -535,37 +586,221 @@
     this.lamps.visible = true;
   };
 
-  /** 仰向けの自分の足（camera 空間の下端。ズボンと作業靴） */
-  CaptureCinematic.prototype._buildFeet = function () {
-    if (this.feet) return this.feet;
-    var grp = new THREE.Group();
-    grp.name = 'cine-feet';
-    grp.visible = false;
-    var leg = this._geo(new THREE.CylinderGeometry(0.074, 0.060, 0.62, 7, 1));
-    var boot = this._geo(new THREE.BoxGeometry(0.160, 0.135, 0.310));
-    var legMat = this._mat(new THREE.MeshBasicMaterial({ color: 0x3d454e, fog: true }));
-    var bootMat = this._mat(new THREE.MeshBasicMaterial({ color: 0x20262c, fog: true }));
-    for (var s = -1; s <= 1; s += 2) {
-      var n = new THREE.Group();
-      n.position.set(s * 0.140, -0.30, -0.62);
-      n.rotation.set(-1.16, 0, s * 0.10);
-      var l = new THREE.Mesh(leg, legMat);
-      l.position.y = -0.31;
-      n.add(l);
-      var b = new THREE.Mesh(boot, bootMat);
-      b.position.set(0, -0.66, -0.09);
-      b.rotation.x = 0.30;
-      n.add(b);
-      grp.add(n);
+  /* ---------------- P4.12 担ぎ運びの演出物 ---------------- */
+
+  /**
+   * 敵の肩と髪（camera 空間の下部）。
+   * 敵の実体はカメラの背後を歩いているので、担がれている実感はここで作る。
+   * 色は敵のマテリアル（syncLight が毎フレーム環境光に合わせている）から拾う＝
+   * 区画ごとの明るさ・色味とずれない。
+   */
+  /** 頂点色を焼く（形が読めるよう下面ほど暗く）。敵と同じマテリアルに載せるため必須 */
+  function paintGeo(geo, lo, hi) {
+    var pos = geo.attributes.position, n = pos.count;
+    var col = new Float32Array(n * 3);
+    var box = geo.boundingBox;
+    if (!box) { geo.computeBoundingBox(); box = geo.boundingBox; }
+    var y0 = box.min.y, y1 = box.max.y, dy = (y1 - y0) || 1;
+    for (var i = 0; i < n; i++) {
+      var u = (pos.getY(i) - y0) / dy;
+      var v = lo + (hi - lo) * u * u;
+      col[i * 3] = v; col[i * 3 + 1] = v; col[i * 3 + 2] = v;
     }
+    geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    return geo;
+  }
+
+  CaptureCinematic.prototype._buildShoulder = function () {
+    if (this.shoulder) return this.shoulder;
+    var e = this.ai().enemy;
+    var grp = new THREE.Group();
+    grp.name = 'cine-shoulder';
+    grp.visible = false;
+    /* 敵そのもののマテリアルを使う（syncLight が毎フレーム環境光に合わせている）＝
+       区画の明るさ・色味・肌のテクスチャが本体と完全に一致する。
+       ※ 敵の持ち物なので this._mats には積まない（end() で捨てるのは自前のぶんだけ） */
+    var skinMat = e.mats.skin, hairMat = e.mats.hair, clothMat = e.mats.cloth;
+
+    /* 担いでいる側の肩と、その内側の背中の隆起（カメラの手前下に来る） */
+    var sh = new THREE.Group();
+    sh.position.set(0.44, -1.12, -1.34);
+    var ball = this._geo(paintGeo(new THREE.SphereGeometry(0.44, 14, 10), 0.07, 0.26));
+    var m1 = new THREE.Mesh(ball, skinMat);
+    m1.scale.set(1.25, 0.85, 1.10);
+    sh.add(m1);
+    var m2 = new THREE.Mesh(ball, skinMat);       /* 首から肩へ落ちる僧帽筋 */
+    m2.scale.set(0.95, 0.70, 1.40);
+    m2.position.set(-0.34, 0.06, 0.16);
+    sh.add(m2);
+    /* 肩にかかる襤褸 */
+    var cgeo = this._geo(paintGeo(new THREE.CylinderGeometry(0.47, 0.64, 0.74, 16, 1, true), 0.04, 0.18));
+    var m3 = new THREE.Mesh(cgeo, clothMat);
+    m3.position.set(-0.06, -0.30, 0.05);
+    m3.rotation.z = 0.18;
+    sh.add(m3);
+    grp.add(sh);
+    this._shBody = sh;
+
+    /* 長い黒髪。背中側＝カメラの手前へ、視界の下部を横切って垂れる */
+    var hair = new THREE.Group();
+    hair.position.set(-0.30, -0.24, -0.86);
+    var hgeo = this._geo(paintGeo(new THREE.PlaneGeometry(0.070, 1.45, 1, 6), 0.015, 0.085));
+    for (var i = 0; i < 26; i++) {
+      var piv = new THREE.Group();
+      var a = (i / 25 - 0.5);
+      /* 房ごとに根元の高さと長さを散らす（同じ丈が並ぶと鋸歯の縁になる）。
+         乱数は使わない＝ __pump 駆動のスクショが決定的になる。 */
+      var j = (i * 0.6180339887) % 1;
+      var lift = -0.10 + 0.20 * Math.sin(i * 2.3999) * (0.6 + 0.4 * j);
+      piv.position.set(a * 0.62, lift - Math.abs(a) * 0.10, 0.04 + Math.abs(a) * 0.26);
+      piv.rotation.set(0.26 + Math.abs(a) * 0.34, a * 0.55, -a * 0.46);
+      var st = new THREE.Mesh(hgeo, hairMat);
+      st.position.y = -0.80;
+      st.rotation.y = a * 0.7;
+      st.scale.set(0.80 + 0.55 * j, 0.78 + 0.44 * ((i * 0.3819) % 1), 1);
+      piv.add(st);
+      piv.userData.base = { x: piv.rotation.x, z: piv.rotation.z, k: 0.7 + (i % 5) * 0.23, ph: i * 0.77 };
+      hair.add(piv);
+    }
+    grp.add(hair);
+    this._shHair = hair;
+
     this.camSpace.add(grp);
-    this.feet = grp;
+    this.shoulder = grp;
     return grp;
+  };
+
+  /** 歩に合わせて肩が上下し、髪が遅れて揺れる（決定的な時刻駆動） */
+  CaptureCinematic.prototype._stepShoulder = function (t) {
+    var grp = this.shoulder;
+    if (!grp) return;
+    grp.visible = true;
+    /* 色は敵本体のマテリアルをそのまま共有しているので、ここでは触らない
+       （syncLight が毎フレーム環境光に合わせる＝暗い区画で肩だけ白く浮かない） */
+    var step = Math.sin(t * 4.6);
+    if (this._shBody) {
+      this._shBody.position.y = -1.12 + 0.050 * step;
+      this._shBody.rotation.z = 0.10 * Math.sin(t * 2.3);
+    }
+    if (this._shHair) {
+      this._shHair.position.y = -0.24 + 0.040 * Math.sin(t * 4.6 - 0.5);
+      for (var i = 0; i < this._shHair.children.length; i++) {
+        var p = this._shHair.children[i], b = p.userData.base;
+        p.rotation.x = b.x + 0.10 * Math.sin(t * (2.1 + b.k) + b.ph);
+        p.rotation.z = b.z + 0.08 * Math.sin(t * (1.6 + b.k * 0.7) + b.ph * 1.4);
+      }
+    }
+  };
+
+  /* ---------------- 演出用ヘッドライト（契約 P4.12 項目3「点灯扱い」） ----------------
+   * js/headlight.js と同じ流儀（加算合成・頂点色で減衰・深度書き込みなし）で、
+   * カメラの見ている方向へ床のくさびを敷き、空気のもやを重ねる。
+   * headlight.js 側は一切触らない（点灯判定の唯一性を壊さない）。 */
+  var LIGHT_TINT = [1.00, 0.93, 0.78];
+  var LIGHT_NEAR = 0.30, LIGHT_LEN = 7.20, LIGHT_HALF_NEAR = 0.30, LIGHT_HALF_FAR = 1.65;
+  var LIGHT_SEGS = 14;
+  var LIGHT_CROSS = [-1, -0.55, 0, 0.55, 1];
+
+  function lightLengthProfile(t) {
+    if (t <= 0.16) return 0.55 + 0.45 * (t / 0.16);
+    var u = (t - 0.16) / 0.84;
+    return Math.pow(1 - u, 1.35);
+  }
+  function lightCrossProfile(u) {
+    var a = 1 - u * u;
+    return a <= 0 ? 0 : Math.pow(a, 1.25);
+  }
+
+  CaptureCinematic.prototype._buildLight = function () {
+    if (this.light) { this.light.visible = true; return this.light; }
+    var NL = LIGHT_SEGS, NW = LIGHT_CROSS.length;
+    var vN = (NL + 1) * NW;
+    var pos = new Float32Array(vN * 3), col = new Float32Array(vN * 3), idx = [];
+    for (var i = 0; i < NL; i++) {
+      for (var j = 0; j < NW - 1; j++) {
+        var a = i * NW + j, b = a + 1, c = a + NW, d = c + 1;
+        idx.push(a, c, b, b, c, d);
+      }
+    }
+    for (var li = 0; li <= NL; li++) {
+      var tt = li / NL;
+      var lp = lightLengthProfile(tt);
+      var half = LIGHT_HALF_NEAR + (LIGHT_HALF_FAR - LIGHT_HALF_NEAR) * tt;
+      for (var wj = 0; wj < NW; wj++) {
+        var o = (li * NW + wj) * 3;
+        pos[o] = LIGHT_CROSS[wj] * half;
+        pos[o + 1] = 0;
+        pos[o + 2] = -(LIGHT_NEAR + LIGHT_LEN * tt);      /* ローカル -Z ＝ 前方 */
+        var br = lp * lightCrossProfile(LIGHT_CROSS[wj]);
+        col[o] = LIGHT_TINT[0] * br; col[o + 1] = LIGHT_TINT[1] * br; col[o + 2] = LIGHT_TINT[2] * br;
+      }
+    }
+    var geo = this._geo(new THREE.BufferGeometry());
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    geo.setIndex(idx);
+    var mat = this._mat(new THREE.MeshBasicMaterial({
+      vertexColors: true, transparent: true, opacity: 0.34,
+      blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, fog: false
+    }));
+    var grp = new THREE.Group();
+    grp.name = 'cine-light';
+    var beam = new THREE.Mesh(geo, mat);
+    beam.frustumCulled = false;
+    grp.add(beam);
+    this.props.add(grp);
+    this.light = grp;
+    this._lightMat = mat;
+
+    /* 空気のもや（camera 空間の扁平なくさび） */
+    var N = 20;
+    var p3 = [0, 0, -0.35], c3 = [LIGHT_TINT[0] * 0.5, LIGHT_TINT[1] * 0.5, LIGHT_TINT[2] * 0.5], i3 = [];
+    for (var n = 0; n <= N; n++) {
+      var an = n / N * Math.PI * 2;
+      p3.push(Math.cos(an) * 1.05, Math.sin(an) * 0.52, -4.2);
+      c3.push(0, 0, 0);
+    }
+    for (var q = 1; q <= N; q++) i3.push(0, q, q + 1);
+    var geo3 = this._geo(new THREE.BufferGeometry());
+    geo3.setAttribute('position', new THREE.Float32BufferAttribute(p3, 3));
+    geo3.setAttribute('color', new THREE.Float32BufferAttribute(c3, 3));
+    geo3.setIndex(i3);
+    var mat3 = this._mat(new THREE.MeshBasicMaterial({
+      vertexColors: true, transparent: true, opacity: 0.085,
+      blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, fog: false
+    }));
+    var haze = new THREE.Mesh(geo3, mat3);
+    haze.frustumCulled = false;
+    haze.name = 'cine-haze';
+    this.camSpace.add(haze);
+    this.haze = haze;
+    this._hazeMat = mat3;
+    return grp;
+  };
+
+  /** 床のくさびをカメラの足元へ置き、見ている方向（yaw）へ向ける */
+  CaptureCinematic.prototype._placeLight = function (x, floorY, z, yaw) {
+    if (!this.light) return;
+    var k = this.carryLight * this.T().cineCarryLight;
+    this.light.visible = k > 0.001;
+    this.light.position.set(x, floorY + 0.045, z);
+    this.light.rotation.y = yaw;
+    if (this._lightMat) this._lightMat.opacity = 0.34 * k;
+    if (this.haze) { this.haze.visible = k > 0.001; this._hazeMat.opacity = 0.085 * k; }
+  };
+
+  /** 演出用ヘッドライトが点いているか（契約の「点灯扱い」の読み出し口） */
+  CaptureCinematic.prototype.headlightOn = function () {
+    return this.stage === 'drag' && this.carryLight > 0;
   };
 
   CaptureCinematic.prototype._clearProps = function () {
     if (this.lamps) { this.props.remove(this.lamps); this.lamps = null; }
-    if (this.feet) { this.camSpace.remove(this.feet); this.feet = null; }
+    if (this.shoulder) { this.camSpace.remove(this.shoulder); this.shoulder = null; }
+    if (this.light) { this.props.remove(this.light); this.light = null; }
+    if (this.haze) { this.camSpace.remove(this.haze); this.haze = null; }
+    this._shBody = null; this._shHair = null;
+    this._lightMat = null; this._hazeMat = null;
     while (this.props.children.length) this.props.remove(this.props.children[0]);
     while (this.camSpace.children.length) this.camSpace.remove(this.camSpace.children[0]);
     for (var i = 0; i < this._geos.length; i++) this._geos[i].dispose();
@@ -579,6 +814,12 @@
       mode: this.mode, stage: this.stage, stageT: this.stageT, total: this.total,
       mash: this.mash, fade: this.fade, fov: this.fov, done: this.done,
       stages: this.stages.slice(),
+      /* P4.12 項目3: 担ぎ運びの読み出し口（機械テスト・E2E） */
+      camY: this.camPos.y, carryLight: this.carryLight,
+      headlightOn: this.headlightOn(),
+      shoulderVisible: !!(this.shoulder && this.shoulder.visible),
+      lightVisible: !!(this.light && this.light.visible),
+      bodyScale: this.bodyScale(),
       redEyes: !!(this.ai() && this.ai().enemy && this.ai().enemy.redEyesVisible()),
       actor: this.actor ? this.actor.index : null
     };

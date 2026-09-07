@@ -535,7 +535,8 @@
   function traceCinematic(g, maxFrames) {
     var cine = g.cinematic;
     var out = { seq: [], durs: {}, frames: 0, camDrag: null, camGrab: null,
-      handsSeen: false, mawSeen: false, lampsSeen: false, feetSeen: false,
+      handsSeen: false, mawSeen: false, lampsSeen: false, shoulderSeen: false,
+      carryLightSeen: false, camCarryY: 0,
       redEyesSeen: false, triPeak: 0, fovGrab: 0 };
     var last = cine.stage, n = 0;
     for (var i = 0; i < maxFrames; i++) {
@@ -556,7 +557,10 @@
       if (cine.stage === 'maw' && e.maw && e.maw.group.visible) out.mawSeen = true;
       if (cine.stage === 'drag') {
         if (cine.lamps && cine.lamps.visible) out.lampsSeen = true;
-        if (cine.feet && cine.feet.visible) out.feetSeen = true;
+        /* P4.12 項目3: 担ぎ運び（敵の肩と髪／演出用ヘッドライト） */
+        if (cine.shoulder && cine.shoulder.visible) out.shoulderSeen = true;
+        if (cine.headlightOn && cine.headlightOn()) out.carryLightSeen = true;
+        out.camCarryY = g.camera.position.y - g.map.floorYAt(g.camera.position.x, g.camera.position.z);
         out.camDrag = { x: g.camera.position.x, y: g.camera.position.y, z: g.camera.position.z };
       }
       g.stepFrame(ESCAPE.FIXED_DT);
@@ -2579,12 +2583,14 @@
 
     t.ok(tr.handsSeen, '捕獲演出: 首掴みで敵の手が一人称視界に入る');
     t.ok(tr.lampsSeen, '捕獲演出: 引きずりで天井灯が流れる');
-    t.ok(tr.feetSeen, '捕獲演出: 引きずりで自分の足が見える');
+    t.ok(tr.shoulderSeen, 'P4.12 捕獲演出: 担ぎ運びで敵の肩と髪が視界下部に入る');
+    t.ok(tr.carryLightSeen, 'P4.12 捕獲演出: 担ぎ運びの間はヘッドライト点灯扱い（暗くて読めない絵を作らない）');
     t.ok(tr.camGrab !== null && Math.hypot(tr.camGrab.x - pe.x, tr.camGrab.z - pe.z) > 0.12,
       '捕獲演出: 首掴みのカメラはプレイヤー位置から離れて敵の顔へ寄る');
     t.ok(Math.abs(tr.fovGrab - T.cineZoomFov) < 0.01, '捕獲演出: ズーム後のFOVが演出値になる', tr.fovGrab);
-    t.ok(tr.camDrag !== null && tr.camDrag.y < 0.6,
-      '捕獲演出: 引きずりのカメラは床すれすれ', tr.camDrag ? tr.camDrag.y.toFixed(2) : '—');
+    t.ok(tr.camDrag !== null && tr.camCarryY > 1.55 && tr.camCarryY < 2.05,
+      'P4.12 捕獲演出: 担ぎ運びのカメラは床から約1.8m（肩に担がれた視点）',
+      tr.camCarryY.toFixed(2) + 'm');
 
     /* 暗転しきって「スタート地点での目覚め」へ接続される（P4.8改訂・旧牢送りは失効） */
     t.ok(g.stealth.jail.phase === 'wake' || g.stealth.jail.phase === 'none',

@@ -52,12 +52,16 @@
     searchDur: 8.00,          // 探索の持続 → 巡回へ復帰（直立へ戻る）(s)
     investigateLook: 4.00,    // 調査地点に着いてから見回す時間(s)
     lookSweep: 1.15,          // 見回しの振れ幅(rad)
-    catchDist: 1.05,          // 捕獲の接触距離(m)
+    catchDist: 1.05,          // 捕獲の接触距離(m)。等倍の体格に対する値
+                              // P4.12 項目6: 実際の判定は体格倍率を掛ける（ai.catchDist()）
     turnRate: 3.40,           // 旋回(rad/s)
     turnRateChase: 6.00,
     repathInterval: 0.50,     // 経路再計算(s)
     arriveDist: 0.55,         // 目的地到達とみなす距離(m)
-    radius: 0.45,             // 経路の見通し判定に使う体の半径(m)
+    radius: 0.45,             // 経路の見通し判定に使う体の半径(m)。等倍の体格に対する値
+                              // P4.12 項目6: 実際の判定は体格倍率を掛ける（ai._radius()）。
+                              // 反転形態は 0.45×1.35＝0.61m ＝ 幅1マス(2m)の通路の
+                              // 中心から左右 0.61m。角を丸める近道が壁へ寄りすぎない。
 
     /* 音イベントの到達半径(m) */
     runNoiseRadius: 18.0,     // 音地盤を走って踏む
@@ -100,7 +104,7 @@
     /* ---- P4.6 捕獲シネマティック（契約 §4「捕獲演出と駆け引き」。合計7〜9秒） ---- */
     cineZoomDur: 0.40,        // 1 追いつき: 顔へ強制ズーム
     cineGrabDur: 2.00,        // 2 首掴み
-    cineDragDur: 3.50,        // 3 引きずり
+    cineDragDur: 3.50,        // 3 担ぎ運び（P4.12 項目3で「引きずり」から差し替え）
     cineBlackDur: 1.50,       // 4 暗転（牢扉→鍵）
     cineMawDur: 1.80,         // 3'（3回目）食われる
     cineEatBlackDur: 1.20,    // 4'（3回目）暗転 → ゲームオーバー画面
@@ -108,9 +112,16 @@
     cineZoomEnd: 0.55,        // 顔とカメラの距離(m)
     cineZoomFov: 46,          // ズーム後のFOV(deg)
     cineMawDist: 0.30,        // 食われる直前の顔との距離(m)
-    cineDragSpeed: 2.30,      // 引きずられる見かけの速度(m/s)
-    cineDragEye: 0.26,        // 床すれすれの視点高(m)
-    cineDragLead: 2.20,       // 引きずる敵が頭側に立つ距離(m)。見上げた画角の端に入る値
+    /* ---- P4.12 項目3「担ぎ運び」（契約 §4「P4.12 再プレイ差し戻し」項目3） ----
+       段階3は床すれすれの引きずりではなく「敵の肩に担がれた視点」。
+       敵の頭の後ろ・高さ約1.8m から後方（来た通路）を見る。 */
+    cineCarrySpeed: 2.30,     // 運ばれていく見かけの速度(m/s)
+    cineCarryEye: 1.80,       // 担がれた視点の高さ(m)。契約「約1.8m」
+    cineCarryBack: 0.42,      // 敵の頭より後ろ（＝進行方向の逆）へずらす距離(m)
+    cineCarrySide: 0.24,      // 担がれている肩の側への横ずらし(m)
+    cineCarryPitch: 0.20,     // 見下ろし角(rad)。通路の床と天井灯が両方入る値
+    cineCarryLead: 1.05,      // 敵の実体をカメラの前方（進行方向）へ置く距離(m)
+    cineCarryLight: 1.00,     // 演出用ヘッドライトの強さ（契約「点灯扱いで視界を確保」）
     cineShake: 0.030,         // 揺れの基準振幅(rad)
     cineMashGain: 1.10,       // 連打で増える揺れの倍率（結果は変わらない）
     cineMashMax: 14,          // 連打の効き上限（回）
@@ -704,9 +715,24 @@
     return false;
   };
 
+  /* ---------------- 体格（P4.12 項目6「敵を大きく」） ----------------
+   * 敵は壁と押し合わない（経路が通路の中心を通る）ので、当たりの「半径」は
+   * 角を丸める近道の余裕として効く。体格倍率をそのまま掛ける＝大きい個体ほど
+   * 通路の中心を通る。捕獲の接触距離も同じ倍率で伸ばす（腕が長くなったぶん）。 */
+
+  /** いまの体格倍率（モデルが持つ実値。天井で縮んでいればそれも反映される） */
+  EnemyAI.prototype.bodyScale = function () {
+    var e = this.enemy;
+    return (e && typeof e.scale === 'number' && e.scale > 0) ? e.scale : 1;
+  };
+  /** 経路の見通し判定に使う体の半径(m) */
+  EnemyAI.prototype._radius = function () { return this.T.radius * this.bodyScale(); };
+  /** 捕獲の接触距離(m) */
+  EnemyAI.prototype.catchDist = function () { return this.T.catchDist * this.bodyScale(); };
+
   /** 半径ぶんの余裕をみて直進できるか（経路の角丸め用） */
   EnemyAI.prototype._clearLine = function (x0, z0, x1, z1) {
-    var map = this.map, r = this.T.radius;
+    var map = this.map, r = this._radius();
     var dx = x1 - x0, dz = z1 - z0;
     var dist = Math.hypot(dx, dz);
     var steps = Math.ceil(dist / 0.30);
@@ -1068,7 +1094,7 @@
         else this.lostTime += dt;
         var tgt = this.lastSeen || { x: p.x, z: p.z };
         this._moveTo(dt, tgt.x, tgt.z, T.chaseSpeed);
-        if (dist <= T.catchDist && !(st && st.hidden())) { this.onCatch(); break; }
+        if (dist <= this.catchDist() && !(st && st.hidden())) { this.onCatch(); break; }
         if ((this.lostTime > T.loseSightGrace && dist > T.giveUpDist) || this.lostTime > T.giveUpTime) {
           this.toSearch();
         }
@@ -2764,6 +2790,426 @@
     return wrapped;
   }
 
+
+  /* ================================================================
+   * P4.12 レーンA 機械テスト
+   *   項目3「捕獲演出の担ぎ運び」／項目5「距離連動の鼓動」／項目6「敵を大きく」
+   * （契約 DESIGN.md §4「P4.12 再プレイ差し戻し」）
+   *
+   * test.js はレーンBが同時に編集しているので、順序ガードとして
+   * ここ（ESCAPE.__extraSuites）へ積む。署名は test.js の suites と同じ (t, g)。
+   * ============================================================== */
+
+  /** 見通しの効く3マスを探し、そこで実際に捕まる（P4.10 のやり方と同じ） */
+  function startCaptureHere(g) {
+    var sp = g.map.meta.spawn, cells = g.map.walkableCells(), open = null;
+    for (var i = 0; i < cells.length && !open; i++) {
+      var c = cells[i];
+      if (!g.map.isWalkable(c.col + 1, c.row) || g.map.isBlocked(c.col + 1, c.row)) continue;
+      if (!g.map.isWalkable(c.col + 2, c.row) || g.map.isBlocked(c.col + 2, c.row)) continue;
+      if (Math.hypot(c.col - sp.col, c.row - sp.row) < 6) continue;
+      open = c;
+    }
+    if (!open) return false;
+    if (g.ais && g.ais.list[1]) g.ais.list[1].manual = true;
+    putEnemy(g.ai, open.col, open.row, -90);
+    placePlayer(g, open.col + 2, open.row, 0);
+    sim(g, 1);
+    g.player.x = g.ai.enemy.x + 0.55; g.player.z = g.ai.enemy.z;
+    sim(g, 1);
+    return g.stealth.jail.phase === 'grab';
+  }
+
+  /** カメラの前方ベクトル（three の -Z が前） */
+  function camForward(g, out) {
+    out.set(0, 0, -1).applyQuaternion(g.camera.quaternion);
+    return out;
+  }
+
+  /* ---------------- 項目3: 担ぎ運び ---------------- */
+
+  function testP412Carry(t, g) {
+    var T = ENEMY_TUNING, cine = g.cinematic;
+    if (!t.ok(!!cine, 'P4.12 担ぎ運び: 演出モジュールがある')) return;
+    t.near(T.cineCarryEye, 1.80, 1e-9, 'P4.12 項目3: 担がれた視点の高さは約1.8m（契約）', T.cineCarryEye);
+    t.ok(T.cineCarrySpeed > 0.5, 'P4.12 項目3: 運ばれる見かけの速度がある', T.cineCarrySpeed);
+    t.ok(T.cineCarryLead > 0, 'P4.12 項目3: 敵の実体は進行方向の前方に置く', T.cineCarryLead);
+    t.ok(T.cineDragDur >= 3.0 && T.cineDragDur <= 4.0,
+      'P4.12 項目3: 段階3の長さは現行維持（3〜4秒）', T.cineDragDur);
+
+    g.reset();
+    if (!t.ok(startCaptureHere(g), 'P4.12 担ぎ運び: 実捕獲から演出が始まる（前提）', g.stealth.jail.phase)) {
+      g.reset(); return;
+    }
+    var fwd = new THREE.Vector3(), tmp = new THREE.Vector3();
+    var seen = {
+      frames: 0, minEye: Infinity, maxEye: -Infinity, minBack: 1, light: 0, shoulder: 0,
+      lampFirst: null, lampLast: null, enemyBehind: 0, floorBelow: true, ceilOk: true
+    };
+    var guard = Math.ceil(cine.totalDur('jail') / ESCAPE.FIXED_DT) + 600;
+    for (var i = 0; i < guard; i++) {
+      if (cine.stage === 'drag') {
+        seen.frames++;
+        var cam = g.camera.position;
+        var fy = g.map.floorYAt(cam.x, cam.z);
+        var eye = cam.y - fy;
+        if (eye < seen.minEye) seen.minEye = eye;
+        if (eye > seen.maxEye) seen.maxEye = eye;
+        /* 後方（来た通路）を見ているか: 進行方向とカメラ前方の内積が -1 に近い */
+        camForward(g, fwd);
+        var back = fwd.x * cine.dragDir.x + fwd.z * cine.dragDir.z;
+        if (back < seen.minBack) seen.minBack = back;
+        if (cine.headlightOn() && cine.light && cine.light.visible) seen.light++;
+        if (cine.shoulder && cine.shoulder.visible) seen.shoulder++;
+        /* 敵の実体はカメラの背後（＝進行方向の先）にいる */
+        var e = cine.ai().enemy;
+        tmp.set(e.x - cam.x, 0, e.z - cam.z);
+        if (tmp.x * fwd.x + tmp.z * fwd.z < 0) seen.enemyBehind++;
+        if (cam.y >= fy + g.map.ceilHAt(g.map.colOf(cam.x), g.map.rowOf(cam.z))) seen.ceilOk = false;
+        if (cam.y <= fy) seen.floorBelow = false;
+        /* 天井灯が遠ざかる（カメラからの距離が伸びる） */
+        if (cine.lamps && cine.lamps.children.length) {
+          var l0 = cine.lamps.children[0].position;
+          var d0 = Math.hypot(l0.x - cam.x, l0.z - cam.z);
+          if (seen.lampFirst === null) seen.lampFirst = d0;
+          seen.lampLast = d0;
+        }
+      }
+      if (g.stealth.jail.phase === 'none' && !cine.active() && seen.frames > 0) break;
+      g.stepFrame(ESCAPE.FIXED_DT);
+    }
+    t.ok(seen.frames > 30, 'P4.12 項目3: 担ぎ運びの段階を通過した', seen.frames + 'フレーム');
+    t.ok(seen.minEye > 1.55 && seen.maxEye < 2.05,
+      'P4.12 項目3: カメラは床から約1.8m（床すれすれの引きずりではない）',
+      seen.minEye.toFixed(2) + '〜' + seen.maxEye.toFixed(2) + 'm');
+    t.ok(seen.minBack < -0.85,
+      'P4.12 項目3: 進行方向の後方（来た通路）を見ている', seen.minBack.toFixed(3));
+    t.ok(seen.shoulder === seen.frames,
+      'P4.12 項目3: 全フレームで敵の肩と髪が視界下部にある', seen.shoulder + '/' + seen.frames);
+    t.ok(seen.light === seen.frames,
+      'P4.12 項目3: 全フレームでヘッドライト点灯扱い（暗くて読めない絵を作らない）',
+      seen.light + '/' + seen.frames);
+    t.ok(seen.enemyBehind === seen.frames,
+      'P4.12 項目3: 敵の実体はカメラの背後（担いでいる側）にいる',
+      seen.enemyBehind + '/' + seen.frames);
+    t.ok(seen.floorBelow && seen.ceilOk, 'P4.12 項目3: カメラが床下・天井上へ抜けない');
+    t.ok(seen.lampLast !== null && seen.lampFirst !== null,
+      'P4.12 項目3: 天井灯が出ている');
+
+    /* 演出が終われば演出物は残らない（契約 §6 の中断安全と同じ厳しさで見る） */
+    t.ok(!cine.active(), 'P4.12 担ぎ運び: 演出が終わっている', cine.stage);
+    t.ok(cine.headlightOn() === false, 'P4.12 項目3: 演出後はヘッドライト点灯扱いが解ける');
+    t.ok(cine.shoulder === null && cine.light === null && cine.haze === null,
+      'P4.12 項目3: 肩・髪・演出ライトが片付いている');
+    t.ok(cine.camSpace.visible === false && cine.props.visible === false,
+      'P4.12 項目3: 演出物のグループが消えている');
+    g.reset();
+  }
+
+  /** 天井灯が「遠ざかる」ことを別に見る（1灯を追跡して距離が単調に伸びる） */
+  function testP412CarryLampsFlow(t, g) {
+    g.reset();
+    var cine = g.cinematic;
+    if (!t.ok(startCaptureHere(g), 'P4.12 天井灯: 実捕獲から演出が始まる（前提）')) { g.reset(); return; }
+    var guard = Math.ceil(cine.totalDur('jail') / ESCAPE.FIXED_DT) + 600;
+    var prev = null, grew = 0, samples = 0;
+    for (var i = 0; i < guard; i++) {
+      if (cine.stage === 'drag' && cine.lamps) {
+        var cam = g.camera.position, best = Infinity;
+        for (var k = 0; k < cine.lamps.children.length; k++) {
+          var p = cine.lamps.children[k].position;
+          var d = Math.hypot(p.x - cam.x, p.z - cam.z);
+          if (d < best) best = d;
+        }
+        if (prev !== null) { samples++; if (best > prev - 1e-6 || best < prev - 2.0) grew++; }
+        prev = best;
+      }
+      if (!cine.active() && samples > 0) break;
+      g.stepFrame(ESCAPE.FIXED_DT);
+    }
+    t.ok(samples > 30 && grew === samples,
+      'P4.12 項目3: 天井灯はカメラから遠ざかり続ける（近づいてこない）', grew + '/' + samples);
+    g.reset();
+  }
+
+  /* ---------------- 項目6: 敵を大きく ---------------- */
+
+  function testP412EnemyScale(t, g) {
+    g.reset();
+    var S = ESCAPE.EnemyScale;
+    if (!t.ok(!!S, 'P4.12 項目6: 体格倍率のAPIがある')) return;
+    t.near(S.STAND, 1.10, 1e-9, 'P4.12 項目6: 直立形態は1.10倍（契約）', S.STAND);
+    t.near(S.CRAWL, 1.35, 1e-9, 'P4.12 項目6: 反転形態は1.35倍（契約）', S.CRAWL);
+    t.near(S.forPose(0), 1.10, 1e-9, 'P4.12 項目6: poseT=0 で直立倍率');
+    t.near(S.forPose(1), 1.35, 1e-9, 'P4.12 項目6: poseT=1 で反転倍率');
+    var mono = true, prev = S.forPose(0);
+    for (var u = 0.05; u <= 1.0001; u += 0.05) {
+      var v = S.forPose(u);
+      if (v < prev - 1e-9) mono = false;
+      prev = v;
+    }
+    t.ok(mono, 'P4.12 項目6: 倍率は形態遷移で単調に増える（縮んで見える瞬間を作らない）');
+    t.ok(S.forPose(0.45) < 1.13,
+      'P4.12 項目6: 倒れ込みの途中はまだ太らない（幅1マスの通路の壁抜け対策）',
+      S.forPose(0.45).toFixed(3));
+
+    /* モデルに実際に乗っていること（天井の低いマスでは上限が掛かる＝等倍未満にはしない） */
+    var e = g.ai.enemy;
+    t.ok(Math.abs(e.group.scale.x - e.scale) < 1e-6 && Math.abs(e.group.scale.y - e.scale) < 1e-6,
+      'P4.12 項目6: 倍率がモデルのグループに等方で乗っている', e.group.scale.x);
+    t.ok(e.scale >= 1.0 && e.scale <= S.CRAWL + 1e-9,
+      'P4.12 項目6: 倍率は等倍〜1.35の範囲に収まる', e.scale);
+
+    /* 床接地: 手足の最下点が床（拡大しても浮かない・沈まない） */
+    var cells = g.map.walkableCells();
+    var flat = null;
+    for (var ci = 0; ci < cells.length && !flat; ci++) {
+      if (g.map.ceilHAt(cells[ci].col, cells[ci].row) >= 2.95) flat = cells[ci];
+    }
+    if (flat) {
+      var forms = [{ p: 0, n: '直立' }, { p: 1, n: '反転' }];
+      for (var fi = 0; fi < forms.length; fi++) {
+        e.poseT = forms[fi].p;
+        e.state = forms[fi].p ? 'chase' : 'walk';
+        e.placeCell(flat.col, flat.row, 180, g.map);
+        e.update(0, 12.0);
+        var lowest = Infinity, v3 = new THREE.Vector3();
+        for (var k = 0; k < e.contacts.length; k++) {
+          e.contacts[k].getWorldPosition(v3);
+          if (v3.y < lowest) lowest = v3.y;
+        }
+        t.near(lowest, e.floorY, 2e-3,
+          'P4.12 項目6: ' + forms[fi].n + '形態の接地（拡大しても足が床にある）',
+          (lowest - e.floorY).toFixed(4) + 'm');
+        var want = forms[fi].p ? S.CRAWL : S.STAND;
+        t.near(e.scale, want, 1e-6,
+          'P4.12 項目6: 天井に余裕のあるマスでは契約どおりの倍率', e.scale.toFixed(3));
+      }
+      /* 首・顔の高さが倍率ぶん上がる（捕獲ズームのカメラ距離もここに追従する） */
+      e.poseT = 0; e.state = 'walk';
+      e.placeCell(flat.col, flat.row, 180, g.map);
+      e.update(0, 12.0);
+      var head = new THREE.Vector3(), neck = new THREE.Vector3();
+      e.nodes.head.getWorldPosition(head);
+      e.nodes.neck.getWorldPosition(neck);
+      t.ok(head.y - e.floorY > 2.35 && head.y - e.floorY < 2.65,
+        'P4.12 項目6: 直立形態の顔の高さが上がる（等倍2.27m→約2.5m）',
+        (head.y - e.floorY).toFixed(3) + 'm');
+      t.ok(neck.y - e.floorY > 1.95,
+        'P4.12 項目6: 首の高さも倍率ぶん上がる', (neck.y - e.floorY).toFixed(3) + 'm');
+    }
+
+    /* 天井の低いマスでは上限が掛かり、等倍より小さくはならない（＝P4.11 より悪化させない） */
+    var low = null;
+    for (var li = 0; li < cells.length && !low; li++) {
+      if (g.map.ceilHAt(cells[li].col, cells[li].row) <= 2.5) low = cells[li];
+    }
+    if (low) {
+      e.poseT = 0; e.state = 'walk';
+      e.placeCell(low.col, low.row, 180, g.map);
+      e.update(0, 12.0);
+      t.ok(e.scale >= 1.0 && e.scale <= S.STAND + 1e-9,
+        'P4.12 項目6: 天井の低いマスでは頭が抜けないよう上限が掛かる（等倍は下回らない）',
+        e.scale.toFixed(3) + ' / 天井' + g.map.ceilHAt(low.col, low.row));
+    }
+    g.reset();
+  }
+
+  /** 当たり判定（経路の半径・捕獲の接触距離）が体格に追従する */
+  function testP412HitboxScale(t, g) {
+    g.reset();
+    var ai = g.ai, T = ENEMY_TUNING;
+    t.ok(typeof ai._radius === 'function' && typeof ai.catchDist === 'function',
+      'P4.12 項目6: 当たり判定が体格倍率を読む口を持つ');
+    ai.enemy.setForm('stand', true);
+    ai.enemy.update(0, 12.0);
+    var rs = ai._radius(), cs = ai.catchDist();
+    ai.enemy.setForm('crawl', true);
+    ai.enemy.update(0, 12.0);
+    var rc = ai._radius(), cc = ai.catchDist();
+    t.ok(rc > rs && cc > cs,
+      'P4.12 項目6: 反転形態の方が半径も接触距離も大きい',
+      rc.toFixed(3) + '/' + rs.toFixed(3) + '・' + cc.toFixed(3) + '/' + cs.toFixed(3));
+    t.near(rc, T.radius * ai.enemy.scale, 1e-6, 'P4.12 項目6: 半径＝基準×体格倍率', rc.toFixed(3));
+    t.near(cc, T.catchDist * ai.enemy.scale, 1e-6, 'P4.12 項目6: 接触距離＝基準×体格倍率', cc.toFixed(3));
+    t.ok(rc < 1.0, 'P4.12 項目6: 半径は幅1マス(2m)の通路の半幅に収まる', rc.toFixed(3));
+    g.reset();
+  }
+
+  /** 反転形態の体が幅1マス(2m)の通路に収まる（壁にめり込まない） */
+  function testP412CrawlFitsCorridor(t, g) {
+    g.reset();
+    var e = g.ai.enemy, S = ESCAPE.EnemyScale;
+    var cells = g.map.walkableCells(), flat = null;
+    for (var ci = 0; ci < cells.length && !flat; ci++) {
+      if (g.map.ceilHAt(cells[ci].col, cells[ci].row) >= 2.95) flat = cells[ci];
+    }
+    if (!t.ok(!!flat, 'P4.12 項目6: 検証に使える天井の高いマスがある')) { g.reset(); return; }
+
+    /* 髪は柔らかい房（壁に触れても破綻しない）ので体だけを測る */
+    function halfWidth() {
+      e.group.updateMatrixWorld(true);
+      var box = new THREE.Box3(), tmp = new THREE.Box3(), any = false;
+      e.group.traverse(function (o) {
+        if (!o.isMesh || o.material === e.mats.hair) return;
+        tmp.setFromObject(o);
+        if (!any) { box.copy(tmp); any = true; } else { box.union(tmp); }
+      });
+      if (!any) return 0;
+      /* facing=0（-Z が前）で置くので x が通路の横方向 */
+      return Math.max(e.x - box.min.x, box.max.x - e.x);
+    }
+    e.setForm('crawl', true);
+    e.placeCell(flat.col, flat.row, 180, g.map);
+    var maxRun = 0;
+    for (var i = 0; i < 90; i++) { e.state = 'chase'; e.update(1 / 60, 12.0 + i / 60); maxRun = Math.max(maxRun, halfWidth()); }
+    t.near(e.scale, S.CRAWL, 1e-6, 'P4.12 項目6: 疾走中は1.35倍が丸ごと乗る', e.scale.toFixed(3));
+    t.ok(maxRun < 0.95,
+      'P4.12 項目6: 反転形態で疾走しても体は通路の半幅(1.0m)に収まる', maxRun.toFixed(3) + 'm');
+
+    /* 形態遷移（倒れ込み）の軌道。受け身の腕と脚が最も広がる瞬間を見る */
+    e.setForm('stand', true);
+    e.placeCell(flat.col, flat.row, 180, g.map);
+    e.state = 'walk'; e.transTime = 0;
+    e.setForm('crawl', false);
+    var maxTrans = 0, atPose = 0;
+    for (var j = 0; j < 130; j++) {
+      e.update(1 / 60, 20.0 + j / 60);
+      var w = halfWidth();
+      if (w > maxTrans) { maxTrans = w; atPose = e.poseT; }
+    }
+    t.ok(maxTrans <= 1.05,
+      'P4.12 項目6: 倒れ込みの最大幅も通路の半幅にほぼ収まる（倍率を後ろへ寄せた効果）',
+      maxTrans.toFixed(3) + 'm @poseT ' + atPose.toFixed(2));
+    g.reset();
+  }
+
+  /** 耐久: 反転形態で通路を走り回っても実体マスへ入らない（契約の合格条件） */
+  function testP412CrawlEndurance(t, g) {
+    g.reset();
+    var ai = g.ai, e = ai.enemy, map = g.map;
+    var cells = map.walkableCells();
+    if (!t.ok(cells.length > 50, 'P4.12 耐久: 検証に使えるマップがある')) { g.reset(); return; }
+    /* もう1体とプレイヤーは邪魔をしない位置に置き、追跡の動きだけを 6000 フレーム回す */
+    if (g.ais && g.ais.list[1]) g.ais.list[1].manual = true;
+    ai.manual = true;                       /* AIの状態機械は止め、追跡の移動だけを回す */
+    e.setForm('crawl', true);
+    e.placeCell(cells[0].col, cells[0].row, 180, map);
+    ai.state = 'chase';
+    ai.path = null; ai.goal = null; ai.repathT = 0;
+
+    var dt = ESCAPE.FIXED_DT, bad = 0, moved = 0, ti = 7, target = null;
+    var lastX = e.x, lastZ = e.z;
+    for (var i = 0; i < 6000; i++) {
+      if (!target || Math.hypot(target.x - e.x, target.z - e.z) < 1.0) {
+        ti = (ti * 7 + 13) % cells.length;            /* 乱数を使わない＝決定的 */
+        target = map.cellCenter(cells[ti].col, cells[ti].row);
+        ai.path = null; ai.goal = null; ai.repathT = 0;
+      }
+      ai._moveTo(dt, target.x, target.z, ai.T.chaseSpeed);
+      e.update(dt, 30 + i * dt);
+      var col = map.colOf(e.x), row = map.rowOf(e.z);
+      if (!map.inBounds(col, row) || map.isSolid(col, row) || !map.isWalkable(col, row)) bad++;
+      moved += Math.hypot(e.x - lastX, e.z - lastZ);
+      lastX = e.x; lastZ = e.z;
+    }
+    t.ok(bad === 0, 'P4.12 項目6: 6000フレームの追跡で実体マスへの侵入0', bad + '回');
+    t.ok(moved > 200, 'P4.12 項目6: 耐久テストで実際に走り回っている', moved.toFixed(0) + 'm');
+    t.near(e.scale, ESCAPE.EnemyScale.CRAWL, 1e-6,
+      'P4.12 項目6: 耐久テストの間ずっと反転形態の倍率', e.scale.toFixed(3));
+    ai.manual = false;
+    g.reset();
+  }
+
+  /* ---------------- 項目5: 距離連動の鼓動 ---------------- */
+
+  function testP412Heartbeat(t, g) {
+    var A = ESCAPE.Audio;
+    if (!t.ok(A && typeof A.heartbeatFor === 'function', 'P4.12 項目5: 鼓動の純関数がある')) return;
+    t.near(A.HB_START, 20.0, 1e-9, 'P4.12 項目5: 20m以内で鳴り始める（契約）', A.HB_START);
+    t.near(A.HB_FULL, 5.0, 1e-9, 'P4.12 項目5: 5mで最大（契約）', A.HB_FULL);
+    t.ok(A.heartbeatFor(21, false).on === false, 'P4.12 項目5: 20mより遠いと鳴らない');
+    t.ok(A.heartbeatFor(20, false).on === true, 'P4.12 項目5: 20mで鳴り始める');
+    t.ok(A.heartbeatFor(6.0, false).on === true, 'P4.12 項目5: 追跡していなくても近ければ鳴る');
+
+    /* 近いほど速く・大きい（単調） */
+    var prevB = -1, prevL = -1, mono = true;
+    for (var d = 20; d >= 0; d -= 0.5) {
+      var h = A.heartbeatFor(d, false);
+      if (h.bpm < prevB - 1e-9 || h.level < prevL - 1e-9) mono = false;
+      prevB = h.bpm; prevL = h.level;
+    }
+    t.ok(mono, 'P4.12 項目5: 近づくほど速く・大きくなる（逆行しない）');
+    var h20 = A.heartbeatFor(20, false), h12 = A.heartbeatFor(12, false), h5 = A.heartbeatFor(5, false);
+    t.ok(h20.level < h12.level && h12.level < h5.level,
+      'P4.12 項目5: 20m<12m<5m の順に大きい',
+      h20.level.toFixed(3) + '<' + h12.level.toFixed(3) + '<' + h5.level.toFixed(3));
+    t.ok(h20.bpm < h12.bpm && h12.bpm < h5.bpm,
+      'P4.12 項目5: 20m<12m<5m の順に速い',
+      h20.bpm.toFixed(1) + '<' + h12.bpm.toFixed(1) + '<' + h5.bpm.toFixed(1));
+    t.near(h5.bpm, A.HB_BPM_MAX, 1e-6, 'P4.12 項目5: 5mで最大のレート', h5.bpm.toFixed(1));
+    t.ok(h20.level <= A.HB_LEVEL_MIN + 1e-9, 'P4.12 項目5: 20mは微弱', h20.level.toFixed(3));
+    t.ok(A.heartbeatFor(3, false).level >= A.HB_LEVEL_MAX - 1e-9,
+      'P4.12 項目5: 5mより近くても最大で頭打ち');
+    /* 追跡中はさらに強調 */
+    var c8 = A.heartbeatFor(8, true), n8 = A.heartbeatFor(8, false);
+    t.ok(c8.bpm > n8.bpm && c8.level > n8.level,
+      'P4.12 項目5: 同じ距離でも追跡中はさらに速く・大きい',
+      c8.bpm.toFixed(1) + '>' + n8.bpm.toFixed(1));
+    t.ok(c8.level <= A.HB_LEVEL_CAP + 1e-9, 'P4.12 項目5: 音量は歪まない上限に収まる', c8.level.toFixed(3));
+
+    /* OfflineAudioContext のレンダ実測（契約「距離5m/12m/20mでRMSが単調増加」） */
+    var c = A.cache;
+    var r20 = c.hb_d20, r12 = c.hb_d12, r5 = c.hb_d5;
+    if (t.ok(!!(r20 && r12 && r5), 'P4.12 項目5: 距離別の心拍が事前レンダされている',
+      A.prewarmError() || '')) {
+      t.ok(r20.rms < r12.rms && r12.rms < r5.rms,
+        'P4.12 項目5: レンダRMSが 20m<12m<5m で単調増加',
+        r20.rms.toFixed(5) + ' < ' + r12.rms.toFixed(5) + ' < ' + r5.rms.toFixed(5));
+      t.ok(r20.peak < r12.peak && r12.peak < r5.peak,
+        'P4.12 項目5: ピークも同じ順', r20.peak.toFixed(4) + ' < ' + r5.peak.toFixed(4));
+      t.ok(!r5.clipped, 'P4.12 項目5: 最大でも歪まない（クリップしない）', r5.peak.toFixed(4));
+      t.ok(r20.rms > 0.0005, 'P4.12 項目5: 20mでも無音ではない（微弱に鳴る）', r20.rms.toFixed(5));
+    }
+  }
+
+  /** 実プレイでの鳴り方: 追跡していなくても 20m 以内なら鳴る／壁越しでも鳴る */
+  function testP412HeartbeatInPlay(t, g) {
+    g.reset();
+    var au = ESCAPE.audio;
+    if (!t.ok(!!au, 'P4.12 項目5: 音響エンジンがある')) return;
+    var was = au.testMode;
+    au.testMode = true;
+    var cells = g.map.walkableCells(), map = g.map;
+    /* 敵から 10〜14m 離れ、視線が通らない（＝壁越しの）位置を探す */
+    var ai = g.ai, e = ai.enemy, spot = null;
+    for (var i = 0; i < cells.length && !spot; i++) {
+      var c = map.cellCenter(cells[i].col, cells[i].row);
+      var d = Math.hypot(c.x - e.x, c.z - e.z);
+      if (d < 10 || d > 14) continue;
+      if (!ai.blockedLine(e.x, e.z, c.x, c.z)) continue;   /* 遮蔽されている＝壁越し */
+      spot = { col: cells[i].col, row: cells[i].row, d: d };
+    }
+    if (!t.ok(!!spot, 'P4.12 項目5: 壁越しで10〜14mの位置がある')) { au.testMode = was; g.reset(); return; }
+    if (g.ais && g.ais.list[1]) g.ais.list[1].manual = true;
+    ai.manual = true;
+    placePlayer(g, spot.col, spot.row, 0);
+    var h0 = au.fired.heartbeat || 0;
+    for (var k = 0; k < 240; k++) {
+      var cc = map.cellCenter(spot.col, spot.row);
+      g.player.x = cc.x; g.player.z = cc.z;
+      sim(g, 1);
+    }
+    var beats = (au.fired.heartbeat || 0) - h0;
+    t.ok(ai.state !== 'chase', 'P4.12 項目5: 追跡されていない状態で見ている', ai.state);
+    t.ok(beats >= 2, 'P4.12 項目5: 追跡中でなくても壁越し10〜14mで鼓動が鳴る', beats + '拍');
+    t.ok(au.hbDist < 20.5, 'P4.12 項目5: 最も近い個体との距離を持っている',
+      (au.hbDist === undefined ? '—' : au.hbDist.toFixed(1)) + 'm');
+    ai.manual = false;
+    au.testMode = was;
+    g.reset();
+  }
+
   ESCAPE.__extraSuites.push(
     testEnemyPairContract,
     testTerritoryPatrol,
@@ -2774,7 +3220,16 @@
     testTerritoryLeaveAndReturn,
     testCaptureByEitherEnemy,
     testCaptureWipesMap,
-    testShriekAudio
+    testShriekAudio,
+    /* P4.12 レーンA（担ぎ運び・敵の拡大・距離連動の鼓動） */
+    testP412Carry,
+    testP412CarryLampsFlow,
+    testP412EnemyScale,
+    testP412HitboxScale,
+    testP412CrawlFitsCorridor,
+    testP412CrawlEndurance,
+    testP412Heartbeat,
+    testP412HeartbeatInPlay
   );
   for (var si = 0; si < ESCAPE.__extraSuites.length; si++) {
     ESCAPE.__extraSuites[si] = cleanSuite(ESCAPE.__extraSuites[si]);

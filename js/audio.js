@@ -973,6 +973,35 @@
   };
 
   /* ================================================================
+   * P4.12 項目5「鼓動音は敵との距離で強まる」（契約 §4「P4.12 再プレイ差し戻し」）
+   *
+   *   追跡中に限らず、最も近い個体との距離が HB_START(20m) 以内で鳴り始め、
+   *   近いほど速く・大きく（20m=微弱／5m=最大）。追跡中はさらに強調する。
+   *   壁越しでも距離だけで判定する＝プレイヤーへの「近い」の情報源。
+   *
+   * 純関数にしてあるのは、OfflineAudioContext のレンダ検査（距離5/12/20m で
+   * RMS が単調増加すること）と、レートの単調性を機械テストで直接見るため。
+   * ============================================================== */
+  var HB_START = 20.0;          /* 鳴り始める距離(m) */
+  var HB_FULL = 5.0;            /* 最大になる距離(m) */
+  var HB_BPM_MIN = 62, HB_BPM_MAX = 158;
+  var HB_LEVEL_MIN = 0.10, HB_LEVEL_MAX = 1.00;
+  var HB_CURVE = 1.30;          /* 近づくほど急に強まる（遠くは微弱に留める） */
+  var HB_CHASE_BPM = 14;        /* 追跡中の上乗せ(bpm) */
+  var HB_CHASE_LEVEL = 1.16;    /* 同・音量の倍率 */
+  var HB_LEVEL_CAP = 1.15;      /* 心拍の波形が歪まない上限 */
+
+  function heartbeatFor(dist, chase) {
+    var d = (typeof dist === 'number' && isFinite(dist)) ? Math.max(0, dist) : Infinity;
+    var u = clamp((HB_START - d) / (HB_START - HB_FULL), 0, 1);
+    var s = Math.pow(u, HB_CURVE);
+    var bpm = HB_BPM_MIN + (HB_BPM_MAX - HB_BPM_MIN) * s;
+    var level = HB_LEVEL_MIN + (HB_LEVEL_MAX - HB_LEVEL_MIN) * s;
+    if (chase) { bpm += HB_CHASE_BPM; level = Math.min(HB_LEVEL_CAP, level * HB_CHASE_LEVEL); }
+    return { on: !!chase || d <= HB_START, bpm: bpm, level: level, u: u, dist: d };
+  }
+
+  /* ================================================================
    * OfflineAudioContext レンダヘルパー（契約 §4「検証」）
    * ============================================================== */
   function offlineCtor() {
@@ -1040,6 +1069,10 @@
     { key: 'noise_step',  name: 'noiseStep', params: { mat: 'water', r: 0.5 }, sec: 1.2 },
     { key: 'sting',       name: 'sting', params: {}, sec: 1.4 },
     { key: 'heartbeat',   name: 'heartbeat', params: {}, sec: 0.8 },
+    /* P4.12 項目5: 距離連動の鼓動（5m/12m/20m の音量差を数値で見る） */
+    { key: 'hb_d20',      name: 'heartbeat', params: { level: heartbeatFor(20, false).level }, sec: 0.8 },
+    { key: 'hb_d12',      name: 'heartbeat', params: { level: heartbeatFor(12, false).level }, sec: 0.8 },
+    { key: 'hb_d5',       name: 'heartbeat', params: { level: heartbeatFor(5, false).level }, sec: 0.8 },
     { key: 'lever',       name: 'lever', params: {}, sec: 3.4 },
     { key: 'alarm',       name: 'alarm', params: {}, sec: 2.4 },
     { key: 'scream',      name: 'scream', params: {}, sec: 1.4 },
@@ -1461,9 +1494,14 @@
         this.play('enemyMoan', { gain: 0.95, r: this._rand() });
         this.fx.shakeImpulse = Math.max(this.fx.shakeImpulse, 0.6);
         break;
-      case 'cineDrag':             /* 3 引きずられる */
+      case 'cineDrag':             /* 3 引きずられる（P4.12 で担ぎ運びへ差し替え。互換で残す） */
         this.play('enemyDrag', { gain: 0.95, r: this._rand() });
         this.play('footstep', { gain: 0.55, mat: 'tile', level: 0.7, r: this._rand(), when: 0.22 });
+        break;
+      case 'cineCarry':            /* 3 担ぎ運び（P4.12 項目3）: 耳元の重い足取りと関節の音 */
+        this.play('footstep', { gain: 0.85, mat: 'tile', level: 0.95, r: this._rand() });
+        this.play('enemyJoint', { gain: 0.60, r: this._rand(), when: 0.16 });
+        this.fx.shakeImpulse = Math.max(this.fx.shakeImpulse, 0.22);
         break;
       case 'cellDoor':             /* 4 牢扉の金属音 */
         this.play('cellDoor', { priority: 1, gain: 1.0 });
@@ -1566,6 +1604,9 @@
     this.breathPhase = 0;
     this.pantT = 0;
     this.hbT = 0;
+    this.hbDist = Infinity;      /* P4.12 項目5: 最も近い個体との距離(m) */
+    this.hbBpm = 0;
+    this.hbLevel = 0;
     this.dragAcc = 0;
     this.moanT = 5.0;
     this.jointT = 3.0;
@@ -1912,20 +1953,23 @@
       }
       if (i === 0) { this.dragAcc = st.dragAcc; this.moanT = st.moanT; this.jointT = st.jointT; }
     }
-    if (quiet || nd === Infinity) { this.hbT = 0; return; }
+    if (quiet || nd === Infinity) { this.hbT = 0; this.hbDist = Infinity; return; }
 
-    /* 心拍（最も近い個体との距離で速まる）。
+    /* 心拍（契約 P4.12 項目5「敵との距離で強まる」）。
+       追跡中に限らず HB_START(20m) 以内で鳴り始め、近いほど速く・大きい。
+       壁越しでも距離だけで決める＝「近い」を伝える情報源。
        累積器は発火時にしか減らさない＝毎フレームのレート変更で鳴らなくならない */
-    var want = nearChase || nd < 8.5;
-    if (want) {
-      var bpm = clamp(158 - nd * 3.6, 74, 158);
+    this.hbDist = nd;
+    var hb = heartbeatFor(nd, nearChase);
+    this.hbBpm = hb.bpm;
+    this.hbLevel = hb.level;
+    if (hb.on) {
       this.hbT += dt;
-      var period = 60 / bpm;
+      var period = 60 / hb.bpm;
       if (this.hbT >= period) {
         this.hbT -= period;
         if (this.hbT > period) this.hbT = 0;    /* 大きな dt で溜まりすぎない */
-        var near = clamp(1 - nd / 16, 0.25, 1);
-        this.play('heartbeat', { level: 0.35 + near * 0.6, bus: 'self', priority: nearChase ? 1 : 0 });
+        this.play('heartbeat', { level: hb.level, bus: 'self', priority: nearChase ? 1 : 0 });
       }
     } else {
       this.hbT = 0;
@@ -2028,6 +2072,7 @@
       hidden: this.hidden, errors: this.errors,
       played: this.playedTotal, dropped: this.dropped, voices: this._live.length, peakVoices: this.peakVoices,
       exertion: this.exertion, hbT: this.hbT, stepAcc: this.stepAcc,
+      hbDist: this.hbDist, hbBpm: this.hbBpm, hbLevel: this.hbLevel,
       buzz: this._buzzLevel, buzzTarget: this.buzzTarget, buzzDist: this.buzzDist,
       ambTarget: this.ambTarget, ambRegion: this.ambRegion, breathTarget: this.breathTarget,
       fired: this.fired,
@@ -2056,6 +2101,11 @@
     panFor: panFor,
     /* P4.10: 施設全体に届く絶叫の音量（純関数。機械テストはここを直接検査する） */
     shriekGainAt: shriekGainAt,
+    /* P4.12 項目5: 距離連動の鼓動（純関数。機械テストはここを直接検査する） */
+    heartbeatFor: heartbeatFor,
+    HB_START: HB_START, HB_FULL: HB_FULL,
+    HB_BPM_MIN: HB_BPM_MIN, HB_BPM_MAX: HB_BPM_MAX,
+    HB_LEVEL_MIN: HB_LEVEL_MIN, HB_LEVEL_MAX: HB_LEVEL_MAX, HB_LEVEL_CAP: HB_LEVEL_CAP,
     SHRIEK_MAX_DIST: SHRIEK_MAX_DIST,
     SHRIEK_ATTEN_FLOOR: SHRIEK_ATTEN_FLOOR,
     ATTEN_MAX: ATTEN_MAX,

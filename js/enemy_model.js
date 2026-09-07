@@ -1310,6 +1310,42 @@
     'shL', 'elbL', 'wrL', 'shR', 'elbR', 'wrR',
     'hipL', 'kneeL', 'ankL', 'hipR', 'kneeR', 'ankR'];
 
+  /* ================================================================
+   * P4.12 項目6「敵を大きく」（契約 DESIGN.md §4「P4.12 再プレイ差し戻し」）
+   *
+   *   反転形態（四足）×1.35 ／ 直立形態×1.10。
+   *
+   * 形態遷移の軌道について（再調整の実測メモ）:
+   *   倒れ込みの途中（poseT≒0.35〜0.50）は受け身の腕と跳ねる脚で体の横幅が
+   *   最大になる（実測: 中心から 0.94m）。ここを線形に 1.19 倍すると 1.13m ＝
+   *   幅1マス（2m＝半幅1.0m）の通路の壁を 0.13m 抜ける。
+   *   そこで倍率は poseT に線形で乗せず、**倒れ切ってから太る**曲線にする
+   *   （SCALE_KNEE より前は直立倍率のまま）。倒れ込みの最大幅は 0.94×1.10＝1.03m
+   *   まで抑えられ、四足で疾走する間（半幅 0.52m）は 1.35 倍が丸ごと乗る。
+   *
+   * 天井の低い区画（実測: 歩行可能マスの 7.6% が 2.40〜2.80m）では、直立形態を
+   * そのまま 1.10 倍すると頭が天井を抜ける。マスの天井高で上限を掛け、
+   * 等倍（＝P4.11 までの見え方）より小さくはしない＝「現行より悪化させない」。
+   * ============================================================== */
+  var SCALE_STAND = 1.10;
+  var SCALE_CRAWL = 1.35;
+  var SCALE_KNEE = 0.62;        /* この poseT までは直立倍率のまま（通路の壁抜け対策） */
+  var CEIL_MARGIN = 0.06;       /* 天井とのすき間(m) */
+  var TOP_STAND = 2.52;         /* 等倍の直立形態の頭頂高(m)（髪を除く実測 2.514） */
+  var TOP_CRAWL = 1.24;         /* 等倍の反転形態の最高点(m)（実測 1.233） */
+  var SCALE_RATE = 5.0;         /* 天井上限の追従レート(1/s)。マス跨ぎの段差を均す */
+
+  /** 形態（poseT）だけで決まる契約倍率。天井の事情は入れない純関数 */
+  function scaleForPose(poseT) {
+    var u = clamp((poseT - SCALE_KNEE) / (1 - SCALE_KNEE), 0, 1);
+    return SCALE_STAND + (SCALE_CRAWL - SCALE_STAND) * (u * u * (3 - 2 * u));
+  }
+  /** 等倍モデルの頭頂高（形態で補間）。天井上限の計算に使う */
+  function topForPose(poseT) {
+    var u = clamp(poseT, 0, 1);
+    return TOP_STAND + (TOP_CRAWL - TOP_STAND) * u;
+  }
+
   function blendPose(a, b, u, out) {
     out.hipY = a.hipY + (b.hipY - a.hipY) * u;
     for (var i = 0; i < JOINTS.length; i++) {
@@ -1347,6 +1383,10 @@
     this.groundSnap = true;
     this.facing = 0;
     this.x = 0; this.z = 0; this.floorY = 0;
+    /* P4.12 項目6: 体格倍率。ceilFit=true のとき天井高で上限を掛ける */
+    this.ceilFit = true;
+    this.map = null;                /* 天井高の参照先（placeAt で受け取る） */
+    this.scale = scaleForPose(0);   /* 実際に group へ乗っている倍率 */
     this._pose = blendPose(POSE_STAND, POSE_STAND, 0, {});
     this._tmp = new THREE.Vector3();
     this._amb = { r: 0.02, g: 0.02, b: 0.02 };
@@ -1744,6 +1784,31 @@
 
   /* ---------------- ポーズ適用 ---------------- */
 
+  /**
+   * P4.12 項目6: いま乗せるべき体格倍率。
+   *   contract … 形態だけで決まる契約値（1.10〜1.35）
+   *   ceil     … 今いるマスの天井で許される上限（等倍未満にはしない）
+   * dt を渡すとレート追従（マスを跨ぐ時の段差を均す）、省略すると即座に合わせる。
+   */
+  Enemy.prototype.scaleTarget = function () {
+    var k = scaleForPose(this.poseT);
+    if (!this.ceilFit || !this.map || !this.map.ceilHAt) return k;
+    var col = this.map.colOf(this.x), row = this.map.rowOf(this.z);
+    if (!this.map.inBounds || !this.map.inBounds(col, row)) return k;
+    var room = this.map.ceilHAt(col, row) - CEIL_MARGIN;
+    var lim = room / topForPose(this.poseT);
+    if (lim < 1) lim = 1;                 /* 等倍＝P4.11 までの見え方。これより縮めない */
+    return lim < k ? lim : k;
+  };
+
+  Enemy.prototype._stepScale = function (dt) {
+    var want = this.scaleTarget();
+    if (!(dt > 0)) { this.scale = want; return; }
+    var k = 1 - Math.exp(-SCALE_RATE * dt);
+    this.scale += (want - this.scale) * k;
+    if (Math.abs(want - this.scale) < 1e-4) this.scale = want;
+  };
+
   Enemy.prototype.applyPose = function (u, extra) {
     var p = blendPose(POSE_STAND, POSE_CRAWL, u, this._pose);
     if (extra) extra(p, u);
@@ -1755,6 +1820,8 @@
     n.body.position.y = p.hipY;
     this.group.position.set(this.x, this.floorY, this.z);
     this.group.rotation.y = this.facing;
+    /* P4.12 項目6: 体格倍率は「接地補正の前」に乗せる（後から乗せると足が浮く） */
+    this.group.scale.set(this.scale, this.scale, this.scale);
     this.group.updateMatrixWorld(true);
     if (this.groundSnap) this._snap();
   };
@@ -1877,6 +1944,8 @@
         this.state = (this.transDir > 0) ? 'chase' : 'walk';
       }
     }
+    /* P4.12 項目6: 体格倍率は「ポーズを当てる前」に決める（applyPose が接地補正まで通す） */
+    this._stepScale(dt);
     var self = this, t = this.animTime;
     var st = this.state;
     this.applyPose(this.poseT, function (p, u) {
@@ -1959,7 +2028,9 @@
     var swing = (st === 'walk') ? 0.055 * Math.sin(t / 2.35 * Math.PI * 2)
       : (st === 'chase' ? 0.09 * Math.sin(t / 0.46 * Math.PI * 2) : 0);
     this.skirtRoot.getWorldPosition(_dPos);
-    var room = _dPos.y - this.floorY;
+    /* P4.12 項目6: skirtReach はモデルのローカル長。体格倍率で world 側を割り戻さないと
+       大きくした時に裾が詰まらず床へ潜る（「拡大→接地/垂れ物」の取りこぼし防止） */
+    var room = (_dPos.y - this.floorY) / (this.scale || 1);
     /* 裾は姿勢で詰める（布が床に溜まる見え方）。向きも高さに応じて寝かせる */
     var sc = clamp((room - 0.05) / this.skirtReach, 0.22, 1);
     this.skirtRoot.scale.y = sc;
@@ -2016,8 +2087,10 @@
 
   Enemy.prototype.placeAt = function (x, z, yawRad, map) {
     this.x = x; this.z = z;
+    if (map) this.map = map;                 /* P4.12: 天井高の参照先を覚える */
     this.floorY = map ? map.floorYAt(x, z) : 0;
     if (typeof yawRad === 'number') this.facing = yawRad;
+    this._stepScale(0);
     this.applyPose(this.poseT);
   };
 
@@ -2430,6 +2503,12 @@
 
   ESCAPE.Enemy = Enemy;
   ESCAPE.EnemyPoses = { stand: POSE_STAND, crawl: POSE_CRAWL };
+  /* P4.12 項目6: 体格倍率の契約値と純関数（機械テストはここを直接検査する） */
+  ESCAPE.EnemyScale = {
+    STAND: SCALE_STAND, CRAWL: SCALE_CRAWL, KNEE: SCALE_KNEE,
+    CEIL_MARGIN: CEIL_MARGIN, TOP_STAND: TOP_STAND, TOP_CRAWL: TOP_CRAWL,
+    forPose: scaleForPose, topForPose: topForPose
+  };
 
   /* ================================================================
    * デバッグ配置（P3a: AIなし・その場アニメ。既定は非表示）
@@ -2534,6 +2613,7 @@
           triangles: e.triangles,
           poseT: e.poseT, state: e.state, visible: e.group.visible,
           x: e.x, z: e.z, floorY: e.floorY, rootY: e.group.position.y,
+          scale: e.scale, scaleTarget: e.scaleTarget(), scaleContract: ESCAPE.EnemyScale.forPose(e.poseT),
           ambient: [e._amb.r, e._amb.g, e._amb.b],
           bboxMinY: b.min.y, bboxMaxY: b.max.y,
           height: b.max.y - b.min.y
