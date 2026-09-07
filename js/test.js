@@ -1034,9 +1034,9 @@
     t.ok(done >= 0, '捕獲3回目: 暗転を経て復帰する', st.jail.phase);
     t.ok(st.areaResets === 1, '捕獲3回目: エリアがリセットされる', st.areaResets);
     t.ok(st.captures === 0, '捕獲3回目: 捕獲回数がリセットされる', st.captures);
-    /* 軌跡が残ることは testAreaResetFogAndGhost（実際に歩いた後）で検査する。
-       ここでは一歩も動いていないので残す軌跡が無いことを確かめる。 */
-    t.ok(g.rope.ghosts.length === 0, '捕獲3回目: 一歩も歩いていなければ残す軌跡も無い', g.rope.ghosts.length);
+    /* P4.13: エリアリセットで軌跡（laps）は全消去され1周目からやり直す */
+    t.ok(g.rope.laps.length === 0 && g.rope.lapIndex === 0,
+      '捕獲3回目: エリアリセットで軌跡は全消去され1周目に戻る（P4.13）', g.rope.laps.length);
     var sp = g.map.meta.spawn;
     t.ok(g.player.col() === sp.col && g.player.row() === sp.row, '捕獲3回目: エリア最初のスポーンへ戻る',
       g.player.col() + ',' + g.player.row());
@@ -1305,29 +1305,30 @@
     localStorage.removeItem(SAVE_KEY);
   }
 
-  /** 捕獲でロープ端が結び目になり、スタート復帰 → 結び目まで戻って拾い直すと再接続する */
+  /** P4.13: 捕獲で現在の周の軌跡が確定して残り、スタート復帰後は新しい周をスタートから引き始める
+   *  （旧「結び目を拾い直して再接続」は失効） */
   function testRopeKnotReattach(t, g) {
     g.reset();
     localStorage.removeItem(SAVE_KEY);
     var rope = g.rope, meta = g.map.meta, st = g.stealth;
     var route = routeTo(g, meta.spawn.col, meta.spawn.row, 10, 46);
     walkCells(g, route);
-    var usedAtCapture = rope.used;
     var stackAtCapture = rope.stack.length;
-    var px = g.player.x, pz = g.player.z;
     g.progress.gimmick.key = true;                 /* 進行状態の保持を確かめるための印 */
-    /* 道中で敵に捕まっていても「1回目の捕獲」から検証する（敵の数に依存させない） */
     st.captures = 0;
     var beforeExplored = g.minimap.exploredCount;
-    /* 捕獲前に踏破済みだった「スタートから遠いマス」を1つ控える */
     var farCell = { col: g.player.col(), row: g.player.row() };
 
     t.ok(st.capture() === true, '捕獲: 捕獲が始まる');
-    t.ok(rope.isAttached() === false, '捕獲: ロープが外れる');
-    t.ok(rope.knots.length === 1, '捕獲: ロープ端が床に落ちて結び目になる', rope.knots.length);
-    var knot = rope.knots[0];
-    t.near(Math.hypot(knot.x - px, knot.z - pz), 0, 0.3, '捕獲: 結び目は捕まった位置に落ちる');
-    t.near(knot.used, usedAtCapture, 1e-9, '捕獲: 結び目は繰り出し量を保持する');
+    t.ok(rope.knots.length === 0, 'P4.13: 結び目は落ちない（拾い直しは失効）', rope.knots.length);
+    t.ok(rope.laps.length === 1, 'P4.13: 捕まった周の軌跡が laps に残る', rope.laps.length);
+    var lap = rope.laps[0] || { stack: [] };
+    t.ok(lap.stack.length === stackAtCapture, 'P4.13: 残った軌跡の形は捕獲時のまま',
+      lap.stack.length + ' / ' + stackAtCapture);
+    var endCell = lap.stack[lap.stack.length - 1] || {};
+    t.ok(endCell.col === farCell.col && endCell.row === farCell.row,
+      'P4.13: 軌跡は捕まったマスで途切れる', endCell.col + ',' + endCell.row + ' vs ' + farCell.col + ',' + farCell.row);
+    t.ok(rope.lapIndex === 1, 'P4.13: 2周目に進む', rope.lapIndex);
 
     var done = simUntil(g, function () { return st.jail.phase === 'none'; },
       Math.ceil((g.cinematic ? g.cinematic.totalDur('jail') : 3) / ESCAPE.FIXED_DT) + 400);
@@ -1336,34 +1337,28 @@
       '捕獲: 復帰先はスタート地点（2026-09-03改訂・牢送りは失効）',
       g.player.col() + ',' + g.player.row());
     t.ok(g.progress.gimmick.key === true, '捕獲: 進行状態（鍵）は保持される');
-    /* 【失効】旧「捕獲: 地図の踏破は保持される」（契約 §4 P4.8）は、
-     * P4.10「捕獲のたびに地図を真っ暗にする」で失効した。捕獲で遠方の踏破が消えることを検査する。 */
     t.ok(g.minimap.isExplored(farCell.col, farCell.row) === false,
       '捕獲: 地図の踏破が消える（P4.10改訂・旧「保持される」は失効）',
       farCell.col + ',' + farCell.row + ' explored=' + g.minimap.isExplored(farCell.col, farCell.row) +
       ' / 捕獲前 ' + beforeExplored);
-    t.ok(g.progress.objective() === ESCAPE.PROGRESS_OBJECTIVE.knot,
-      '捕獲: 目的表示が「落ちたロープの結び目へ戻る」になる', g.progress.objective());
+    t.ok(!/結び目/.test(String(g.progress.objective())),
+      'P4.13: 目的表示は結び目へ戻らず通常の目的に戻る', g.progress.objective());
+    t.ok(rope.isAttached() === true && rope.stack.length === 1,
+      'P4.13: 復帰直後は新しい周がスタート（錨）だけの状態で始まる', rope.stack.length);
+    t.near(rope.used, 0, 1e-9, 'P4.13: 復帰直後の周は使用長0');
 
-    /* スタート→結び目はロープなし＝余裕を消費しない */
-    var usedBefore = rope.used;
+    /* 新しい周はスタートから繰り出す（旧「結び目まで戻る間は無消費」は失効） */
     walkCells(g, route);
-    t.near(rope.used, usedBefore, 1e-9, '復帰: 結び目まで戻る間は余裕を消費しない', rope.used);
-    t.ok(rope.nearKnot() !== null, '復帰: 結び目が「調べる」の間合いに入る');
-    t.ok(g.progress.dom.prompt.textContent === ESCAPE.PROGRESS_UI_TEXT.knot ||
-      g.progress._findTarget() !== null,
-      '復帰: プロンプトが「ロープを拾って結ぶ」になる', g.progress.dom.prompt.textContent);
-    var handled = g.progress.onInteract();
-    t.ok(handled === true && rope.isAttached() === true, '復帰: 拾って結ぶと再接続する');
-    t.ok(rope.knots.length === 0, '復帰: 結び目は消える');
-    t.near(rope.used, usedAtCapture, 1e-9, '復帰: 繰り出し量が捕獲時のまま復元される', rope.used);
-    t.ok(rope.stack.length === stackAtCapture, '復帰: 敷いたロープの形も復元される',
-      rope.stack.length + ' / ' + stackAtCapture);
+    t.ok(rope.used > 0 && rope.stack.length === stackAtCapture,
+      'P4.13: 復帰後は新しい周がスタートから繰り出される', rope.used + ' / ' + rope.stack.length);
+    t.ok(rope.laps.length === 1 && rope.laps[0].stack.length === stackAtCapture,
+      'P4.13: 過去の周は固定のまま（現在の周の繰り出しで変わらない）');
+    t.ok(rope.pickUp() === false && rope.nearKnot() === null, 'P4.13: 結び目API は失効の残骸（何もしない）');
     g.reset();
     localStorage.removeItem(SAVE_KEY);
   }
 
-  /** 3回目の捕獲（エリアリセット）で、地図の踏破は消え・ロープの軌跡は世界に残る */
+  /** 3回目の捕獲（エリアリセット）で、地図の踏破は消え・軌跡（laps）も全消去される（P4.13改訂） */
   function testAreaResetFogAndGhost(t, g) {
     g.reset();
     localStorage.removeItem(SAVE_KEY);
@@ -1387,9 +1382,9 @@
     t.ok(mm.exploredCount < explored, 'エリアリセット: 地図の踏破が消える（契約）',
       mm.exploredCount + ' / ' + explored);
     t.ok(mm.knowsZone('A') === true, 'エリアリセット: 銘板で得た区画名は残る（知識は失われない）');
-    t.ok(rope.ghosts.length === 1, 'エリアリセット: ロープの軌跡が世界に残る', rope.ghosts.length);
-    t.ok(rope.ghosts[0].length === cells, 'エリアリセット: 残った軌跡の形が一致する',
-      rope.ghosts[0].length + ' / ' + cells);
+    t.ok(rope.laps.length === 0 && rope.lapIndex === 0,
+      'エリアリセット: 軌跡は全消去され1周目からやり直す（P4.13改訂・旧「世界に残る」は失効）',
+      rope.laps.length + ' laps, lapIndex ' + rope.lapIndex);
     t.near(rope.used, 0, 1e-9, 'エリアリセット: ロープは巻き取られて再スタートする');
     t.ok(rope.isAttached() === true && rope.knots.length === 0,
       'エリアリセット: 結び直された状態で再開する');
@@ -1397,7 +1392,7 @@
     var sp = meta.spawn;
     t.ok(g.player.col() === sp.col && g.player.row() === sp.row, 'エリアリセット: 位置はエリア最初へ戻る');
     g.reset();
-    t.ok(g.rope.ghosts.length === 0, '復帰: game.reset() で軌跡も初期化される', g.rope.ghosts.length);
+    t.ok(g.rope.laps.length === 0 && g.rope.lapIndex === 0, '復帰: game.reset() で軌跡も初期化される', g.rope.laps.length);
     localStorage.removeItem(SAVE_KEY);
   }
 
@@ -2113,12 +2108,7 @@
     delta('doorRoar', function () { interactAt(g, bulkG.col, bulkG.row); }, '隔壁の解錠（轟音）');
     t.ok(g.progress.gimmick.doorOpen === true, '音響フック: 隔壁が実際に開いている（前提）');
     /* 【P4.12 失効】「ロープが張った瞬間の軋み(handleCreak)」。長さ制限の撤廃で鳴らなくなった。
-       ロープ側の音は「赤に入った瞬間の警告(terminalErr)」と結び目の拾い上げ(pickup)だけになる。 */
-    g.reset();
-    delta('pickup', function () {
-      g.stealth.capture();
-      g.rope.pickUp();
-    }, '結び目を拾って結ぶ');
+       【P4.13 失効】結び目の拾い上げ(pickup)。ロープ側の音は「赤に入った瞬間の警告(terminalErr)」だけになる。 */
     g.reset();
 
     /* メモ・チェックポイント */
@@ -3470,8 +3460,8 @@
     var el = document.getElementById('rope-hud');
     t.ok(!!el, 'P4.9: ロープHUDのDOMが結線されている');
     /* 【P4.12 改訂】旧「ロープ 余裕 {M}m」は失効。ラベルだけ＋色で示す。 */
-    t.ok(g.progress.ropeHudText() === 'ロープ',
-      'P4.12: HUD文言は `ロープ` のラベルのみ（正文・メートル表示は失効）', g.progress.ropeHudText());
+    t.ok(g.progress.ropeHudText() === '軌跡',
+      'P4.13: HUD文言は `軌跡` のラベルのみ（P4.12の `ロープ` から改訂・メートル表示は失効）', g.progress.ropeHudText());
     t.ok(!/\d/.test(g.progress.ropeHudText()) && g.progress.ropeHudText().indexOf('m') < 0,
       'P4.12: HUDに数値（余裕のメートル）を出さない', g.progress.ropeHudText());
     t.ok(['green', 'yellow', 'red', 'loose'].indexOf(g.progress.ropeHudState()) >= 0,
@@ -4293,8 +4283,8 @@
     if (g.rope) {
       t.near(g.rope.used, 0, 1e-9, '復帰: ロープの繰り出しがゼロ', g.rope.used);
       t.ok(g.rope.stack.length === 1, '復帰: ロープが錨まで巻き取られている', g.rope.stack.length);
-      t.ok(g.rope.isAttached() && g.rope.knots.length === 0 && g.rope.ghosts.length === 0,
-        '復帰: 結び目・古い軌跡が残っていない');
+      t.ok(g.rope.isAttached() && g.rope.knots.length === 0 && g.rope.laps.length === 0 && g.rope.lapIndex === 0,
+        '復帰: 過去の周の軌跡が残っていない（P4.13）');
       t.ok(g.rope.taut === undefined && g.rope.blocks === 0,
         '復帰: 前進不可のカウンタがゼロ（P4.12: 「張り」状態そのものが失効）', g.rope.blocks);
     }

@@ -320,6 +320,7 @@
     this.group = new THREE.Group();
     this.disposables = [];
     this.flickers = [];
+    this.sensorLamps = [];                  /* P4.13: 点滅する表示灯（InstancedMesh 1体） */
     this.stats = { triangles: 0, drawGroups: 0, fixtures: 0, buildMs: 0 };
     this._build();
   }
@@ -1652,6 +1653,7 @@
     /* センサー */
     var sen = meta.sensors || [];
     for (var s = 0; s < sen.length; s++) this._sensor(B, sen[s].col, sen[s].row, shader);
+    this._buildSensorLamps();
     /* 板 */
     var bd = meta.boards || [];
     for (var b = 0; b < bd.length; b++) this._board(B, bd[b].col, bd[b].row, shader);
@@ -1719,7 +1721,13 @@
     /* 表示灯。筐体の前面から確実に出す（暗い区画でも赤い点として見える） */
     B.lamp.box(fx - n[0] * 0.10, 1.12, fz - n[2] * 0.10,
       (along === 'z') ? 0.07 : 0.09, 0.09, (along === 'z') ? 0.09 : 0.07, 3,
-      function () { return [1.0, 0.25, 0.22]; });
+      function () { return [0.42, 0.09, 0.08]; });
+    /* P4.13: 点滅する表示灯の本体（焼き込みの上に重ねる。update() で明滅） */
+    this.sensorLamps.push({
+      x: fx - n[0] * 0.10, y: this.map.cellFloorY(col, row) + 1.12, z: fz - n[2] * 0.10,
+      sx: (along === 'z') ? 0.076 : 0.096, sz: (along === 'z') ? 0.096 : 0.076,
+      phase: ((col * 7 + row * 13) % 10) / 10
+    });
     /* 感知ビーム。通路を横切る細い赤い線＝「歩けば目視で気づいて回避できる見た目」（契約 §4）。
        当たり判定は持たない（走って横切ると警報＝ステルス側の判定） */
     /* ビームは壁から通路を横切る向き（＝法線 n の軸）に張る */
@@ -2578,13 +2586,46 @@
     return flickerLevel(e.pattern, e.phase, t);
   };
 
+  /* P4.13: センサー表示灯を InstancedMesh 1体にまとめる（ドローコール+1のみ）。暗所で
+     6m先から読める自発光の赤。周囲は照らさない（点光源なし）。 */
+  World.prototype._buildSensorLamps = function () {
+    var L = this.sensorLamps;
+    if (!L.length || typeof THREE.InstancedMesh !== 'function') return;
+    var geo = this._track(new THREE.BoxGeometry(1, 0.096, 1));
+    var mat = this._track(new THREE.MeshBasicMaterial({ color: 0xffffff, fog: true }));
+    var mesh = new THREE.InstancedMesh(geo, mat, L.length);
+    var m4 = new THREE.Matrix4(), c = new THREE.Color();
+    for (var i = 0; i < L.length; i++) {
+      m4.makeScale(L[i].sx, 1, L[i].sz);
+      m4.setPosition(L[i].x, L[i].y, L[i].z);
+      mesh.setMatrixAt(i, m4);
+      mesh.setColorAt(i, c.setRGB(1.0, 0.25, 0.22));
+    }
+    mesh.instanceMatrix.needsUpdate = true;
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    this._sensorMesh = mesh;
+    this.group.add(mesh);
+  };
+
   World.prototype.update = function (t) {
     for (var i = 0; i < this.flickers.length; i++) {
       var e = this.flickers[i];
       var lvl = flickerLevel(e.pattern, e.phase, t);
       for (var m = 0; m < e.mats.length; m++) e.mats[m].color.setScalar(lvl);
     }
+    /* P4.13: センサー表示灯の点滅（約1.25Hz、点灯55%）。位相はマスごとにずらす */
+    var sm = this._sensorMesh;
+    if (sm && sm.instanceColor) {
+      var L = this.sensorLamps, c = SENSOR_TMP_COLOR;
+      for (var k = 0; k < L.length; k++) {
+        var ph = (t * 1.25 + L[k].phase) % 1;
+        var on = ph < 0.55;
+        sm.setColorAt(k, on ? c.setRGB(1.0, 0.25, 0.22) : c.setRGB(0.30, 0.06, 0.05));
+      }
+      sm.instanceColor.needsUpdate = true;
+    }
   };
+  var SENSOR_TMP_COLOR = new THREE.Color();
 
   World.prototype.dispose = function () {
     for (var i = 0; i < this.disposables.length; i++) {
