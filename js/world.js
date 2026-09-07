@@ -2784,8 +2784,55 @@
       open.slice(0, 8).join(' ') || (Object.keys(need).length + '面を検査'));
   }
 
+  /** P4.11 項目7「質感を一回り上げる」: 解像度と細部の量を数値で固定する */
+  function testP411TextureQuality(t, g) {
+    var TX = ESCAPE.Textures;
+    if (!t.ok(!!TX && !!TX.sizeOf, 'P4.11 質感: テクスチャの計測口がある')) return;
+    /* 契約「壁1024・床1024」。壁は 2m x 3m なので 1024 x 1536（＝512 px/m で床と同密度） */
+    var walls = ['wall', 'wall2', 'wall3', 'wallPaint', 'wallMetal'];
+    var badW = [];
+    for (var i = 0; i < walls.length; i++) {
+      var s = TX.sizeOf(walls[i]);
+      if (s.w !== 1024 || s.h !== 1536) badW.push(walls[i] + '=' + s.w + 'x' + s.h);
+    }
+    t.ok(badW.length === 0, 'P4.11 質感: 壁テクスチャは 1024 x 1536（契約「壁1024」）',
+      badW.join(' ') || walls.length + '種');
+    var floors = ['floor', 'floorTile', 'floorWet', 'floorMetal'];
+    var badF = [];
+    for (var j = 0; j < floors.length; j++) {
+      var s2 = TX.sizeOf(floors[j]);
+      if (s2.w !== 1024 || s2.h !== 1024) badF.push(floors[j] + '=' + s2.w + 'x' + s2.h);
+    }
+    t.ok(badF.length === 0, 'P4.11 質感: 床テクスチャは 1024 x 1024（契約「床1024」）',
+      badF.join(' ') || floors.length + '種');
+    t.ok(TX.sizeOf('ceiling').w >= 768, 'P4.11 質感: 天井も解像度を上げてある（染みが読める）',
+      TX.sizeOf('ceiling').w + 'px');
+    /* 同じ面積に載る細部の総量。P4.10 時点の実測は 壁 3.1〜3.9 / 床 1.8〜2.3 だった。
+       解像度2倍＋汚れ/剥落/擦れ/擬似スペキュラの追加で 3〜4倍になっている。 */
+    var thin = [];
+    for (var k = 0; k < walls.length; k++) {
+      var d = TX.detail(walls[k]);
+      if (d.total < 8.0) thin.push(walls[k] + '=' + d.total.toFixed(1));
+    }
+    t.ok(thin.length === 0, 'P4.11 質感: 壁の細部の総量が P4.10 の2倍以上（8.0以上）',
+      thin.join(' ') || '全' + walls.length + '種');
+    var thinF = [];
+    for (var m = 0; m < floors.length; m++) {
+      var d2 = TX.detail(floors[m]);
+      if (d2.total < 5.0) thinF.push(floors[m] + '=' + d2.total.toFixed(1));
+    }
+    t.ok(thinF.length === 0, 'P4.11 質感: 床の細部の総量が P4.10 の2倍以上（5.0以上）',
+      thinF.join(' ') || '全' + floors.length + '種');
+    /* GPU予算は青天井にしない（実機のためのガード。触るつまみは Textures.setScale） */
+    var b = TX.budget();
+    t.ok(b.gpuMB < 96, 'P4.11 質感: テクスチャのGPU見積りが上限内（mipmap込み）',
+      b.gpuMB.toFixed(1) + 'MB / ' + b.mpx.toFixed(2) + 'MPx');
+    if (g) { /* 参照のみ */ }
+  }
+
   ESCAPE.__extraSuites = ESCAPE.__extraSuites || [];
-  ESCAPE.__extraSuites.push(testP411FootprintCoverage, testP411FurnitureShellClosed);
+  ESCAPE.__extraSuites.push(testP411FootprintCoverage, testP411FurnitureShellClosed,
+    testP411TextureQuality);
 
   World.Builder = Builder;
   World.buildMesh = buildMesh;

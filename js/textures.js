@@ -33,8 +33,100 @@
   }
   function clamp255(v) { return v < 0 ? 0 : (v > 255 ? 255 : v); }
 
-  /** ピクセル単位のざらつき（±amt）。alpha は触らない */
+  /* ================================================================
+   * P4.11 項目7「質感を一回り上げる」の土台
+   * 壁 1024 x 1536・床 1024 x 1024（＝512 px/m。従来の2倍）。
+   * 既存の描画コードは 512 px/m 系の座標で書かれているので、キャンバスだけ
+   * TEX_S 倍にして ctx.scale() を掛ける＝描画コードは論理座標のまま使い回し、
+   * その上に「実ピクセル解像度でしか出ない細部」（1pxの粒・細い擦り傷）を重ねる。
+   * ============================================================== */
+  var TEX_S = 2;
+
+  /** 論理サイズ w x h のテクスチャを TEX_S 倍の実解像度で作る */
+  function makeTex(w, h) {
+    var c = makeCanvas(w * TEX_S, h * TEX_S);
+    var ctx = c.getContext('2d');
+    ctx.scale(TEX_S, TEX_S);
+    return { c: c, ctx: ctx };
+  }
+  /** 実ピクセル空間で描く（論理座標のスケールを一時的に外す） */
+  function pxSpace(ctx, fn) {
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    fn(ctx.canvas.width, ctx.canvas.height);
+    ctx.restore();
+  }
+  /** 実ピクセルの微粒子。至近距離（1m）で「汚れの粒」が読めるのはこれ */
+  function fineGrit(ctx, n, rand, css) {
+    pxSpace(ctx, function (w, h) {
+      ctx.fillStyle = css;
+      for (var i = 0; i < n; i++) ctx.fillRect((rand() * w) | 0, (rand() * h) | 0, 1, 1);
+    });
+  }
+  /** 擦れ傷。1px幅の細い線を ang 方向へ散らす（人や台車が擦った跡） */
+  function scuff(ctx, n, rand, css, ang, len) {
+    pxSpace(ctx, function (w, h) {
+      ctx.strokeStyle = css;
+      ctx.lineWidth = 1;
+      for (var i = 0; i < n; i++) {
+        var x = rand() * w, y = rand() * h;
+        var a = ang + (rand() - 0.5) * 0.55;
+        var L = len * (0.25 + rand() * 1.6);
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        ctx.lineTo(x + Math.cos(a) * L, y + Math.sin(a) * L);
+        ctx.stroke();
+      }
+    });
+  }
+  /** 塗装の剥落。下地の色が出る不定形の斑＋縁のめくれ */
+  function peel(ctx, x, y, r, rand, baseCss, edgeCss) {
+    ctx.beginPath();
+    for (var i = 0; i <= 14; i++) {
+      var a = i / 14 * Math.PI * 2, rr = r * (0.5 + rand() * 0.75);
+      var qx = x + Math.cos(a) * rr, qy = y + Math.sin(a) * rr;
+      if (i === 0) ctx.moveTo(qx, qy); else ctx.lineTo(qx, qy);
+    }
+    ctx.closePath();
+    ctx.fillStyle = baseCss; ctx.fill();
+    ctx.strokeStyle = edgeCss; ctx.lineWidth = 1.6; ctx.stroke();
+  }
+  /**
+   * 方向性のある擬似スペキュラ。ang 方向へ細長く伸びる淡い反射を n 本置く。
+   * 「床が濡れて／磨り減って光を長く引く」見え方＝平面のフラットさを壊す。
+   */
+  function sheen(ctx, W, H, n, rand, ang, css) {
+    for (var i = 0; i < n; i++) {
+      var cx = rand() * W, cy = rand() * H;
+      var len = W * (0.55 + rand() * 0.8), wid = 16 + rand() * 62;
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate(ang + (rand() - 0.5) * 0.25);
+      var g2 = ctx.createLinearGradient(0, -wid / 2, 0, wid / 2);
+      g2.addColorStop(0, css.replace('%A%', '0'));
+      g2.addColorStop(0.5, css.replace('%A%', (0.05 + rand() * 0.08).toFixed(3)));
+      g2.addColorStop(1, css.replace('%A%', '0'));
+      var g3 = ctx.createLinearGradient(-len / 2, 0, len / 2, 0);
+      g3.addColorStop(0, 'rgba(0,0,0,0)');
+      g3.addColorStop(0.5, 'rgba(0,0,0,1)');
+      g3.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.fillStyle = g2;
+      /* 縦方向の減衰だけだと帯が切れないので、両端をマスクで落とす */
+      ctx.beginPath();
+      for (var s = -len / 2; s <= len / 2; s += len / 24) {
+        var fall = 1 - Math.abs(s) / (len / 2);
+        ctx.rect(s, -wid / 2 * fall, len / 24 + 1, wid * fall);
+      }
+      ctx.fill();
+      ctx.restore();
+      if (g3) { /* 参照のみ */ }
+    }
+  }
+
+  /** ピクセル単位のざらつき（±amt）。alpha は触らない。キャンバス全域に掛ける */
   function grain(ctx, w, h, amt, rand) {
+    w = ctx.canvas.width; h = ctx.canvas.height;
     var img = ctx.getImageData(0, 0, w, h);
     var d = img.data;
     for (var i = 0; i < d.length; i += 4) {
@@ -107,7 +199,7 @@
   /* 壁: 白タイル（2m x 3m / 512 x 768）                                */
   /* ================================================================ */
   function texWall(seed) {
-    var W = 512, H = 768, c = makeCanvas(W, H), ctx = c.getContext('2d');
+    var W = 512, H = 768, T2 = makeTex(W, H), c = T2.c, ctx = T2.ctx;
     var rand = rng(seed || 1337);
 
     /* 下地モルタル */
@@ -265,6 +357,35 @@
       ctx.fillStyle = 'rgba(96,58,30,' + (0.25 + rand() * 0.4) + ')';
       ctx.fillRect(rand() * W, H - 44 + rand() * 34, 3 + rand() * 20, 2 + rand() * 8);
     }
+
+    /* ---- P4.11 項目7: 質感の上乗せ（1024x1536で読める細部） ---- */
+    /* 手が触れる腰高の帯だけ艶が出る（人の動線が壁に残る） */
+    var hb = ctx.createLinearGradient(0, H - 350, 0, H - 150);
+    hb.addColorStop(0, 'rgba(214,210,200,0)');
+    hb.addColorStop(0.5, 'rgba(214,210,200,0.11)');
+    hb.addColorStop(1, 'rgba(214,210,200,0)');
+    ctx.fillStyle = hb; ctx.fillRect(0, H - 350, W, 200);
+    /* 台車・担架がぶつかった擦り傷（横方向・腰高に集中） */
+    scuff(ctx, 520, rand, 'rgba(64,60,54,0.22)', 0, 34);
+    pxSpace(ctx, function (pw, ph) {
+      ctx.strokeStyle = 'rgba(52,50,44,0.30)'; ctx.lineWidth = 1;
+      for (var i = 0; i < 260; i++) {
+        var y = ph * 0.52 + (rand() - 0.5) * ph * 0.16, x = rand() * pw;
+        ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + 20 + rand() * 90, y + (rand() - 0.5) * 4); ctx.stroke();
+      }
+    });
+    /* 飛沫（薬品・血の古い染み）。粒が散る＝面が均一に見えない */
+    for (var spl = 0; spl < 26; spl++) {
+      var sx3 = rand() * W, sy3 = rand() * H * 0.85;
+      var col3 = (rand() < 0.35) ? '86,40,32' : '92,84,52';
+      for (var dp = 0; dp < 22; dp++) {
+        var rr3 = rand() * 34;
+        ctx.fillStyle = 'rgba(' + col3 + ',' + (0.10 + rand() * 0.30).toFixed(2) + ')';
+        ctx.fillRect(sx3 + (rand() - 0.5) * rr3, sy3 + (rand() - 0.5) * rr3, 1 + rand() * 3, 1 + rand() * 3);
+      }
+    }
+    fineGrit(ctx, 30000, rand, 'rgba(58,56,50,0.22)');
+    fineGrit(ctx, 11000, rand, 'rgba(198,196,188,0.16)');
     speckle(ctx, W, H, 5200, rand, 'rgba(58,56,50,0.30)');
     speckle(ctx, W, H, 2600, rand, 'rgba(186,184,176,0.22)');
     grain(ctx, W, H, 8, rand);
@@ -275,7 +396,7 @@
   /* 床: リノリウム（2m x 2m / 512 x 512）                              */
   /* ================================================================ */
   function texFloor() {
-    var W = 512, H = 512, c = makeCanvas(W, H), ctx = c.getContext('2d');
+    var W = 512, H = 512, T2 = makeTex(W, H), c = T2.c, ctx = T2.ctx;
     var rand = rng(20240830);
 
     ctx.fillStyle = '#8b9088'; ctx.fillRect(0, 0, W, H);
@@ -363,6 +484,17 @@
       ctx.arc(rand() * W, rand() * H, 20 + rand() * 70, 0, Math.PI * 2);
       ctx.stroke();
     }
+
+    /* ---- P4.11 項目7: 方向性のある擬似スペキュラ＋通路の継ぎ目＋擦れの粒 ---- */
+    sheen(ctx, W, H, 4, rand, 0, 'rgba(228,234,236,%A%)');
+    sheen(ctx, W, H, 2, rand, 1.5708, 'rgba(228,234,236,%A%)');
+    /* マス境界＝通路の継ぎ目（2mごと）。影と受け光の2本で段差に見せる */
+    ctx.fillStyle = 'rgba(26,28,26,0.50)'; ctx.fillRect(0, 0, W, 3); ctx.fillRect(0, 0, 3, H);
+    ctx.fillStyle = 'rgba(198,202,196,0.16)'; ctx.fillRect(0, 3, W, 2); ctx.fillRect(3, 0, 2, H);
+    scuff(ctx, 1500, rand, 'rgba(212,218,214,0.10)', 0, 52);
+    scuff(ctx, 900, rand, 'rgba(40,42,38,0.14)', 0, 40);
+    fineGrit(ctx, 30000, rand, 'rgba(44,44,38,0.24)');
+    fineGrit(ctx, 10000, rand, 'rgba(196,200,192,0.14)');
     speckle(ctx, W, H, 6000, rand, 'rgba(46,46,40,0.30)');
     grain(ctx, W, H, 9, rand);
     return c;
@@ -372,7 +504,7 @@
   /* 天井: システム天井（2m x 2m = 0.5m角パネル 4x4 / 384 x 384）        */
   /* ================================================================ */
   function texCeiling() {
-    var W = 384, H = 384, c = makeCanvas(W, H), ctx = c.getContext('2d');
+    var W = 384, H = 384, T2 = makeTex(W, H), c = T2.c, ctx = T2.ctx;
     var rand = rng(99117);
     ctx.fillStyle = '#7c837e'; ctx.fillRect(0, 0, W, H);
     var PS = 96;
@@ -415,6 +547,19 @@
     ctx.fillStyle = 'rgba(48,52,50,0.55)';
     for (var gx2 = 0; gx2 <= W; gx2 += PS) ctx.fillRect(gx2 + 3, 0, 2, H);
     for (var gy2 = 0; gy2 <= H; gy2 += PS) ctx.fillRect(0, gy2 + 3, W, 2);
+
+    /* ---- P4.11 項目7: 天井の染み（漏水が広がった輪＋芯）と埃の粒 ---- */
+    for (var stn = 0; stn < 7; stn++) {
+      var cx4 = rand() * W, cy4 = rand() * H, r4 = 22 + rand() * 62;
+      blot(ctx, cx4, cy4, r4, 'rgba(108,86,44,0.30)');
+      ctx.strokeStyle = 'rgba(84,64,30,0.26)'; ctx.lineWidth = 2;
+      for (var rg = 0; rg < 3; rg++) {
+        ctx.beginPath(); ctx.arc(cx4, cy4, r4 * (0.38 + rg * 0.24), 0, Math.PI * 2); ctx.stroke();
+      }
+      blot(ctx, cx4, cy4, r4 * 0.32, 'rgba(52,38,18,0.34)');
+    }
+    fineGrit(ctx, 22000, rand, 'rgba(48,50,46,0.22)');
+    fineGrit(ctx, 7000, rand, 'rgba(190,192,186,0.12)');
     speckle(ctx, W, H, 3000, rand, 'rgba(52,54,50,0.28)');
     grain(ctx, W, H, 7, rand);
     return c;
@@ -1219,7 +1364,7 @@
 
   /** 壁: 塗装した石膏・モルタル（2m x 3m / 512 x 768）。事務区画・記録区画・拘束区画向け */
   function texWallPaint() {
-    var W = 512, H = 768, c = makeCanvas(W, H), ctx = c.getContext('2d');
+    var W = 512, H = 768, T2 = makeTex(W, H), c = T2.c, ctx = T2.ctx;
     var rand = rng(771103);
     ctx.fillStyle = '#a6a49c'; ctx.fillRect(0, 0, W, H);
     /* ローラー塗りのムラ（縦方向の帯） */
@@ -1313,6 +1458,25 @@
       ctx.fillStyle = 'rgba(102,62,32,' + (0.22 + rand() * 0.38) + ')';
       ctx.fillRect(rand() * W, H - 42 + rand() * 32, 3 + rand() * 18, 2 + rand() * 7);
     }
+
+    /* ---- P4.11 項目7: 塗装の剥落・擦れ・にじみ ---- */
+    for (var pk = 0; pk < 13; pk++) {
+      var pr2 = 8 + rand() * 22;
+      peel(ctx, rand() * W, 60 + rand() * (H - 200), pr2, rand,
+        'rgba(134,128,116,0.62)', 'rgba(198,194,184,0.42)');
+    }
+    /* 剥落の縁から下へ流れる汚れ */
+    for (var dr3 = 0; dr3 < 18; dr3++) {
+      var dx3 = rand() * W, dy3 = rand() * H * 0.7, dl = 40 + rand() * 200;
+      var dg = ctx.createLinearGradient(0, dy3, 0, dy3 + dl);
+      dg.addColorStop(0, 'rgba(72,66,54,0.26)');
+      dg.addColorStop(1, 'rgba(72,66,54,0)');
+      ctx.fillStyle = dg; ctx.fillRect(dx3, dy3, 3 + rand() * 10, dl);
+    }
+    scuff(ctx, 700, rand, 'rgba(78,74,66,0.20)', 0, 40);
+    scuff(ctx, 260, rand, 'rgba(206,202,192,0.14)', 1.57, 26);
+    fineGrit(ctx, 26000, rand, 'rgba(56,54,48,0.22)');
+    fineGrit(ctx, 8000, rand, 'rgba(190,188,180,0.14)');
     speckle(ctx, W, H, 5000, rand, 'rgba(60,58,52,0.28)');
     grain(ctx, W, H, 8, rand);
     return c;
@@ -1320,7 +1484,7 @@
 
   /** 壁: リベット留めの鋼板（2m x 3m / 512 x 768）。機械区画向け */
   function texWallMetal() {
-    var W = 512, H = 768, c = makeCanvas(W, H), ctx = c.getContext('2d');
+    var W = 512, H = 768, T2 = makeTex(W, H), c = T2.c, ctx = T2.ctx;
     var rand = rng(410889);
     ctx.fillStyle = '#6f757a'; ctx.fillRect(0, 0, W, H);
     /* 圧延の縦目 */
@@ -1367,6 +1531,21 @@
     var gt2 = ctx.createLinearGradient(0, 0, 0, 80);
     gt2.addColorStop(0, 'rgba(16,20,22,0.40)'); gt2.addColorStop(1, 'rgba(16,20,22,0)');
     ctx.fillStyle = gt2; ctx.fillRect(0, 0, W, 80);
+
+    /* ---- P4.11 項目7: 鋼板の擦れ・打痕・錆の粒 ---- */
+    scuff(ctx, 1400, rand, 'rgba(30,34,38,0.22)', 0, 46);
+    scuff(ctx, 700, rand, 'rgba(206,214,220,0.14)', 0, 60);
+    for (var dnt = 0; dnt < 20; dnt++) {
+      var dx4 = rand() * W, dy4 = rand() * H, dr4 = 8 + rand() * 22;
+      blot(ctx, dx4, dy4, dr4, 'rgba(18,22,26,0.40)');
+      ctx.fillStyle = 'rgba(210,218,224,0.14)';
+      ctx.fillRect(dx4 - dr4 * 0.5, dy4 + dr4 * 0.45, dr4, 2);
+    }
+    for (var rs = 0; rs < 14; rs++) {
+      rustRun(ctx, rand() * W, rand() * H * 0.55, 5 + rand() * 12, 60 + rand() * 240, rand, 0.9);
+    }
+    fineGrit(ctx, 30000, rand, 'rgba(38,42,46,0.24)');
+    fineGrit(ctx, 9000, rand, 'rgba(196,206,214,0.14)');
     speckle(ctx, W, H, 6800, rand, 'rgba(44,48,52,0.32)');
     speckle(ctx, W, H, 2400, rand, 'rgba(198,206,212,0.18)');
     grain(ctx, W, H, 9, rand);
@@ -1375,7 +1554,7 @@
 
   /** 床: 白タイル（2m x 2m / 512 x 512・0.25m角）。実験区画向け */
   function texFloorTile() {
-    var W = 512, H = 512, c = makeCanvas(W, H), ctx = c.getContext('2d');
+    var W = 512, H = 512, T2 = makeTex(W, H), c = T2.c, ctx = T2.ctx;
     var rand = rng(556677);
     ctx.fillStyle = '#8d8d86'; ctx.fillRect(0, 0, W, H);
     var TS = 64;
@@ -1434,6 +1613,17 @@
       tg.addColorStop(0, 'rgba(56,54,44,0.20)'); tg.addColorStop(1, 'rgba(56,54,44,0)');
       ctx.fillStyle = tg; ctx.fillRect(bx2 - br2 * 0.4, by2, br2 * 0.8, br2 * 1.2);
     }
+
+    /* ---- P4.11 項目7: 方向性のある擬似スペキュラ＋通路の継ぎ目＋擦れの粒 ---- */
+    sheen(ctx, W, H, 4, rand, 0, 'rgba(236,240,240,%A%)');
+    sheen(ctx, W, H, 2, rand, 1.5708, 'rgba(236,240,240,%A%)');
+    /* マス境界＝通路の継ぎ目（2mごと）。影と受け光の2本で段差に見せる */
+    ctx.fillStyle = 'rgba(26,28,26,0.50)'; ctx.fillRect(0, 0, W, 3); ctx.fillRect(0, 0, 3, H);
+    ctx.fillStyle = 'rgba(198,202,196,0.16)'; ctx.fillRect(0, 3, W, 2); ctx.fillRect(3, 0, 2, H);
+    scuff(ctx, 1500, rand, 'rgba(212,218,214,0.10)', 0, 52);
+    scuff(ctx, 900, rand, 'rgba(40,42,38,0.14)', 0, 40);
+    fineGrit(ctx, 30000, rand, 'rgba(42,42,36,0.24)');
+    fineGrit(ctx, 10000, rand, 'rgba(206,210,204,0.14)');
     speckle(ctx, W, H, 6000, rand, 'rgba(44,44,38,0.28)');
     grain(ctx, W, H, 8, rand);
     return c;
@@ -1441,7 +1631,7 @@
 
   /** 床: 湿ったコンクリート（2m x 2m / 512 x 512）。検体区画向け */
   function texFloorWet() {
-    var W = 512, H = 512, c = makeCanvas(W, H), ctx = c.getContext('2d');
+    var W = 512, H = 512, T2 = makeTex(W, H), c = T2.c, ctx = T2.ctx;
     var rand = rng(313373);
     ctx.fillStyle = '#71766f'; ctx.fillRect(0, 0, W, H);
     speckle(ctx, W, H, 22000, rand, 'rgba(96,102,94,0.45)');
@@ -1482,6 +1672,17 @@
       ctx.stroke();
     }
     /* ひび */
+
+    /* ---- P4.11 項目7: 方向性のある擬似スペキュラ＋通路の継ぎ目＋擦れの粒 ---- */
+    sheen(ctx, W, H, 4, rand, 0, 'rgba(200,214,220,%A%)');
+    sheen(ctx, W, H, 2, rand, 1.5708, 'rgba(200,214,220,%A%)');
+    /* マス境界＝通路の継ぎ目（2mごと）。影と受け光の2本で段差に見せる */
+    ctx.fillStyle = 'rgba(26,28,26,0.50)'; ctx.fillRect(0, 0, W, 3); ctx.fillRect(0, 0, 3, H);
+    ctx.fillStyle = 'rgba(198,202,196,0.16)'; ctx.fillRect(0, 3, W, 2); ctx.fillRect(3, 0, 2, H);
+    scuff(ctx, 1500, rand, 'rgba(212,218,214,0.10)', 0, 52);
+    scuff(ctx, 900, rand, 'rgba(40,42,38,0.14)', 0, 40);
+    fineGrit(ctx, 30000, rand, 'rgba(38,40,36,0.26)');
+    fineGrit(ctx, 10000, rand, 'rgba(178,190,192,0.12)');
     for (var cr = 0; cr < 8; cr++) crack(ctx, rand() * W, rand() * H, 70 + rand() * 180, rand() * 6.28, rand, 0);
     grain(ctx, W, H, 9, rand);
     return c;
@@ -1489,7 +1690,7 @@
 
   /** 床: 縞鋼板（2m x 2m / 512 x 512）。機械区画向け＝足音が変わる床 */
   function texFloorMetal() {
-    var W = 512, H = 512, c = makeCanvas(W, H), ctx = c.getContext('2d');
+    var W = 512, H = 512, T2 = makeTex(W, H), c = T2.c, ctx = T2.ctx;
     var rand = rng(902244);
     ctx.fillStyle = '#6b7076'; ctx.fillRect(0, 0, W, H);
     speckle(ctx, W, H, 14000, rand, 'rgba(96,102,108,0.40)');
@@ -1537,6 +1738,17 @@
       ctx.fillStyle = 'rgba(' + (104 + rand() * 46 | 0) + ',' + (58 + rand() * 32 | 0) + ',22,' + (0.22 + rand() * 0.4) + ')';
       ctx.fillRect(rand() * W, rand() * H, 4 + rand() * 20, 3 + rand() * 10);
     }
+
+    /* ---- P4.11 項目7: 方向性のある擬似スペキュラ＋通路の継ぎ目＋擦れの粒 ---- */
+    sheen(ctx, W, H, 4, rand, 0, 'rgba(214,224,232,%A%)');
+    sheen(ctx, W, H, 2, rand, 1.5708, 'rgba(214,224,232,%A%)');
+    /* マス境界＝通路の継ぎ目（2mごと）。影と受け光の2本で段差に見せる */
+    ctx.fillStyle = 'rgba(26,28,26,0.50)'; ctx.fillRect(0, 0, W, 3); ctx.fillRect(0, 0, 3, H);
+    ctx.fillStyle = 'rgba(198,202,196,0.16)'; ctx.fillRect(0, 3, W, 2); ctx.fillRect(3, 0, 2, H);
+    scuff(ctx, 1500, rand, 'rgba(212,218,214,0.10)', 0, 52);
+    scuff(ctx, 900, rand, 'rgba(40,42,38,0.14)', 0, 40);
+    fineGrit(ctx, 30000, rand, 'rgba(36,40,44,0.26)');
+    fineGrit(ctx, 10000, rand, 'rgba(198,208,216,0.14)');
     speckle(ctx, W, H, 5200, rand, 'rgba(40,44,48,0.30)');
     grain(ctx, W, H, 8, rand);
     return c;
@@ -1588,6 +1800,53 @@
     disposeAll: function () {
       for (var k in cache) cache[k].dispose();
       cache = Object.create(null);
+    },
+    /**
+     * P4.11 項目7 の解像度倍率（既定2＝壁1024x1536・床1024x1024）。
+     * これを 1 にすると P4.10 までの解像度（壁512x768・床512x512）に戻る。
+     * GPUテクスチャは 27.6MB -> 78.2MB（mipmap込みの推定）に増えているので、
+     * 実機(iPhone)でメモリが足りない場合に触るつまみはここ1か所だけ。
+     * 変更後は disposeAll() してからワールドを組み直すこと。
+     */
+    scale: function () { return TEX_S; },
+    setScale: function (n) { TEX_S = (n > 0) ? n : 1; },
+    /** そのテクスチャの実解像度（機械テスト用） */
+    sizeOf: function (name) {
+      var im = get(name).image;
+      return { w: im.width, h: im.height };
+    },
+    /** 合計ピクセル数(百万)と GPU 見積り(MB, mipmap込み)。契約の報告値 */
+    budget: function () {
+      var n = Object.keys(BUILDERS), px = 0;
+      for (var i = 0; i < n.length; i++) {
+        var im = get(n[i]).image;
+        px += im.width * im.height;
+      }
+      return { mpx: px / 1e6, gpuMB: px * 4 * 4 / 3 / 1e6 };
+    },
+    /**
+     * 「細部の量」の数値化。隣接ピクセルの輝度差（高周波成分）を面全体で積む。
+     *   mean  1ピクセルあたりの平均差。解像度を上げると同じ絵でも下がる
+     *   total mean x 総ピクセル数 ＝ **同じ面積に載っている細部の総量**（百万単位）
+     * 面のワールド寸法は据え置きなので total がそのまま「1m四方に載る情報量」の比になる。
+     * P4.11 項目7 の「質感が一回り上がった」は total で判定する。
+     */
+    detail: function (name) {
+      var im = get(name).image;
+      var cx = im.getContext ? im.getContext('2d') : null;
+      if (!cx) return { mean: 0, total: 0 };
+      var w = im.width, h = im.height;
+      var d = cx.getImageData(0, 0, w, h).data, sum = 0, n2 = 0;
+      for (var y = 0; y < h; y += 2) {
+        for (var x = 1; x < w; x++) {
+          var i0 = (y * w + x) * 4, i1 = i0 - 4;
+          var l0 = 0.2126 * d[i0] + 0.7152 * d[i0 + 1] + 0.0722 * d[i0 + 2];
+          var l1 = 0.2126 * d[i1] + 0.7152 * d[i1 + 1] + 0.0722 * d[i1 + 2];
+          sum += Math.abs(l0 - l1); n2++;
+        }
+      }
+      var mean = n2 ? sum / n2 : 0;
+      return { mean: mean, total: mean * w * h / 1e6 };
     }
   };
 })(window);
