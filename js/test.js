@@ -1205,7 +1205,7 @@
     g.reset();
     var rope = g.rope, T = ESCAPE.ROPE_TUNING;
     if (!t.ok(!!rope, 'ロープ: モジュールが組み込まれている')) return;
-    t.near(T.alpha, 0.35, 1e-9, 'ロープ: α は 0.35（契約 §4「エリア1 新マップ Z4」P4.9）', T.alpha);
+    t.near(T.alpha, 0.70, 1e-9, 'ロープ: α は 0.70（契約 §4 P4.11 項目2）', T.alpha);
     /* 独立に BFS して最短経路長を出し直す（Rope の実装と別経路で確かめる） */
     var meta = g.map.meta;
     var route = routeTo(g, meta.spawn.col, meta.spawn.row, meta.exitPad.col, meta.exitPad.row);
@@ -3356,9 +3356,9 @@
     g.reset();
     localStorage.removeItem(SAVE_KEY);
     var rope = g.rope, meta = g.map.meta, T = ESCAPE.ROPE_TUNING;
-    t.near(T.alpha, 0.35, 1e-9, 'P4.9: α = 0.35（契約）', T.alpha);
-    t.near(T.greenRatio, 1.05, 1e-9, 'P4.9: 緑の判定は最短×1.05（契約）', T.greenRatio);
-    t.near(T.yellowRatio, 1.35, 1e-9, 'P4.9: 黄の判定は最短×1.35（契約・改訂）', T.yellowRatio);
+    t.near(T.alpha, 0.70, 1e-9, 'P4.11: α = 0.70（契約・緩和）', T.alpha);
+    t.near(T.greenRatio, 1.10, 1e-9, 'P4.11: 緑の判定は最短×1.10（契約・緩和）', T.greenRatio);
+    t.near(T.yellowRatio, 1.50, 1e-9, 'P4.11: 黄の判定は最短×1.50（契約・緩和）', T.yellowRatio);
     t.near(T.redSlackRatio, 0.08, 1e-9, 'P4.9: 赤は余裕が L の8%未満でも立つ（契約・改訂）', T.redSlackRatio);
     t.ok(T.tensionInterval <= 0.5 + 1e-9, 'P4.9: 張力の再計算は0.5秒以下の間引き', T.tensionInterval);
 
@@ -3377,20 +3377,20 @@
     /* 遠回り率だけを動かして 緑→黄→赤 の閾値を検証する（余裕は潤沢なまま） */
     var usedSave = rope.used, Lsave = rope.L;
     var best = tg.best;
-    rope.used = best * 1.02; rope._tension = null;
-    t.ok(rope.computeTension().state === 'green', 'P4.9 緑: 最短×1.02 は緑');
+    rope.used = best * 1.08; rope._tension = null;
+    t.ok(rope.computeTension().state === 'green', 'P4.11 緑: 最短×1.08 は緑（1.10まで緑）');
     rope.used = best * 1.20; rope._tension = null;
     var ty = rope.computeTension();
-    t.ok(ty.state === 'yellow', 'P4.9 黄: 最短×1.20 は黄（遠回り中）', ty.state);
-    rope.used = best * 1.34; rope._tension = null;
-    t.ok(rope.computeTension().state === 'yellow', 'P4.9 黄: 最短×1.34 まで黄');
-    rope.used = best * 1.40; rope._tension = null;
+    t.ok(ty.state === 'yellow', 'P4.11 黄: 最短×1.20 は黄（遠回り中）', ty.state);
+    rope.used = best * 1.49; rope._tension = null;
+    t.ok(rope.computeTension().state === 'yellow', 'P4.11 黄: 最短×1.49 まで黄');
+    rope.used = best * 1.55; rope._tension = null;
     var tr = rope.computeTension();
-    t.ok(tr.state === 'red', 'P4.9 赤: 最短×1.40 は赤（大きな遠回り）', tr.state);
-    t.ok(tr.lowSlack === false, 'P4.9 赤: この赤は「余裕不足」ではなく「遠回り」で立っている');
+    t.ok(tr.state === 'red', 'P4.11 赤: 最短×1.55 は赤（大きな遠回り）', tr.state);
+    t.ok(tr.lowSlack === false, 'P4.11 赤: この赤は「余裕不足」ではなく「遠回り」で立っている');
 
     /* 余裕が L の8%を切っても赤（遠回り率が小さくても） */
-    rope.used = best * 1.02;
+    rope.used = best * 1.05;
     rope.L = rope.used * 1.05;                       /* 余裕 ≒ L の 4.8% */
     rope._tension = null;
     var tr2 = rope.computeTension();
@@ -3500,6 +3500,627 @@
       peak + ' <= ' + L.toFixed(1));
   }
 
+  /* ================================================================
+   * P4.11 レーンB（契約 DESIGN.md §4「P4.11 実プレイ差し戻し」項目2・4・5・6）
+   *   2: ロープ判定の緩和（α=0.7・緑1.10/黄1.50）
+   *   4: 地図の踏破記録の不整合
+   *   5: ヘッドライトの形（円形スプライト禁止・前方へ伸びるくさび）
+   *   6: ミニマップ（画面幅32%・向きの分かる矢印・コントラスト）
+   * ============================================================== */
+
+  /** 実際に歩きながら「立ったマス」を全フレーム記録する（踏破の正解データ） */
+  function walkRecorded(g, cells, stood) {
+    var dt = ESCAPE.FIXED_DT, p = g.player;
+    var trapsWas = g.traps ? g.traps.enabled : null;
+    if (g.traps) g.traps.enabled = false;
+    stood[p.col() + ',' + p.row()] = true;
+    for (var i = 0; i < cells.length; i++) {
+      var c = g.map.cellCenter(cells[i].col, cells[i].row), guard = 0;
+      while (guard++ < 240) {
+        var dx = c.x - p.x, dz = c.z - p.z, d = Math.hypot(dx, dz);
+        if (d < 0.30) break;
+        p.yaw = Math.atan2(-dx, -dz);
+        g.input.moveX = 0; g.input.moveY = 1;
+        g.stepFrame(dt);
+        stood[p.col() + ',' + p.row()] = true;
+      }
+    }
+    g.input.moveX = 0; g.input.moveY = 0;
+    if (g.traps && trapsWas !== null) g.traps.enabled = trapsWas;
+  }
+
+  /** 素の歩行可能判定（runtime の通行止めを無視）＝距離場の計算用 */
+  function rawWalk(map, c, r) {
+    if (!map.inBounds(c, r)) return false;
+    var d = ESCAPE.TILE_DEFS[map.tileAt(c, r)];
+    return !!(d && d.walkable);
+  }
+  /** 任意マスからの距離場（マス数。未到達 -1） */
+  function distField(map, col, row) {
+    var W = map.width, H = map.height, d = new Int32Array(W * H);
+    for (var i = 0; i < d.length; i++) d[i] = -1;
+    if (!rawWalk(map, col, row)) return d;
+    d[row * W + col] = 0;
+    var q = [col, row], h = 0, D = [1, 0, -1, 0, 0, 1, 0, -1];
+    while (h < q.length) {
+      var c = q[h++], r = q[h++], d0 = d[r * W + c];
+      for (var k = 0; k < 8; k += 2) {
+        var nc = c + D[k], nr = r + D[k + 1];
+        if (!rawWalk(map, nc, nr) || d[nr * W + nc] >= 0) continue;
+        d[nr * W + nc] = d0 + 1; q.push(nc, nr);
+      }
+    }
+    return d;
+  }
+  /** 距離場を降りて (sc,sr) から (tc,tr) の最短マス列（開始マスを含まない） */
+  function pathBetween(map, sc, sr, tc, tr) {
+    var W = map.width, d = distField(map, sc, sr);
+    if (d[tr * W + tc] < 0) return null;
+    var out = [], c = tc, r = tr, D = [1, 0, -1, 0, 0, 1, 0, -1];
+    while (!(c === sc && r === sr)) {
+      out.push({ col: c, row: r });
+      var cur = d[r * W + c], moved = false;
+      for (var k = 0; k < 8; k += 2) {
+        var nc = c + D[k], nr = r + D[k + 1];
+        if (!map.inBounds(nc, nr) || d[nr * W + nc] !== cur - 1) continue;
+        c = nc; r = nr; moved = true; break;
+      }
+      if (!moved) return null;
+    }
+    out.reverse();
+    return out;
+  }
+  /** ロープ本体（_enter＝繰り出し/巻き戻し）にマス列を通し、張力の推移を集計する。
+   *  台本歩行より速く、判定は本番と同じコードを通る。 */
+  function ropeScan(g, cells, hasKeyAt) {
+    var rope = g.rope, worst = 'green', maxRatio = 0, order = { green: 0, yellow: 1, red: 2, loose: 3 };
+    var states = { green: 0, yellow: 0, red: 0 };
+    for (var i = 0; i < cells.length; i++) {
+      if (!rope._enter(cells[i].col, cells[i].row)) return { blocked: i, worst: worst, maxRatio: maxRatio, states: states };
+      if (hasKeyAt !== undefined && i === hasKeyAt) g.progress.gimmick.key = true;
+      var st = rope.computeTension();
+      states[st.state] = (states[st.state] || 0) + 1;
+      if (st.ratio > maxRatio) maxRatio = st.ratio;
+      if (order[st.state] > order[worst]) worst = st.state;
+    }
+    return { blocked: -1, worst: worst, maxRatio: maxRatio, states: states, used: rope.used, slack: rope.slack() };
+  }
+
+  /** 項目2: ロープ判定の緩和（α=0.7 / 緑1.10 / 黄1.50）と実経路での数値 */
+  function testP411RopeRelax(t, g) {
+    g.reset();
+    localStorage.removeItem(SAVE_KEY);
+    var T = ESCAPE.ROPE_TUNING, rope = g.rope, map = g.map, meta = map.meta;
+    t.near(T.alpha, 0.70, 1e-9, 'P4.11 項目2: α = 0.70（契約）', T.alpha);
+    t.near(T.greenRatio, 1.10, 1e-9, 'P4.11 項目2: 緑は最短×1.10まで（契約）', T.greenRatio);
+    t.near(T.yellowRatio, 1.50, 1e-9, 'P4.11 項目2: 黄は最短×1.50まで（契約）', T.yellowRatio);
+    t.near(T.redSlackRatio, 0.08, 1e-9, 'P4.11 項目2: 赤は余裕 < L×0.08（据え置き）', T.redSlackRatio);
+    t.near(rope.L, rope.shortest * 1.7, 1e-6, 'P4.11 項目2: L = 最短 × 1.7', rope.L.toFixed(1));
+
+    /* --- 最短ルートで 鍵 → 出口 まで通す（黄にならないこと） --- */
+    var ks = rope._keyStand();
+    var toKey = pathBetween(map, meta.spawn.col, meta.spawn.row, ks.col, ks.row);
+    var keyToExit = pathBetween(map, ks.col, ks.row, meta.exitPad.col, meta.exitPad.row);
+    if (!t.ok(!!toKey && !!keyToExit, 'P4.11: 鍵経由の最短経路が取れる')) return;
+    /* 前半（スタート→鍵）は最短そのもの＝全マス緑 */
+    var scanA = ropeScan(g, toKey);
+    t.ok(scanA.blocked < 0, 'P4.11: 鍵までの最短ルートで止まらない（詰まない）', scanA.blocked);
+    t.ok(scanA.worst === 'green',
+      'P4.11 項目2: 最短ルートで鍵まで黄にならない',
+      '緑' + scanA.states.green + '/黄' + scanA.states.yellow + '/赤' + scanA.states.red +
+      ' 最大遠回り率=' + scanA.maxRatio.toFixed(3));
+    /* 後半（鍵→出口）は「鍵を取りに寄った分」が遠回り率に乗るため黄が出る。
+       契約の緑判定（使用長 ≤ スタート→現在地の最短×1.10）の定義上そうなる。
+       ここで守るべきは「赤にならない・詰まない」。数値は detail に残す。 */
+    g.progress.gimmick.key = true;
+    var scanB = ropeScan(g, keyToExit);
+    t.ok(scanB.blocked < 0, 'P4.11: 鍵→出口でロープが尽きない（詰まない）', scanB.blocked);
+    t.ok(scanB.worst !== 'red',
+      'P4.11 項目2: 最短ルートで鍵→出口まで赤にならない',
+      '緑' + scanB.states.green + '/黄' + scanB.states.yellow + '/赤' + scanB.states.red +
+      ' 最大遠回り率=' + scanB.maxRatio.toFixed(3) +
+      ' 使用=' + scanB.used.toFixed(0) + 'm/L=' + rope.L.toFixed(0) +
+      'm 余裕=' + scanB.slack.toFixed(0) + 'm');
+    t.ok(scanB.slack > rope.L * 0.15,
+      'P4.11 項目2: 最短ルートを通しても余裕が15%以上残る（緩和の効き目）',
+      (scanB.slack / rope.L * 100).toFixed(1) + '%');
+
+    /* --- 通り抜け口を1回間違える程度の遠回り（赤にならないこと） --- */
+    g.reset();
+    localStorage.removeItem(SAVE_KEY);
+    rope = g.rope;
+    var W = map.width;
+    var ds = distField(map, meta.spawn.col, meta.spawn.row);
+    var de = distField(map, meta.exitPad.col, meta.exitPad.row);
+    var direct = ds[meta.exitPad.row * W + meta.exitPad.col];
+    /* 遠回りが 直行の +12%〜+25%（＝通り抜け口1回ぶんの読み違い）になる中継マスを選ぶ */
+    var via = null, viaCost = 0;
+    for (var r2 = 1; r2 < map.height - 1 && !via; r2++) {
+      for (var c2 = 1; c2 < W - 1; c2++) {
+        var a = ds[r2 * W + c2], b = de[r2 * W + c2];
+        if (a < 0 || b < 0) continue;
+        var cost = a + b;
+        if (cost >= direct * 1.14 && cost <= direct * 1.22) { via = { col: c2, row: r2 }; viaCost = cost; break; }
+      }
+    }
+    if (t.ok(!!via, 'P4.11: 「通り抜け口を1回間違える」相当の迂回路が取れる',
+      via ? (via.col + ',' + via.row + ' cost=' + viaCost + ' vs 直行' + direct) : '')) {
+      var p1 = pathBetween(map, meta.spawn.col, meta.spawn.row, via.col, via.row);
+      var p2 = pathBetween(map, via.col, via.row, meta.exitPad.col, meta.exitPad.row);
+      var scan2 = ropeScan(g, p1.concat(p2));
+      t.ok(scan2.blocked < 0, 'P4.11: 遠回りしてもロープが尽きない（詰まない）', scan2.blocked);
+      t.ok(scan2.worst !== 'red',
+        'P4.11 項目2: 通り抜け口1回ぶんの遠回りでも赤にならない',
+        '最悪=' + scan2.worst + ' 最大遠回り率=' + scan2.maxRatio.toFixed(3) +
+        ' 迂回=' + ((viaCost / direct - 1) * 100).toFixed(1) + '% 使用=' + scan2.used.toFixed(0) +
+        'm/L=' + rope.L.toFixed(0) + 'm');
+    }
+    /* 旧αでは同じ遠回りが破綻していたこと＝緩和が効いていることの裏取り */
+    t.ok(rope.shortest * (1 + 0.35) < rope.L, 'P4.11: 新Lは旧α=0.35のLより長い',
+      (rope.shortest * 1.35).toFixed(0) + ' < ' + rope.L.toFixed(0));
+    g.reset();
+    localStorage.removeItem(SAVE_KEY);
+  }
+
+  /** 項目4: 実歩行した経路と地図の開示範囲が一致する（帯の一括開示バグの検出） */
+  function testP411FogTruth(t, g) {
+    g.reset();
+    localStorage.removeItem(SAVE_KEY);
+    var mm = g.minimap, map = g.map, meta = map.meta;
+    var stood = Object.create(null);
+    var route = routeTo(g, meta.spawn.col, meta.spawn.row, 10, 46);
+    if (!t.ok(!!route && route.length > 40, 'P4.11 項目4: 検証用の長い経路がある')) return;
+    walkRecorded(g, route, stood);
+
+    /* 正解データ: 立ったマス＋その4近傍＋「入った部屋の中で繋がっている範囲」 */
+    var allowed = Object.create(null);
+    function allow(c, r) { if (rawWalk(map, c, r)) allowed[c + ',' + r] = true; }
+    var k, pr;
+    for (k in stood) {
+      pr = k.split(','); var c = +pr[0], r = +pr[1];
+      allow(c, r); allow(c + 1, r); allow(c - 1, r); allow(c, r + 1); allow(c, r - 1);
+    }
+    var rooms = mm.roomRegions(), entered = {};
+    for (var i = 0; i < rooms.length; i++) {
+      var R = rooms[i];
+      for (k in stood) {
+        pr = k.split(','); var cc = +pr[0], rr = +pr[1];
+        if (cc < R.c0 || cc > R.c1 || rr < R.r0 || rr > R.r1) continue;
+        entered[R.id] = true;
+        var seen = Object.create(null), q = [cc, rr], h = 0, D = [1, 0, -1, 0, 0, 1, 0, -1];
+        seen[cc + ',' + rr] = true;
+        while (h < q.length) {
+          var a = q[h++], b = q[h++];
+          allow(a, b);
+          for (var d = 0; d < 8; d += 2) {
+            var nc = a + D[d], nr = b + D[d + 1];
+            if (nc < R.c0 || nc > R.c1 || nr < R.r0 || nr > R.r1) continue;
+            if (seen[nc + ',' + nr] || !map.isWalkable(nc, nr)) continue;
+            seen[nc + ',' + nr] = true; q.push(nc, nr);
+          }
+        }
+        break;
+      }
+    }
+    var missing = [], extra = [];
+    for (k in stood) if (!mm.isExplored(+k.split(',')[0], +k.split(',')[1])) missing.push(k);
+    for (k in mm.explored) if (!allowed[k]) extra.push(k);
+    t.ok(missing.length === 0, 'P4.11 項目4: 実歩行した全マスが開示される',
+      '未開示' + missing.length + ' ' + missing.slice(0, 6).join(' '));
+    t.ok(extra.length === 0, 'P4.11 項目4: 歩いた経路＋隣接＋入った部屋の外は開示されない',
+      '余分' + extra.length + ' ' + extra.slice(0, 8).join(' '));
+    t.ok(mm.exploredCount === Object.keys(allowed).length,
+      'P4.11 項目4: 開示マス数が正解データと一致する',
+      mm.exploredCount + ' / ' + Object.keys(allowed).length);
+
+    /* 同じ帯（区画）の遠いマスが開示されていないこと＝帯の一括開示バグの直接検出 */
+    var bands = [], regions = meta.regions || [];
+    for (var b = 0; b < regions.length; b++) {
+      if (!regions[b].zone) continue;
+      if (mm._isRoom(regions[b])) continue;
+      if ((regions[b].c1 - regions[b].c0 + 1) < map.width * 0.5) continue;
+      bands.push(regions[b]);
+    }
+    t.ok(bands.length >= 5, 'P4.11 項目4: 帯ゾーン（区画A〜F）が region に存在する（前提）', bands.length);
+    var spBand = null;
+    for (var s2 = 0; s2 < bands.length; s2++) {
+      if (meta.spawn.row >= bands[s2].r0 && meta.spawn.row <= bands[s2].r1) spBand = bands[s2];
+    }
+    var farInBand = 0, farTotal = 0;
+    if (spBand) {
+      for (var rr2 = spBand.r0; rr2 <= spBand.r1; rr2++) {
+        for (var cc2 = 0; cc2 < map.width; cc2++) {
+          if (!rawWalk(map, cc2, rr2) || allowed[cc2 + ',' + rr2]) continue;
+          farTotal++;
+          if (mm.isExplored(cc2, rr2)) farInBand++;
+        }
+      }
+    }
+    t.ok(farTotal > 100, 'P4.11 項目4: スタートの帯に「歩いていないマス」が十分ある（前提）', farTotal);
+    t.ok(farInBand === 0,
+      'P4.11 項目4: 同じ帯にいるだけで帯が丸ごと開示されない（旧欠陥の直接検出）', farInBand + '/' + farTotal);
+
+    /* 別の帯・入っていない部屋が開示されていないこと */
+    var otherRoom = null;
+    for (var q2 = 0; q2 < rooms.length; q2++) if (!entered[rooms[q2].id]) { otherRoom = rooms[q2]; break; }
+    if (t.ok(!!otherRoom, 'P4.11 項目4: 入っていない部屋がある（前提）')) {
+      var leak = 0, tot = 0;
+      for (var c3 = otherRoom.c0; c3 <= otherRoom.c1; c3++) {
+        for (var r3 = otherRoom.r0; r3 <= otherRoom.r1; r3++) {
+          if (!rawWalk(map, c3, r3) || allowed[c3 + ',' + r3]) continue;
+          tot++;
+          if (mm.isExplored(c3, r3)) leak++;
+        }
+      }
+      t.ok(leak === 0, 'P4.11 項目4: 入っていない部屋（' + otherRoom.id + '）は真っ暗のまま', leak + '/' + tot);
+    }
+
+    /* 帯・長廊下は「部屋」ではない（開示の単位にしない） */
+    var lm = meta.landmarks || [];
+    for (var l = 0; l < lm.length; l++) {
+      var reg = null;
+      for (var rg = 0; rg < regions.length; rg++) if (regions[rg].id === lm[l].id) reg = regions[rg];
+      if (reg) t.ok(mm._isRoom(reg) === false, 'P4.11 項目4: 長廊下 ' + lm[l].id + ' は部屋扱いしない');
+    }
+    for (var bb = 0; bb < bands.length; bb++) {
+      t.ok(mm._isRoom(bands[bb]) === false, 'P4.11 項目4: 帯ゾーン ' + bands[bb].id + ' は部屋扱いしない');
+    }
+    /* 部屋に入れば、その部屋の中は（繋がっている範囲が）開示される */
+    var hall = null;
+    for (var hh = 0; hh < rooms.length; hh++) if (rooms[hh].id === 'hall') hall = rooms[hh];
+    if (hall) {
+      t.ok(mm.regionsSeen['hall'] === true, 'P4.11 項目4: スタートの部屋（受入ホール）に入った記録が立つ');
+      var inHall = 0, hallWalk = 0;
+      for (var hc = hall.c0; hc <= hall.c1; hc++) {
+        for (var hr = hall.r0; hr <= hall.r1; hr++) {
+          if (!rawWalk(map, hc, hr)) continue;
+          hallWalk++;
+          if (mm.isExplored(hc, hr)) inHall++;
+        }
+      }
+      t.ok(inHall >= 12 && inHall >= hallWalk * 0.6,
+        'P4.11 項目4: 入った部屋は奥まで（繋がっている範囲が）開示される',
+        inHall + '/' + hallWalk);
+    }
+    g.reset();
+    localStorage.removeItem(SAVE_KEY);
+  }
+
+  /** 項目4（描画側）: マス→画素の変換が往復で一致し、canvas の画素が実座標と合う */
+  function testP411MapPixels(t, g) {
+    g.reset();
+    localStorage.removeItem(SAVE_KEY);
+    var mm = g.minimap, map = g.map, meta = map.meta;
+    var route = routeTo(g, meta.spawn.col, meta.spawn.row, 10, 46);
+    walkCells(g, route.slice(0, 60));
+
+    /* 1) 座標変換の往復（全踏破マス） */
+    var v = mm.view();
+    t.near(v.s, v.px / Math.max(map.width, map.height), 1e-9, 'P4.11: 1マスの画素数 = 解像度 / 最大辺', v.s);
+    var bad = 0, k;
+    for (k in mm.explored) {
+      var pr = k.split(','), c = +pr[0], r = +pr[1];
+      var q = mm.cellToPx(c, r, v);
+      var back = mm.pxToCell(q.x, q.y, v);
+      if (back.col !== c || back.row !== r) bad++;
+    }
+    t.ok(bad === 0, 'P4.11 項目4: マス→画素→マスの往復が全踏破マスで一致する', bad + '件ずれ');
+    /* 端のマスも canvas の内側に落ちる */
+    var c00 = mm.cellToPx(0, 0, v), c11 = mm.cellToPx(map.width - 1, map.height - 1, v);
+    t.ok(c00.x > 0 && c00.y > 0 && c11.x < v.px && c11.y < v.px,
+      'P4.11 項目4: 地図の四隅が canvas の内側に収まる',
+      c00.x.toFixed(1) + ',' + c00.y.toFixed(1) + ' / ' + c11.x.toFixed(1) + ',' + c11.y.toFixed(1));
+    /* ワールド座標の変換もマスの変換と一致する（プレイヤー印がずれない） */
+    var pcell = mm.cellToPx(g.player.col(), g.player.row(), v);
+    var pw = mm.worldToPx(g.player.x, g.player.z, v);
+    t.ok(Math.abs(pcell.x - pw.x) <= v.s * 0.5 + 1e-6 && Math.abs(pcell.y - pw.y) <= v.s * 0.5 + 1e-6,
+      'P4.11 項目4: ワールド座標の変換がマスの変換と同じ枠に落ちる',
+      (pw.x - pcell.x).toFixed(2) + ',' + (pw.y - pcell.y).toFixed(2));
+
+    /* 2) canvas の画素を読んで、開示領域が実座標と一致することを確かめる */
+    mm._dirty = true; mm.draw();
+    var ctx = mm.ctx, px = v.px;
+    var img = ctx.getImageData(0, 0, px, px).data;
+    function lumAt(x, y) {
+      var i = ((y | 0) * px + (x | 0)) * 4;
+      return 0.2126 * img[i] + 0.7152 * img[i + 1] + 0.0722 * img[i + 2];
+    }
+    /* ロープ・プレイヤー・出口の印が乗っていないマスだけを標本にする */
+    var onRope = Object.create(null), rope = g.rope;
+    for (var i2 = 0; i2 < rope.stack.length; i2++) {
+      var sc = rope.stack[i2].col, sr = rope.stack[i2].row;
+      for (var dc = -1; dc <= 1; dc++) for (var dr = -1; dr <= 1; dr++) onRope[(sc + dc) + ',' + (sr + dr)] = true;
+    }
+    var pc = g.player.col(), prow = g.player.row();
+    var bgLum = lumAt(2, 2);
+    var litOk = 0, litNg = 0, sample = [];
+    for (k in mm.explored) {
+      var p2 = k.split(','), cc = +p2[0], rr = +p2[1];
+      if (onRope[k]) continue;
+      if (Math.abs(cc - pc) < 6 && Math.abs(rr - prow) < 6) continue;
+      if (meta.exitPad && cc === meta.exitPad.col && rr === meta.exitPad.row) continue;
+      var qq = mm.cellToPx(cc, rr, v);
+      var lum = lumAt(qq.x, qq.y);
+      if (lum > bgLum + 30) { litOk++; if (sample.length < 3) sample.push(k + '=' + lum.toFixed(0)); }
+      else { litNg++; if (sample.length < 6) sample.push('NG ' + k + '=' + lum.toFixed(0)); }
+    }
+    t.ok(litOk > 30 && litNg === 0,
+      'P4.11 項目4: 開示マスの画素が実座標どおり明るい', litOk + '明 / ' + litNg + '暗 ' + sample.join(' '));
+    /* 未踏破の歩行可能マス（経路から遠いもの）は背景色のまま */
+    var darkOk = 0, darkNg = 0, dsample = [];
+    for (var r4 = 1; r4 < map.height - 1 && darkOk + darkNg < 200; r4++) {
+      for (var c4 = 1; c4 < map.width - 1; c4++) {
+        if (!rawWalk(map, c4, r4) || mm.isExplored(c4, r4)) continue;
+        if (onRope[c4 + ',' + r4]) continue;
+        var near = false;
+        for (var dc2 = -2; dc2 <= 2 && !near; dc2++) {
+          for (var dr2 = -2; dr2 <= 2; dr2++) if (mm.isExplored(c4 + dc2, r4 + dr2)) { near = true; break; }
+        }
+        if (near) continue;
+        var q4 = mm.cellToPx(c4, r4, v);
+        var l4 = lumAt(q4.x, q4.y);
+        if (l4 <= bgLum + 6) darkOk++;
+        else { darkNg++; if (dsample.length < 6) dsample.push(c4 + ',' + r4 + '=' + l4.toFixed(0)); }
+        if (darkOk + darkNg >= 200) break;
+      }
+    }
+    t.ok(darkOk > 50 && darkNg === 0,
+      'P4.11 項目4: 未踏破のマスは背景色のまま（描画が実座標とずれていない）',
+      darkOk + '暗 / ' + darkNg + '明 ' + dsample.join(' '));
+
+    /* 3) 全画面に切り替えても同じ変換で描ける（解像度が変わる） */
+    var wasFull = mm.full;
+    if (!wasFull) mm.toggle();
+    var v2 = mm.view();
+    t.ok(v2.px > v.px, 'P4.11: 全画面ではバッキング解像度が上がる', v.px + ' → ' + v2.px);
+    var bad2 = 0;
+    for (k in mm.explored) {
+      var p5 = k.split(','), c5 = +p5[0], r5 = +p5[1];
+      var q5 = mm.cellToPx(c5, r5, v2), b5 = mm.pxToCell(q5.x, q5.y, v2);
+      if (b5.col !== c5 || b5.row !== r5) bad2++;
+    }
+    t.ok(bad2 === 0, 'P4.11 項目4: 全画面でも往復変換が一致する', bad2);
+    if (mm.full !== wasFull) mm.toggle();
+    g.reset();
+    localStorage.removeItem(SAVE_KEY);
+  }
+
+  /** 項目6: ミニマップの大きさ・矢印・コントラスト */
+  function testP411MinimapUi(t, g) {
+    g.reset();
+    var mm = g.minimap, C = ESCAPE.MINIMAP_CONST;
+    var wrap = document.getElementById('minimap-wrap');
+    if (!t.ok(!!wrap, 'P4.11 項目6: ミニマップの枠が結線されている')) return;
+
+    /* --- 幅は画面の32%（横持ちで画面を覆わないよう 62vh でだけ頭を押さえる） --- */
+    var cs = global.getComputedStyle(wrap);
+    var vw = global.innerWidth, vh = global.innerHeight;
+    var want = Math.max(118, Math.min(vw * 0.32, vh * 0.62));
+    var got = parseFloat(cs.width);
+    t.near(got, want, 1.5, 'P4.11 項目6: ミニマップ幅 = min(32vw, 62vh)',
+      got.toFixed(1) + 'px / 画面 ' + vw + 'x' + vh + ' → ' + (got / vw * 100).toFixed(1) + '%');
+    t.ok(got / vw >= 0.28 || vw * 0.32 > vh * 0.62,
+      'P4.11 項目6: 画面幅の32%相当（縦持ちでは 32vw がそのまま効く）',
+      (got / vw * 100).toFixed(1) + '%');
+    var box = wrap.getBoundingClientRect();
+    /* 画面サイズが取れない環境（非表示のオフスクリーン等）では判定できないので
+       その旨を detail に残して通す。実機・E2E は必ず実寸で通る。 */
+    var measurable = vw >= 320 && vh >= 320;
+    t.ok(!measurable || (box.right <= vw + 0.5 && box.top >= 0 && box.bottom <= vh + 0.5),
+      'P4.11 項目6: 画面からはみ出さない（縦持ち/横持ちとも）',
+      measurable ? (box.left.toFixed(0) + ',' + box.top.toFixed(0) + ' ' +
+        box.width.toFixed(0) + 'x' + box.height.toFixed(0) + ' / ' + vw + 'x' + vh)
+        : ('画面サイズ未確定のため判定省略 ' + vw + 'x' + vh));
+    t.ok(parseFloat(cs.paddingLeft) <= 3, 'P4.11 項目6: 余白は最小', cs.padding);
+
+    /* --- 全画面地図: 余白最小・画面いっぱい --- */
+    var wasFull = mm.full;
+    if (!wasFull) mm.toggle();
+    var cs2 = global.getComputedStyle(wrap);
+    var full = parseFloat(cs2.width);
+    t.ok(full >= Math.min(vw, vh) * 0.90, 'P4.11 項目6: 全画面地図は余白最小（短辺の90%以上）',
+      full.toFixed(0) + ' / ' + Math.min(vw, vh));
+    t.ok(parseFloat(cs2.paddingLeft) <= 4, 'P4.11 項目6: 全画面地図の余白も最小', cs2.padding);
+    if (mm.full !== wasFull) mm.toggle();
+
+    /* --- プレイヤー矢印: 現行（旧実装）の3倍以上・向きが分かる --- */
+    t.ok(C.PLAYER_ARROW >= C.PLAYER_ARROW_LEGACY * 3,
+      'P4.11 項目6: プレイヤー矢印は旧サイズの3倍以上',
+      C.PLAYER_ARROW + ' / ' + C.PLAYER_ARROW_LEGACY);
+    var v = mm.view();
+    t.ok(mm.playerArrowSize(v) >= mm.legacyArrowSize(v) * 3,
+      'P4.11 項目6: 実描画サイズでも3倍以上',
+      mm.playerArrowSize(v).toFixed(1) + ' / ' + mm.legacyArrowSize(v).toFixed(1));
+
+    /* 向きが分かる＝yaw を変えると矢印の先端が動き、先端は前方 */
+    var p = g.player;
+    place(g, g.map.meta.spawn.col, g.map.meta.spawn.row, 0);
+    mm._dirty = true; mm.draw();
+    var q = mm.worldToPx(p.x, p.z, v), f = mm.playerArrowSize(v);
+    function tipOf(yaw) {
+      return { x: q.x + (-Math.sin(yaw)) * f, y: q.y + (-Math.cos(yaw)) * f };
+    }
+    var ctx = mm.ctx, px = v.px;
+    function lum(x, y) {
+      var d = ctx.getImageData(x | 0, y | 0, 1, 1).data;
+      return 0.2126 * d[0] + 0.7152 * d[1] + 0.0722 * d[2];
+    }
+    var tip0 = tipOf(p.yaw);
+    var backOf = { x: q.x - (-Math.sin(p.yaw)) * f * 1.15, y: q.y - (-Math.cos(p.yaw)) * f * 1.15 };
+    var inTip = { x: tip0.x - (-Math.sin(p.yaw)) * 2, y: tip0.y - (-Math.cos(p.yaw)) * 2 };
+    t.ok(lum(inTip.x, inTip.y) > 140,
+      'P4.11 項目6: 矢印の先端（前方）が明るく描かれている',
+      '先端の2px内側 lum=' + lum(inTip.x, inTip.y).toFixed(0));
+    t.ok(lum(backOf.x, backOf.y) < 120,
+      'P4.11 項目6: 矢印の後方は空いている（＝向きが読める）',
+      '後方 lum=' + lum(backOf.x, backOf.y).toFixed(0));
+    p.yaw = Math.PI / 2;
+    mm._dirty = true; mm.draw();
+    var tip90 = tipOf(p.yaw);
+    t.ok(Math.hypot(tip90.x - tip0.x, tip90.y - tip0.y) > f,
+      'P4.11 項目6: 向きを変えると矢印の先端が動く（円ではない）');
+
+    /* --- コントラスト: 踏破/未踏破/ロープ/結び目/区画名 --- */
+    function rgbOf(css) {
+      var m = css.match(/^#([0-9a-f]{6})$/i);
+      if (m) {
+        var n = parseInt(m[1], 16);
+        return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+      }
+      var m2 = css.match(/rgba?\(([^)]+)\)/);
+      var a = m2[1].split(',');
+      return [+a[0], +a[1], +a[2]];
+    }
+    function rel(css) {
+      var c = rgbOf(css);
+      function ch(v) { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }
+      return 0.2126 * ch(c[0]) + 0.7152 * ch(c[1]) + 0.0722 * ch(c[2]);
+    }
+    function ratio(a, b) {
+      var la = rel(a), lb = rel(b);
+      return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
+    }
+    var pairs = [
+      ['floor', C.COL.floor, 3.0], ['room', C.COL.room, 4.5],
+      ['rope', C.COL.rope, 8.0], ['knot', C.COL.knot, 8.0],
+      ['anchor', C.COL.anchor, 7.0], ['label', C.COL.label, 8.0],
+      ['exit', C.COL.exit, 7.0], ['ghost', C.COL.ghost, 2.5]
+    ];
+    for (var i = 0; i < pairs.length; i++) {
+      var rr = ratio(pairs[i][1], C.COL.bg);
+      t.ok(rr >= pairs[i][2],
+        'P4.11 項目6: ' + pairs[i][0] + ' が暗い背景に対して読める（コントラスト比 ≥ ' + pairs[i][2] + '）',
+        rr.toFixed(2) + ':1');
+    }
+    t.ok(ratio(C.COL.room, C.COL.floor) >= 1.25,
+      'P4.11 項目6: 部屋と通路が塗り分けられている', ratio(C.COL.room, C.COL.floor).toFixed(2));
+    t.ok(C.MINI_PX >= 320 && C.FULL_PX >= 700,
+      'P4.11 項目6: バッキング解像度を上げてある（線がぼけない）', C.MINI_PX + '/' + C.FULL_PX);
+    g.reset();
+  }
+
+  /** 項目5: ヘッドライトは前方へ伸びるくさび（円形スプライト禁止） */
+  function testP411Headlight(t, g) {
+    g.reset();
+    var hl = g.headlight, T = ESCAPE.HEADLIGHT_TUNING;
+    if (!t.ok(!!hl, 'P4.11 項目5: ヘッドライトが組み込まれている')) return;
+
+    /* スプライトを使っていない（円形スプライト禁止の直接検出） */
+    var sprites = 0, meshes = 0;
+    hl.group.traverse(function (o) {
+      if (o.isSprite || (o.type === 'Sprite')) sprites++;
+      if (o.isMesh) meshes++;
+    });
+    t.ok(sprites === 0, 'P4.11 項目5: 円形スプライトを使っていない', sprites);
+    t.ok(meshes >= 3, 'P4.11 項目5: 床のくさび・壁のしみ・空中の帯の3枚がある', meshes);
+    t.ok(T.coneRy / T.coneRx <= 0.6,
+      'P4.11 項目5: 空中の帯は扁平（真円の円錐ではない）', (T.coneRy / T.coneRx).toFixed(2));
+    t.ok(T.beamHalfFar > T.beamHalfNear * 2,
+      'P4.11 項目5: 前方ほど広がる（くさび形）', T.beamHalfNear + ' → ' + T.beamHalfFar);
+
+    /* 開けた場所（3マス直線）で点灯させ、床の光の形を測る */
+    var open = findTriple(g.map, false);
+    place(g, open.col, open.row, -90);
+    g.input.moveX = 0; g.input.moveY = 1;
+    sim(g, 24);
+    t.ok(hl.on === true, 'P4.11 項目5: 歩行中は点灯（挙動は維持）', hl.level.toFixed(2));
+    var sh = hl.beamShape();
+    t.ok(sh.forwardMin >= 0, 'P4.11 項目5: 光は足元より後ろへ出ない（前方に伸びる）',
+      sh.forwardMin.toFixed(2) + 'm');
+    t.ok(sh.forwardMax >= 2.0, 'P4.11 項目5: 前方へ2m以上伸びる', sh.forwardMax.toFixed(2) + 'm');
+    t.ok(sh.length / Math.max(0.001, sh.width) >= 1.4,
+      'P4.11 項目5: 縦長（前後 > 左右）＝円盤ではない',
+      '長さ' + sh.length.toFixed(2) + 'm 幅' + sh.width.toFixed(2) + 'm 比' + sh.ratio.toFixed(2));
+    t.ok(hl.beam.visible === true && hl._beamMat.opacity > 0.05,
+      'P4.11 項目5: 床のくさびが実際に描かれている', hl._beamMat.opacity.toFixed(3));
+
+    /* 中心が明るく縁がソフト（頂点色の分布で検査） */
+    var colAttr = hl._beamGeo.attributes.color;
+    var mid = Math.floor(hl.T.beamSegs / 3) * 5;      /* 5 = 横方向サンプル数 */
+    var cCenter = colAttr.array[(mid + 2) * 3], cEdge = colAttr.array[(mid + 0) * 3];
+    var cHalf = colAttr.array[(mid + 1) * 3];
+    t.ok(cCenter > cHalf && cHalf > cEdge && cEdge <= 1e-6,
+      'P4.11 項目5: 中心が明るく縁は0（ソフトな縁）',
+      cCenter.toFixed(3) + ' > ' + cHalf.toFixed(3) + ' > ' + cEdge.toFixed(3));
+    var tail = (hl.T.beamSegs * 5 + 2) * 3;
+    t.ok(colAttr.array[tail] < cCenter,
+      'P4.11 項目5: 先端に向かって減衰する', colAttr.array[tail].toFixed(3) + ' < ' + cCenter.toFixed(3));
+
+    /* カメラのピッチに依存しない（真下を向いても形が変わらない＝円盤にならない） */
+    var before = Array.prototype.slice.call(hl._beamPos);
+    g.player.pitch = -1.45;
+    sim(g, 1);
+    var same = true;
+    for (var i = 0; i < before.length; i++) {
+      if (Math.abs(before[i] - hl._beamPos[i]) > 0.35) { same = false; break; }
+    }
+    t.ok(same, 'P4.11 項目5: 真下を向いても床の光の形が変わらない（ピッチ非依存）');
+    var sh2 = hl.beamShape();
+    t.ok(sh2.forwardMin >= 0 && sh2.length / Math.max(0.001, sh2.width) >= 1.4,
+      'P4.11 項目5: 真下を向いても円盤に見えない', sh2.ratio.toFixed(2));
+    g.player.pitch = 0;
+
+    /* yaw に追従する（向きを変えれば光も回る） */
+    var yaw0 = g.player.yaw;
+    var f0 = g.player.forward();
+    g.player.yaw = yaw0 + Math.PI / 2;
+    sim(g, 1);
+    var f1 = g.player.forward();
+    t.ok(Math.abs(f1.x - f0.x) > 0.5 || Math.abs(f1.z - f0.z) > 0.5, 'P4.11: 向きが変わった（前提）');
+    /* 光の重心が「新しい前方」に乗っている（壁が近くて短く切れていても向きは分かる） */
+    var pos = hl._beamPos, n = pos.length / 3, gx = 0, gz = 0;
+    for (var v2 = 0; v2 < n; v2++) { gx += pos[v2 * 3]; gz += pos[v2 * 3 + 2]; }
+    gx = gx / n - g.player.x; gz = gz / n - g.player.z;
+    var glen = Math.hypot(gx, gz);
+    var dot = (gx * f1.x + gz * f1.z) / Math.max(1e-6, glen);
+    t.ok(glen > 0.2 && dot > 0.98,
+      'P4.11 項目5: 向きを変えても光は「その向きの前方」に伸びる',
+      '重心距離' + glen.toFixed(2) + 'm 前方一致' + dot.toFixed(3));
+    var sh3 = hl.beamShape();
+    t.ok(sh3.forwardMin >= 0, 'P4.11 項目5: 向きを変えても光は後方へ回り込まない', sh3.forwardMin.toFixed(2));
+    g.player.yaw = yaw0;
+
+    /* 壁に当たると壁面に楕円が出て、床の光はそこで切れる */
+    var wallCell = null, map = g.map;
+    var cells = map.walkableCells();
+    for (var w = 0; w < cells.length && !wallCell; w++) {
+      var c = cells[w];
+      if (map.isSolid(c.col + 1, c.row) && map.isWalkable(c.col - 1, c.row)) wallCell = c;
+    }
+    if (t.ok(!!wallCell, 'P4.11 項目5: 壁に正対できるマスがある')) {
+      place(g, wallCell.col, wallCell.row, -90);   /* yaw=-90° → +X 方向を向く */
+      g.input.moveY = 1;
+      sim(g, 12);
+      t.ok(hl.hitDist < T.beamNear + T.beamLen,
+        'P4.11 項目5: 前方の壁を検出する', hl.hitDist.toFixed(2) + 'm');
+      t.ok(hl.wall.visible === true && hl._wallMat.opacity > 0.02,
+        'P4.11 項目5: 壁に当たると壁面にも楕円が出る', hl._wallMat.opacity.toFixed(3));
+      var ws = hl.wall.scale;
+      t.ok(Math.abs(ws.x - ws.y * 1) > 1e-9 || T.wallRyRatio !== 1,
+        'P4.11 項目5: 壁のしみは楕円（真円ではない）', T.wallRyRatio);
+      var shw = hl.beamShape();
+      t.ok(shw.forwardMax <= hl.hitDist + 0.01,
+        'P4.11 項目5: 床の光は壁の手前で切れる（壁を突き抜けない）',
+        shw.forwardMax.toFixed(2) + ' <= ' + hl.hitDist.toFixed(2));
+    }
+    /* 消灯すれば全部消える（挙動は維持） */
+    g.input.moveY = 0;
+    sim(g, 120);
+    t.ok(hl.on === false && hl.level < 0.01, 'P4.11 項目5: 停止で消灯（挙動は維持）', hl.level);
+    t.ok(hl.beam.visible === false && hl.wall.visible === false && hl.cone.visible === false,
+      'P4.11 項目5: 消灯中は光のメッシュが消える');
+    t.near(ESCAPE.ENEMY_TUNING.headlightSightMul, 1.5, 1e-9,
+      'P4.11 項目5: 点灯中の発見距離1.5倍は維持', ESCAPE.ENEMY_TUNING.headlightSightMul);
+    /* 空中の帯は真下を向くと消える（床に刺さって棒に見えるのを防ぐ） */
+    g.player.pitch = 0;
+    t.near(hl.conePitchFade(), 1, 1e-9, 'P4.11 項目5: 水平を見ている時は空中の帯が出る');
+    g.player.pitch = -1.45;
+    t.near(hl.conePitchFade(), 0, 1e-9, 'P4.11 項目5: 真下を向くと空中の帯は消える（棒にならない）');
+    g.player.pitch = 0;
+    g.input.reset();
+    g.reset();
+  }
+
   function runAll(opts) {
     var g = ESCAPE.game;
     var t = new Runner();
@@ -3543,7 +4164,9 @@
       testHeadlight, testRetiredGimmicks, testArea1V3Contract, testSignTexts,
       /* P4.9: 新マップZ4・区画ごとの景観差・ロープ張力インジケータ */
       testP49Zones, testP49Look, testP49DeadEnds, testP49Props,
-      testP49RopeTension, testP49RopeFeasible
+      testP49RopeTension, testP49RopeFeasible,
+      /* P4.11 レーンB: ロープ緩和・地図の踏破記録・ヘッドライトの形・ミニマップ */
+      testP411RopeRelax, testP411FogTruth, testP411MapPixels, testP411MinimapUi, testP411Headlight
     ];
     /* 他モジュールが登録した追加スイート（P4.10a の敵2体・絶叫・地図リセット等）も runAll に乗せる */
     if (ESCAPE.__extraSuites && ESCAPE.__extraSuites.length) suites = suites.concat(ESCAPE.__extraSuites);

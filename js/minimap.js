@@ -4,7 +4,12 @@
  *  - 初期は真っ暗。歩いた通路と入った部屋だけが描かれる。
  *  - 区画銘板を「調べる」と、その区画の A〜F と施設名が記入される（正文 docs/notes.md「区画名」）。
  *  - ロープの軌跡と落ちた結び目は常時表示。
- *  - 画面幅22%・半透明。タップ（PCは M キー）で全画面。
+ *  - 画面幅32%（P4.11 で 22%→32%）・半透明。タップ（PCは M キー）で全画面。
+ *
+ * P4.11（契約 §4「P4.11 実プレイ差し戻し」項目4・6）:
+ *   踏破の記録は「歩いたマス＋その4近傍」＋「入った"部屋"の中」だけ。帯ゾーン
+ *   （区画A〜Fの 80×13 の region）に入っただけで帯が丸ごと開示される欠陥を修正した。
+ *   描画座標は view()/cellToPx()/pxToCell() の1か所に集約し、往復テストで検証する。
  *
  * スマホ性能への配慮: Canvas 2D に「変わった時だけ」描き直す（毎フレーム描かない）。
  * 踏破の記録は Set 相当の辞書1本だけ＝メモリも O(踏破マス)。
@@ -13,22 +18,32 @@
   'use strict';
   var ESCAPE = global.ESCAPE;
 
+  /* P4.11 項目6: 暗い背景でも読めるコントラストへ引き上げた（未踏破＝ほぼ黒に対し
+     踏破は明度3倍以上）。旧値（floor #28303a / room #39434f）は実機で沈んでいた。 */
   var COL = {
     bg: '#04060a',
-    floor: '#28303a',
-    room: '#39434f',
+    floor: '#55687d',
+    room: '#6f8599',
     edge: '#151b22',
-    rope: 'rgba(226,204,150,0.92)',
-    ghost: 'rgba(120,110,88,0.55)',
-    knot: '#f4e2ab',
-    anchor: '#9fd8ff',
-    player: '#eaf4fb',
-    exit: '#7fe0a8',
-    label: 'rgba(206,226,242,0.92)',
-    labelSub: 'rgba(168,192,210,0.78)'
+    rope: 'rgba(255,228,158,0.98)',
+    ghost: 'rgba(158,146,114,0.70)',
+    knot: '#ffeeb4',
+    anchor: '#a9e0ff',
+    player: '#ffffff',
+    playerEdge: 'rgba(0,0,0,0.85)',
+    exit: '#8dffc2',
+    label: 'rgba(232,244,255,0.98)',
+    labelSub: 'rgba(200,222,240,0.92)',
+    labelShadow: 'rgba(0,0,0,0.95)'
   };
-  var MINI_PX = 224;   /* 小さいときのバッキング解像度 */
-  var FULL_PX = 616;   /* 全画面のバッキング解像度 */
+  var MINI_PX = 320;   /* 小さいときのバッキング解像度（P4.11: 224→320） */
+  var FULL_PX = 760;   /* 全画面のバッキング解像度（P4.11: 616→760） */
+  /* プレイヤー矢印の大きさ（マス単位）。P4.11「現行の3倍以上」＝旧 0.85 の3倍超 */
+  var PLAYER_ARROW = 2.80;
+  var PLAYER_ARROW_LEGACY = 0.85;
+  /* 「部屋」と見なす region の上限（マス）。これを超える region は帯ゾーン/長廊下であり、
+     入っただけで開示してはならない（P4.11 項目4 の真因） */
+  var ROOM_MAX = 14;
 
   function Minimap(game) {
     this.game = game;
@@ -124,17 +139,52 @@
     this._dirty = true;
   };
 
-  /** 部屋（zone を持つ region）に入ったらその部屋ごと描かれる */
-  Minimap.prototype._enterRegion = function (col, row) {
+  /** その region が「部屋」か（帯ゾーン・ランドマーク長廊下は部屋ではない）
+   *  P4.11 項目4 の真因: meta.regions には区画A〜Fの帯（80×13）と長廊下（19×1）も
+   *  入っている。旧実装は「zone を持つ region に入ったら丸ごと開示」だったので、
+   *  通路を1歩でも歩くと帯が丸ごと開示され、歩いていない別の帯・遠い部屋まで
+   *  地図に描かれていた。部屋＝両辺が ROOM_MAX 以下、かつ長廊下リストに無いもの。 */
+  Minimap.prototype._isRoom = function (r) {
+    if (!r || !r.zone) return false;
+    var w = r.c1 - r.c0 + 1, h = r.r1 - r.r0 + 1;
+    if (w > ROOM_MAX || h > ROOM_MAX) return false;
+    if (w < 2 || h < 2) return false;                    /* 幅1＝廊下 */
+    var lm = (this.map.meta && this.map.meta.landmarks) || [];
+    for (var i = 0; i < lm.length; i++) if (lm[i].id === r.id) return false;
+    return true;
+  };
+
+  /** 部屋の一覧（判定を1か所に集約する。テストからも参照する） */
+  Minimap.prototype.roomRegions = function () {
     var regions = (this.map.meta && this.map.meta.regions) || [];
-    for (var i = 0; i < regions.length; i++) {
-      var r = regions[i];
-      if (!r.zone) continue;
+    var out = [];
+    for (var i = 0; i < regions.length; i++) if (this._isRoom(regions[i])) out.push(regions[i]);
+    return out;
+  };
+
+  /** 部屋に入ったら、その部屋の「中で繋がっている範囲」だけが描かれる。
+   *  （箱の外・壁の向こう側・別の部屋には広がらない＝flood-fill を箱で刈る） */
+  Minimap.prototype._enterRegion = function (col, row) {
+    var rooms = this.roomRegions();
+    for (var i = 0; i < rooms.length; i++) {
+      var r = rooms[i];
       if (col < r.c0 || col > r.c1 || row < r.r0 || row > r.r1) continue;
       if (this.regionsSeen[r.id]) return;
+      if (!this.map.isWalkable(col, row)) return;
       this.regionsSeen[r.id] = true;
-      for (var c = r.c0; c <= r.c1; c++) {
-        for (var w = r.r0; w <= r.r1; w++) this._mark(c, w);
+      var seen = Object.create(null), q = [col, row], h = 0;
+      seen[col + ',' + row] = true;
+      var D = [1, 0, -1, 0, 0, 1, 0, -1];
+      while (h < q.length) {
+        var c = q[h++], w = q[h++];
+        this._mark(c, w);
+        for (var k = 0; k < 8; k += 2) {
+          var nc = c + D[k], nw = w + D[k + 1];
+          if (nc < r.c0 || nc > r.c1 || nw < r.r0 || nw > r.r1) continue;
+          if (seen[nc + ',' + nw] || !this.map.isWalkable(nc, nw)) continue;
+          seen[nc + ',' + nw] = true;
+          q.push(nc, nw);
+        }
       }
       return;
     }
@@ -184,93 +234,152 @@
 
   /* ---------------- 描画 ---------------- */
 
+  /** 座標変換の唯一の真実（マス ⇄ canvas 画素）。
+   *  P4.11 項目4: 旧実装は s = px / map.width 決め打ちで、幅と高さが違うマップでは
+   *  縦方向がずれた。ここで正方の余白（ox,oy）まで含めて1か所に集約し、
+   *  往復テスト（cellToPx → pxToCell）で検証する。 */
+  Minimap.prototype.view = function () {
+    var map = this.map;
+    var px = (this.dom.canvas ? this.dom.canvas.width : 0) || (this.full ? FULL_PX : MINI_PX);
+    var n = Math.max(map.width, map.height);
+    var s = px / n;
+    return { px: px, s: s, ox: (px - map.width * s) / 2, oy: (px - map.height * s) / 2 };
+  };
+  /** マス中心 → 画素 */
+  Minimap.prototype.cellToPx = function (col, row, v) {
+    v = v || this.view();
+    return { x: v.ox + (col + 0.5) * v.s, y: v.oy + (row + 0.5) * v.s };
+  };
+  /** ワールド座標 → 画素 */
+  Minimap.prototype.worldToPx = function (x, z, v) {
+    v = v || this.view();
+    var T = this.map.tileSize;
+    return { x: v.ox + (x / T) * v.s, y: v.oy + (z / T) * v.s };
+  };
+  /** 画素 → マス（往復テスト用。範囲外は場外の値をそのまま返す） */
+  Minimap.prototype.pxToCell = function (x, y, v) {
+    v = v || this.view();
+    return { col: Math.floor((x - v.ox) / v.s), row: Math.floor((y - v.oy) / v.s) };
+  };
+
   Minimap.prototype.draw = function () {
     var ctx = this.ctx;
     if (!ctx) return;
-    var map = this.map, T = map.tileSize;
-    var px = this.dom.canvas.width;
-    var s = px / map.width;              /* 1マスの画素数 */
+    var map = this.map;
+    var v = this.view(), s = v.s, px = v.px;
     var full = this.full;
 
     ctx.fillStyle = COL.bg;
     ctx.fillRect(0, 0, px, px);
 
-    /* 踏破マス */
+    /* 踏破マス（マスの左上＝中心 - s/2。cellToPx と同じ変換で描く） */
     var roomOf = this._roomMask();
     for (var k in this.explored) {
       var pair = k.split(',');
       var c = +pair[0], r = +pair[1];
+      var q = this.cellToPx(c, r, v);
       ctx.fillStyle = roomOf[k] ? COL.room : COL.floor;
-      ctx.fillRect(c * s, r * s, s + 0.6, s + 0.6);
+      ctx.fillRect(q.x - s / 2, q.y - s / 2, s + 0.6, s + 0.6);
     }
 
     /* 出口（隔壁）は踏破済みなら印を出す */
     var ep = map.meta.exitPad;
     if (ep && this.explored[ep.col + ',' + ep.row]) {
+      var qe = this.cellToPx(ep.col, ep.row, v);
       ctx.fillStyle = COL.exit;
-      ctx.fillRect(ep.col * s, ep.row * s, s, s);
+      ctx.fillRect(qe.x - s / 2, qe.y - s / 2, s, s);
     }
 
     var rope = this.game.rope;
     if (rope) {
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
       /* エリアリセット後も残る古い軌跡 */
-      ctx.lineWidth = Math.max(1, s * 0.28);
+      ctx.lineWidth = Math.max(2, s * 0.42);
       ctx.strokeStyle = COL.ghost;
-      for (var g = 0; g < rope.ghosts.length; g++) this._stroke(ctx, rope.ghosts[g], s);
-      /* いまのロープ */
-      ctx.lineWidth = Math.max(1.2, s * 0.36);
+      for (var g = 0; g < rope.ghosts.length; g++) this._stroke(ctx, rope.ghosts[g], v);
+      /* いまのロープ（P4.11: 太く・不透明に） */
+      ctx.lineWidth = Math.max(3, s * 0.58);
       ctx.strokeStyle = COL.rope;
-      this._stroke(ctx, rope.stack, s);
+      this._stroke(ctx, rope.stack, v);
       /* 固定結び目（スタート） */
+      var qa = this.cellToPx(rope.anchor.col, rope.anchor.row, v);
+      var as = Math.max(4, s * 0.72);
       ctx.fillStyle = COL.anchor;
-      ctx.fillRect((rope.anchor.col + 0.28) * s, (rope.anchor.row + 0.28) * s, s * 0.46, s * 0.46);
+      ctx.fillRect(qa.x - as / 2, qa.y - as / 2, as, as);
       /* 落ちた結び目 */
       for (var i = 0; i < rope.knots.length; i++) {
         var kn = rope.knots[i];
+        var qk = this.worldToPx(kn.x, kn.z, v);
         ctx.fillStyle = COL.knot;
         ctx.beginPath();
-        ctx.arc((kn.x / T) * s, (kn.z / T) * s, Math.max(2, s * 0.42), 0, Math.PI * 2);
+        ctx.arc(qk.x, qk.y, Math.max(3, s * 0.55), 0, Math.PI * 2);
         ctx.fill();
       }
     }
 
     /* 区画名（銘板を読んだ区画だけ） */
-    this._drawZones(ctx, s, full);
+    this._drawZones(ctx, v, full);
 
-    /* プレイヤー */
+    /* プレイヤー（P4.11 項目6: 向きの分かる矢印・旧比3.3倍） */
+    this._drawPlayer(ctx, v);
+  };
+
+  /** プレイヤー矢印の一辺（画素）。テストから比率を検査できるよう関数に切り出す */
+  Minimap.prototype.playerArrowSize = function (v) {
+    v = v || this.view();
+    return Math.max(11, v.s * PLAYER_ARROW);
+  };
+  Minimap.prototype.legacyArrowSize = function (v) {
+    v = v || this.view();
+    return Math.max(3, v.s * PLAYER_ARROW_LEGACY);
+  };
+
+  Minimap.prototype._drawPlayer = function (ctx, v) {
     var p = this.game.player;
-    var pxp = (p.x / T) * s, pzp = (p.z / T) * s;
-    var f = Math.max(3, s * 0.85);
-    ctx.fillStyle = COL.player;
+    var q = this.worldToPx(p.x, p.z, v);
+    var f = this.playerArrowSize(v);
+    /* 前方（player.forward() と同じ向き）と右手 */
+    var fx = -Math.sin(p.yaw), fy = -Math.cos(p.yaw);
+    var rx = -fy, ry = fx;
+    var tip = { x: q.x + fx * f, y: q.y + fy * f };
+    var bl = { x: q.x - fx * f * 0.62 - rx * f * 0.62, y: q.y - fy * f * 0.62 - ry * f * 0.62 };
+    var br = { x: q.x - fx * f * 0.62 + rx * f * 0.62, y: q.y - fy * f * 0.62 + ry * f * 0.62 };
+    var tail = { x: q.x - fx * f * 0.22, y: q.y - fy * f * 0.22 };
     ctx.beginPath();
-    ctx.moveTo(pxp - Math.sin(p.yaw) * f, pzp - Math.cos(p.yaw) * f);
-    ctx.lineTo(pxp + Math.cos(p.yaw) * f * 0.55, pzp - Math.sin(p.yaw) * f * 0.55);
-    ctx.lineTo(pxp - Math.cos(p.yaw) * f * 0.55, pzp + Math.sin(p.yaw) * f * 0.55);
+    ctx.moveTo(tip.x, tip.y);
+    ctx.lineTo(br.x, br.y);
+    ctx.lineTo(tail.x, tail.y);
+    ctx.lineTo(bl.x, bl.y);
     ctx.closePath();
+    ctx.fillStyle = COL.player;
+    ctx.strokeStyle = COL.playerEdge;
+    ctx.lineWidth = Math.max(1.5, f * 0.16);
+    ctx.lineJoin = 'round';
+    ctx.stroke();
     ctx.fill();
   };
 
-  Minimap.prototype._stroke = function (ctx, cells, s) {
+  Minimap.prototype._stroke = function (ctx, cells, v) {
     if (!cells || cells.length < 2) return;
     ctx.beginPath();
     for (var i = 0; i < cells.length; i++) {
-      var x = (cells[i].col + 0.5) * s, y = (cells[i].row + 0.5) * s;
-      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      var q = this.cellToPx(cells[i].col, cells[i].row, v);
+      if (i === 0) ctx.moveTo(q.x, q.y); else ctx.lineTo(q.x, q.y);
     }
     ctx.stroke();
   };
 
-  /** 部屋（zone を持つ region）に属する踏破マスの索引 */
+  /** 「部屋」に属する踏破マスの索引（帯ゾーンは部屋ではない＝通路と塗り分ける） */
   Minimap.prototype._roomMask = function () {
     if (this._mask && this._maskCount === this.exploredCount) return this._mask;
     var out = Object.create(null);
-    var regions = (this.map.meta && this.map.meta.regions) || [];
+    var rooms = this.roomRegions();
     for (var k in this.explored) {
       var pair = k.split(',');
       var c = +pair[0], r = +pair[1];
-      for (var i = 0; i < regions.length; i++) {
-        var g = regions[i];
-        if (!g.zone) continue;
+      for (var i = 0; i < rooms.length; i++) {
+        var g = rooms[i];
         if (c >= g.c0 && c <= g.c1 && r >= g.r0 && r <= g.r1) { out[k] = true; break; }
       }
     }
@@ -294,28 +403,34 @@
     return acc;
   };
 
-  Minimap.prototype._drawZones = function (ctx, s, full) {
+  Minimap.prototype._drawZones = function (ctx, v, full) {
     var names = ESCAPE.ZONE_NAMES || {};
     var acc = this.zoneAnchors();
+    var s = v.s;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
+    /* 暗い背景でも読めるよう、影を敷いてから塗る（P4.11 項目6） */
+    ctx.shadowColor = COL.labelShadow;
+    ctx.shadowBlur = Math.max(3, s * 0.9);
     for (var z in acc) {
       if (!this.zones[z]) continue;
       var a = acc[z];
-      var x = (a.c / a.n + 0.5) * s, y = (a.r / a.n + 0.5) * s;
+      var q = this.cellToPx(a.c / a.n, a.r / a.n, v);
       if (full) {
-        ctx.font = 'bold ' + Math.round(s * 1.5) + 'px sans-serif';
+        ctx.font = 'bold ' + Math.round(s * 1.8) + 'px sans-serif';
         ctx.fillStyle = COL.label;
-        ctx.fillText(z, x, y - s * 0.9);
-        ctx.font = Math.round(s * 0.95) + 'px sans-serif';
+        ctx.fillText(z, q.x, q.y - s * 1.0);
+        ctx.font = 'bold ' + Math.round(s * 1.05) + 'px sans-serif';
         ctx.fillStyle = COL.labelSub;
-        ctx.fillText(names[z] || '', x, y + s * 0.9);
+        ctx.fillText(names[z] || '', q.x, q.y + s * 1.0);
       } else {
-        ctx.font = 'bold ' + Math.round(s * 2.6) + 'px sans-serif';
+        ctx.font = 'bold ' + Math.round(s * 3.0) + 'px sans-serif';
         ctx.fillStyle = COL.label;
-        ctx.fillText(z, x, y);
+        ctx.fillText(z, q.x, q.y);
       }
     }
+    ctx.shadowBlur = 0;
+    ctx.shadowColor = 'transparent';
   };
 
   /* ---------------- セーブ/ロード ---------------- */
@@ -342,10 +457,21 @@
     var zs = [];
     for (var z in this.zones) zs.push(z);
     zs.sort();
-    return { explored: this.exploredCount, zones: zs, full: this.full, wipes: this.wipes };
+    var v = this.view();
+    return {
+      explored: this.exploredCount, zones: zs, full: this.full, wipes: this.wipes,
+      px: v.px, scale: v.s, arrow: this.playerArrowSize(v), arrowLegacy: this.legacyArrowSize(v),
+      rooms: this.roomRegions().length
+    };
   };
 
   ESCAPE.Minimap = Minimap;
+  /* 機械テスト用の定数公開（唯一の真実はこのファイルの上端） */
+  ESCAPE.MINIMAP_CONST = {
+    MINI_PX: MINI_PX, FULL_PX: FULL_PX,
+    PLAYER_ARROW: PLAYER_ARROW, PLAYER_ARROW_LEGACY: PLAYER_ARROW_LEGACY,
+    ROOM_MAX: ROOM_MAX, COL: COL
+  };
 
   global.__mapDebug = {
     get: function () { return ESCAPE.game && ESCAPE.game.minimap; },

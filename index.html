@@ -34,7 +34,7 @@
   body.touch #hint { display:none; }
   /* --- ステルスHUD（P3b。捕獲回数は簡素に）。P4.8: 右上はミニマップが使うので下へ逃がす --- */
   #status {
-    position:absolute; right:12px; top:calc(min(22vw, 210px) + 16px);
+    position:absolute; right:12px; top:calc(min(32vw, 62vh) + 22px);
     font-size:12px; letter-spacing:.08em;
     color:rgba(196,168,168,.78); text-shadow:0 1px 3px rgba(0,0,0,.85);
   }
@@ -57,24 +57,26 @@
   #rope-hud.yellow { color:#efd98a; text-shadow:0 0 10px rgba(230,190,70,.45), 0 1px 5px rgba(0,0,0,.95); }
   #rope-hud.red { color:#f28a8a; text-shadow:0 0 12px rgba(220,60,60,.65), 0 1px 5px rgba(0,0,0,.95); }
   #rope-hud.loose { color:rgba(170,180,190,.72); }
-  /* --- P4.8: fog of war ミニマップ（右上・画面幅22%・半透明。タップで全画面） --- */
+  /* --- fog of war ミニマップ（右上・半透明。タップで全画面）
+         P4.11 項目6: 画面幅22%→32%。横持ちで画面を覆わないよう 62vh でだけ頭を押さえる。 --- */
   #minimap-wrap {
-    position:absolute; right:12px; top:10px; z-index:20; pointer-events:auto;
-    width:22vw; max-width:210px; min-width:118px;
-    border:1px solid rgba(150,180,200,.28); border-radius:3px;
-    background:rgba(4,6,9,.55); padding:2px; line-height:0;
+    position:absolute; right:10px; top:8px; z-index:20; pointer-events:auto;
+    width:min(32vw, 62vh); max-width:none; min-width:118px;
+    border:1px solid rgba(170,200,220,.42); border-radius:3px;
+    background:rgba(4,6,9,.62); padding:2px; line-height:0;
+    box-shadow:0 2px 10px rgba(0,0,0,.55);
     -webkit-tap-highlight-color:transparent;
   }
   #minimap-wrap.full {
     right:50%; top:50%; transform:translate(50%,-50%);
-    width:min(86vh, 86vw); max-width:none; background:rgba(3,5,7,.94);
-    border-color:rgba(180,210,230,.5); padding:6px;
+    width:min(97vh, 97vw); max-width:none; background:rgba(3,5,7,.96);
+    border-color:rgba(190,220,240,.6); padding:2px;
   }
-  #minimap { display:block; width:100%; height:auto; opacity:.86; }
+  #minimap { display:block; width:100%; height:auto; opacity:.96; }
   #minimap-wrap.full #minimap { opacity:1; }
   #minimap-label {
-    display:none; position:absolute; left:0; right:0; top:-24px; text-align:center;
-    font-size:12px; letter-spacing:.4em; color:rgba(190,214,232,.75); line-height:1.2;
+    display:none; position:absolute; left:0; right:0; top:-20px; text-align:center;
+    font-size:11px; letter-spacing:.4em; color:rgba(200,224,240,.8); line-height:1.2;
   }
   #minimap-wrap.full #minimap-label { display:block; }
   #prompt {
@@ -230,7 +232,7 @@
     <!-- P4.8: fog of war ミニマップ。タップで全画面（もう一度タップで閉じる） -->
     <div id="minimap-wrap">
       <div id="minimap-label">地図</div>
-      <canvas id="minimap" width="220" height="220"></canvas>
+      <canvas id="minimap" width="320" height="320"></canvas>
     </div>
     <div id="buttons">
       <button class="ctrl-btn" id="btn-crouch" type="button">しゃがむ</button>
