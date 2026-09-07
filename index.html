@@ -46,8 +46,9 @@
     white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
   }
   #objective.taut { color:#f2c9c9; text-shadow:0 0 12px rgba(200,70,70,.7), 0 1px 5px rgba(0,0,0,.95); }
-  /* --- P4.9: ロープ張力インジケータ（正文 docs/notes.md「HUD文言（P4.9追加）」）。
-         ラベルは出さず色だけで状態を示す: 緑=最短経路上 / 黄=遠回り / 赤=この先届かない --- */
+  /* --- P4.12: ロープ張力インジケータ＝方向判定（正文 docs/notes.md「P4.12追加（罠の案内・HUD）」）。
+         表示は `ロープ` のラベルのみ・状態は色で示す: 緑=正解ルート / 黄=遠回り / 赤=大きく外れ。
+         【失効】余裕(m)の表示（P4.9「ロープ 余裕 {M}m」）はロープ無制限化で失効。 --- */
   #rope-hud {
     position:absolute; left:50%; top:34px; transform:translateX(-50%);
     font-size:12px; letter-spacing:.10em; white-space:nowrap;
@@ -84,6 +85,19 @@
     font-size:13px; letter-spacing:.06em; color:rgba(222,232,240,.92);
     text-shadow:0 1px 4px rgba(0,0,0,.9); white-space:nowrap;
   }
+  /* --- P4.12 項目1: 通路を覆う罠の案内（正文 docs/notes.md「P4.12追加（罠の案内・HUD）」）。
+         「調べる」プロンプト（#prompt）とは別の行に置き、互いに競合させない。
+         位置は #prompt の1行下＝画面下。表示中だけ見える（既定は非表示）。 --- */
+  #trap-hint {
+    position:absolute; left:50%; bottom:92px; transform:translateX(-50%);
+    font-size:13px; letter-spacing:.10em; white-space:nowrap;
+    padding:3px 12px; border-radius:2px;
+    color:#ffe0b2; background:rgba(10,7,4,.58);
+    border:1px solid rgba(255,196,110,.34);
+    text-shadow:0 0 10px rgba(255,170,60,.55), 0 1px 4px rgba(0,0,0,.95);
+    opacity:0; visibility:hidden; pointer-events:none;
+  }
+  #trap-hint.show { opacity:1; visibility:visible; }
   /* 牢送りの暗転。opacity はゲーム内時刻から毎フレーム書く（CSS遷移に頼らない） */
   #blackout {
     position:fixed; inset:0; z-index:40; background:#000; opacity:0; pointer-events:none;
@@ -227,6 +241,7 @@
     <div id="objective"></div>
     <div id="rope-hud"></div>
     <div id="prompt"></div>
+    <div id="trap-hint"></div>
     <div id="hint">WASD 移動 / Shift 走る / Ctrl しゃがむ / E 調べる / 画面クリックで視点</div>
     <div id="stick-base"><div id="stick-knob"></div></div>
     <!-- P4.8: fog of war ミニマップ。タップで全画面（もう一度タップで閉じる） -->

@@ -1,12 +1,17 @@
-/* ESCAPE — P4.8「アリアドネ方式」ロープ
- * 契約 DESIGN.md §4「迷路の根幹＝アリアドネ方式」＞ロープ（ゲームの根幹）
+/* ESCAPE — P4.8「アリアドネ方式」ロープ（P4.12 で長さ制限を撤廃）
+ * 契約 DESIGN.md §4「迷路の根幹＝アリアドネ方式」＋「P4.12 再プレイ差し戻し」項目4
  *
  *  - スタート地点の結び目に固定され、腰で結ばれている。
- *  - 長さ L = スタート→出口の最短経路長 × (1+α)。α=0.70（P4.11。ここに集約）。
- *  - 前進で繰り出し、敷いたロープの上を戻ると巻き戻って余裕が回復する。
- *  - 余裕0で前進不可（腰を引かれる＋「ロープが張った」表示）。
+ *  - **長さ L は無制限（Infinity）**。どれだけ歩いても張らない・止まらない（P4.12）。
+ *  - 前進で繰り出し、敷いたロープの上を戻ると巻き戻る（＝道しるべとしての巻き取り）。
+ *  - 残るのは**張力インジケータ（方向判定）**だけ: 緑=遠回り率≤1.10 / 黄=≤1.50 / 赤=>1.50。
  *  - 捕獲でロープ端が床に落ちて結び目になる。復帰後に「拾って結ぶ」と再接続。
  *  - 敵には不可視・干渉なし（敵AIはこのモジュールを一切参照しない）。
+ *
+ * 【P4.12 失効】L = 最短×(1+α)／「ロープが張った」停止／腰を引かれる演出／余裕(m)の表示／
+ *   余裕不足による赤（redSlackRatio）は**すべて失効**。定数 alpha・redSlackRatio・
+ *   tautMsgDur・tautPullDur・tautPullSpeed は削除し、_enter() の余裕判定・_onTaut()・
+ *   _pullBack() は到達不能化（コードごと削除）した。slack() は Infinity を返す互換用の残骸。
  *
  * 内部モデル（重要）:
  *   敷かれたロープ＝「マスの列（stack）」。プレイヤーが新しいマスへ入ると1マス分(=tileSize)
@@ -15,32 +20,31 @@
  *   ループを一周した場合もロープは角で引き締まって短くなる（物理的にもこれが自然）。
  *
  * 毎フレームの上書き事故を避けるための約束:
- *   移動制限（前進不可）を判断するのはこの update() **だけ**。game.stepFrame() は
- *   player.step() の直後に一度だけ呼び、それ以降プレイヤー位置を書き換えない。
+ *   このモジュールはプレイヤー位置を**一切書き換えない**（P4.12 で前進不可が失効したため）。
+ *   game.stepFrame() は player.step() の直後に update() を一度だけ呼ぶ。
  */
 (function (global) {
   'use strict';
   var ESCAPE = global.ESCAPE;
   var THREE = global.THREE;
 
-  /* 契約 §4「P4.11 実プレイ差し戻し」項目2（2026-09-07）:
-     α=0.7（L=最短×1.7）／緑 ≤×1.10 ／黄 ≤×1.50 ／赤 >×1.50 または 余裕<L×0.08。
-     旧値（P4.8 α=0.30・P4.9 α=0.35・緑1.05・黄1.35）は実プレイで「厳しすぎる」として失効。 */
+  /* 契約 §4「P4.12 再プレイ差し戻し」項目4（2026-09-07）:
+     L=無制限。3色は**遠回り率だけ**で決まる（緑 ≤×1.10 ／黄 ≤×1.50 ／赤 >×1.50）。
+     【失効】alpha（P4.8 0.30 → P4.9 0.35 → P4.11 0.70）・redSlackRatio（0.08）・
+     tautMsgDur・tautPullDur・tautPullSpeed。長さ制限そのものが無くなったため定数ごと削除。 */
   var ROPE_TUNING = {
-    alpha: 0.70,             /* ロープの余裕率 L = 最短 × (1+α)。P4.11 で 0.35→0.70 */
-    greenRatio: 1.10,        /* 緑: 使用長 ≤ スタート→現在地の最短 × これ（P4.11 1.05→1.10） */
-    yellowRatio: 1.50,       /* 黄: 遠回り中（≤ 最短 × これ）。超えたら赤（P4.11 1.35→1.50） */
-    redSlackRatio: 0.08,     /* 赤: 余裕が L × これ を下回ったら（遠回り率に関わらず） */
+    greenRatio: 1.10,        /* 緑: 使用長 ≤ 基準最短 × これ（P4.11 1.05→1.10） */
+    yellowRatio: 1.50,       /* 黄: 遠回り中（≤ 基準最短 × これ）。超えたら赤（P4.11 1.35→1.50） */
     tensionInterval: 0.50,   /* 張力インジケータの再計算間隔(s)。マス変化時は即時 */
     redWarnDur: 3.20,        /* 赤に入った時の目的表示の一時差し替え(s) */
     knotPickRange: 2.30,     /* 結び目に「調べる」が届く距離(m) */
-    tautMsgDur: 2.40,        /* 「ロープが張った」の表示時間(s) */
-    tautPullDur: 0.42,       /* 腰を引かれる演出の長さ(s) */
-    tautPullSpeed: 1.35,     /* 引き戻される速さ(m/s) */
     trailWidth: 0.075,       /* 床に敷かれたロープの見かけの太さ(m) */
     trailLift: 0.035,        /* 床からの浮かせ量(m)。Zファイト回避 */
     maxSegments: 512         /* 折れ線の上限（stack + ghost をまとめて格納する） */
   };
+
+  /** P4.12: ロープの長さは無制限。L は Infinity で固定（HUDにも出さない） */
+  var ROPE_LENGTH_UNLIMITED = Infinity;
 
   var ROPE_COLOR = 0xc9b489;
   var GHOST_COLOR = 0x6b6152;
@@ -77,7 +81,8 @@
     this.reset();
   }
 
-  /** 契約: L = スタート→出口の最短経路長 × (1+α)（マス数 × tileSize） */
+  /** スタート→出口の最短経路長（マス数）。P4.12 で L の算出には使わなくなったが、
+   *  基準最短の妥当性検査（機械テスト）と情報表示のために残す。 */
   Rope.prototype.shortestCells = function () {
     var map = this.game.map, meta = map.meta || {};
     var sp = meta.spawn, ex = meta.exitPad;
@@ -105,7 +110,8 @@
     this.map = map;
     this.anchor = { col: meta.spawn.col, row: meta.spawn.row };
     this.shortest = this.shortestCells() * map.tileSize;
-    this.L = this.shortest * (1 + this.T.alpha);
+    /* P4.12: L は無制限。旧「最短×(1+α)」は失効 */
+    this.L = ROPE_LENGTH_UNLIMITED;
     this.stack = [{ col: this.anchor.col, row: this.anchor.row }];
     this._index = Object.create(null);
     this._index[this.anchor.col + ',' + this.anchor.row] = 0;
@@ -113,12 +119,9 @@
     this.attached = true;
     this.knots = [];
     this.ghosts = [];
-    this.taut = false;
-    this.tautT = 0;
-    this.pullT = 0;
     this.payouts = 0;
     this.rewinds = 0;
-    this.blocks = 0;
+    this.blocks = 0;          /* P4.12 失効: 前進不可は起きないので常に 0 */
     this.picks = 0;
     this.drops = 0;
     this.redWarns = 0;
@@ -132,13 +135,13 @@
     this._buildKnots();
   };
 
-  /* ---------------- 張力インジケータ（DESIGN.md §4「エリア1 新マップ Z4」） ----------------
-   * 2026-09-04 改訂。旧「赤 = 残りロープ < 現在地→目標の最短」は鍵取得直後に必ず赤になる
-   * 欠陥があり失効。赤は「戻って巻き戻す必要がある」の意味に統一した。
-   *   緑 = 最短経路上   （使用長 ≤ スタート→現在地の最短 × 1.10）
-   *   黄 = 遠回り中     （≤ 最短 × 1.50）
-   *   赤 = 大きな遠回り （> 最短 × 1.50）または 余裕 < L × 0.08
-   *   （P4.11 で 1.05/1.35 → 1.10/1.50 に緩和。閾値は ROPE_TUNING が唯一の真実）
+  /* ---------------- 張力インジケータ＝方向判定（DESIGN.md §4「P4.12」項目4） ----------------
+   * P4.12 改訂。ロープの長さが無制限になったので、色は**遠回り率だけ**で決まる。
+   *   緑 = 正解ルートに沿っている（使用長 ≤ 基準最短 × 1.10）
+   *   黄 = 遠回り中                （≤ 基準最短 × 1.50）
+   *   赤 = 大きく外れている        （> 基準最短 × 1.50）
+   *   【失効】「余裕 < L × 0.08 で赤」（P4.9 redSlackRatio）は長さ制限ごと失効。
+   *   （閾値は ROPE_TUNING が唯一の真実）
    * 距離場（スタート／鍵／出口）は静的なので BFS はリセット時に3枚だけ焼き、以後は O(1) 参照。
    * 鍵・出口までの距離は状態判定には使わない（情報表示と機械テスト用に残す）。
    * 状態の再評価はマスが変わった時と 0.5 秒ごと（契約の「間引き計算」）。 */
@@ -227,16 +230,16 @@
     }
     var best = (bestTiles >= 0) ? bestTiles * T : 0;
     var ratio = (best > 1e-6) ? (this.used / best) : 1;
-    var lowSlack = slack < this.L * this.T.redSlackRatio;
+    /* P4.12: 色は遠回り率だけで決まる（余裕不足の赤＝lowSlack は失効。常に false） */
     var state;
     if (!this.attached) state = 'loose';
-    else if (ratio > this.T.yellowRatio + 1e-9 || lowSlack) state = 'red';
+    else if (ratio > this.T.yellowRatio + 1e-9) state = 'red';
     else if (ratio <= this.T.greenRatio + 1e-9) state = 'green';
     else state = 'yellow';
     return {
       state: state, goal: goal, slack: slack, used: this.used, L: this.L,
       need: need, needTiles: needTiles, best: best, bestTiles: bestTiles,
-      ratio: ratio, lowSlack: lowSlack
+      ratio: ratio, lowSlack: false
     };
   };
 
@@ -260,29 +263,24 @@
     return this._tension;
   };
 
-  /** 残りの余裕(m) */
+  /** 残りの余裕(m)。P4.12 で L が無制限になったため常に Infinity（表示には使わない） */
   Rope.prototype.slack = function () { return Math.max(0, this.L - this.used); };
   /** いま結ばれているか */
   Rope.prototype.isAttached = function () { return this.attached; };
   Rope.prototype.head = function () { return this.stack[this.stack.length - 1]; };
 
-  /* ---------------- マス遷移（繰り出し・巻き戻し・前進不可） ---------------- */
+  /* ---------------- マス遷移（繰り出し・巻き戻し） ---------------- */
 
   /**
-   * player.step() の直後に1回だけ呼ぶ。prevX/prevZ は移動前の座標。
-   * 余裕が足りずに新しいマスへ入ろうとした場合は移動を取り消す（＝前進不可）。
+   * player.step() の直後に1回だけ呼ぶ。prevX/prevZ は移動前の座標（P4.12 以降は未使用）。
+   * 【P4.12】長さ制限の撤廃により、このメソッドはプレイヤー位置を**一切書き換えない**。
    */
   Rope.prototype.update = function (dt, prevX, prevZ) {
-    if (this.tautT > 0) {
-      this.tautT -= dt;
-      if (this.tautT <= 0) { this.tautT = 0; this.taut = false; }
-    }
     if (this.redT > 0) { this.redT -= dt; if (this.redT < 0) this.redT = 0; }
     var p = this.game.player;
     var c = p.col(), r = p.row();
     if (!this.attached) {
-      /* 結び目まで戻る区間はロープ無し＝余裕を消費しない（契約） */
-      this._pullBack(dt);
+      /* 結び目まで戻る区間はロープ無し＝繰り出さない（契約） */
       this._syncTrail();
       this._tickTension(dt);
       return;
@@ -294,19 +292,9 @@
         /* 想定外の飛び（テレポート等）。ロープを現在地から張り直す＝壊れた状態を作らない */
         this._relocate(c, r);
       } else {
-        for (var i = 0; i < steps.length; i++) {
-          if (!this._enter(steps[i].col, steps[i].row)) {
-            /* 余裕0: 腰を引かれて前進できない */
-            p.x = prevX; p.z = prevZ;
-            p.y = this.map.floorYAt(p.x, p.z);
-            p.speed = 0;
-            this._onTaut();
-            break;
-          }
-        }
+        for (var i = 0; i < steps.length; i++) this._enter(steps[i].col, steps[i].row);
       }
     }
-    this._pullBack(dt);
     this._syncTrail();
     this._tickTension(dt);
   };
@@ -335,7 +323,7 @@
     return null;
   };
 
-  /** 1マス進む。true=進めた / false=余裕不足 */
+  /** 1マス進む。P4.12: 長さ制限が失効したので**必ず true**（呼び側の分岐は残骸） */
   Rope.prototype._enter = function (col, row) {
     var key = col + ',' + row;
     var at = this._index[key];
@@ -351,7 +339,8 @@
       this._dirty = true;
       return true;
     }
-    if (this.slack() < this.map.tileSize - 1e-9) { this.blocks++; return false; }
+    /* 【P4.12 失効】ここにあった「余裕不足なら blocks++ して false」は到達不能化した
+       （L=無制限。契約 §4「P4.12 再プレイ差し戻し」項目4）。 */
     this.stack.push({ col: col, row: row });
     this._index[key] = this.stack.length - 1;
     this.used += this.map.tileSize;
@@ -367,29 +356,8 @@
     this._dirty = true;
   };
 
-  Rope.prototype._onTaut = function () {
-    if (!this.taut) {
-      sfx('handleCreak', { x: this.game.player.x, z: this.game.player.z });
-      shakeKick(0.45);
-      this.pullT = this.T.tautPullDur;
-    }
-    this.taut = true;
-    this.tautT = this.T.tautMsgDur;
-  };
-
-  /** 腰を引かれる演出: 張った直後だけ、敷いたロープの側へ僅かに引き戻される */
-  Rope.prototype._pullBack = function (dt) {
-    if (this.pullT <= 0) return;
-    this.pullT -= dt;
-    if (this.pullT < 0) this.pullT = 0;
-    var p = this.game.player, h = this.head();
-    var c = this.map.cellCenter(h.col, h.row);
-    var dx = c.x - p.x, dz = c.z - p.z;
-    var d = Math.hypot(dx, dz);
-    if (d < 0.06) return;
-    var step = Math.min(d, this.T.tautPullSpeed * dt);
-    p.moveBy(dx / d * step, dz / d * step);
-  };
+  /* 【P4.12 失効】_onTaut()（「ロープが張った」＋軋み音＋画面揺れ）と
+     _pullBack()（腰を引かれる演出）はここにあった。長さ制限の撤廃で到達不能になったため削除。 */
 
   /* ---------------- 結び目（捕獲・拾い直し） ---------------- */
 
@@ -405,7 +373,6 @@
     };
     this.knots.push(k);
     this.attached = false;
-    this.taut = false; this.tautT = 0; this.pullT = 0;
     this.drops++;
     this._buildKnots();
     this._dirty = true;
@@ -458,7 +425,6 @@
     this.used = 0;
     this.attached = true;
     this.knots.length = 0;
-    this.taut = false; this.tautT = 0; this.pullT = 0;
     this.redT = 0; this._tension = null; this._tenCell = null; this._tenT = 0;
     this._buildKnots();
     this._dirty = true;
@@ -669,7 +635,7 @@
   Rope.prototype.info = function () {
     return {
       L: this.L, shortest: this.shortest, used: this.used, slack: this.slack(),
-      attached: this.attached, taut: this.taut, cells: this.stack.length,
+      attached: this.attached, cells: this.stack.length,
       knots: this.knots.length, ghosts: this.ghosts.length,
       payouts: this.payouts, rewinds: this.rewinds, blocks: this.blocks,
       picks: this.picks, drops: this.drops,
@@ -679,6 +645,86 @@
 
   ESCAPE.Rope = Rope;
   ESCAPE.ROPE_TUNING = ROPE_TUNING;
+
+  /* ================================================================
+   * P4.12 レーンB の機械テスト（契約 §6）。runAll が拾う ESCAPE.__extraSuites に積む。
+   * ここに置くのは「ロープ無制限化」に直結する検査だけ（他は js/test.js が持つ）。
+   * ============================================================== */
+  ESCAPE.__extraSuites = ESCAPE.__extraSuites || [];
+
+  /** 3色が**遠回り率だけ**で決まる（余裕・L・繰り出し量に一切依存しない） */
+  function testP412TensionByRatioOnly(t, g) {
+    g.reset();
+    var rope = g.rope, T = ESCAPE.ROPE_TUNING;
+    /* 基準最短を持つ地点まで進める（スタートは best=0 で率が定義されない） */
+    var meta = g.map.meta;
+    rope._enter(meta.spawn.col, meta.spawn.row);
+    var base = rope.computeTension();
+    if (!base) return;
+    /* used を直接動かして率だけを振る。L は Infinity のまま触らない。 */
+    rope._buildDistMaps();
+    /* 現在地から数マス進めて best > 0 を作る */
+    var d = rope._dFromSpawn, W = rope._W, map = g.map;
+    var cell = null;
+    for (var r = 0; r < map.height && !cell; r++) {
+      for (var c = 0; c < map.width; c++) {
+        if (d[r * W + c] >= 6 && d[r * W + c] <= 10) { cell = { col: c, row: r }; break; }
+      }
+    }
+    if (!t.ok(!!cell, 'P4.12 色: 基準最短が積み上がるマスが取れる')) return;
+    rope.stack = [{ col: cell.col, row: cell.row }];
+    rope._index = Object.create(null);
+    rope._index[cell.col + ',' + cell.row] = 0;
+    var best = rope.computeTension().best;
+    if (!t.ok(best > 0, 'P4.12 色: 基準最短 > 0', best.toFixed(1))) return;
+
+    var CASES = [[1.00, 'green'], [1.10, 'green'], [1.11, 'yellow'], [1.50, 'yellow'],
+                 [1.51, 'red'], [3.00, 'red'], [20.0, 'red']];
+    var bad = [];
+    for (var i = 0; i < CASES.length; i++) {
+      rope.used = best * CASES[i][0];
+      rope._tension = null;
+      var st = rope.computeTension();
+      if (st.state !== CASES[i][1]) bad.push('×' + CASES[i][0] + '→' + st.state);
+      if (st.lowSlack !== false) bad.push('×' + CASES[i][0] + ' lowSlack=true');
+      if (st.L !== Infinity) bad.push('×' + CASES[i][0] + ' L≠Infinity');
+    }
+    t.ok(bad.length === 0,
+      'P4.12 色: 緑/黄/赤が遠回り率だけで決まる（1.10/1.50 が境目・余裕不足の赤は無い）',
+      bad.join(' / ') || '全ケース一致');
+    /* 繰り出し量をどれだけ増やしても、率が小さければ緑のまま */
+    rope.used = best * 1.05;
+    rope._tension = null;
+    t.ok(rope.computeTension().state === 'green' && rope.slack() === Infinity,
+      'P4.12 色: 何m繰り出しても率が小さければ緑（長さは色に影響しない）');
+    g.reset();
+  }
+
+  /** 正文の追従: memo1（P4.12改訂）と ロープHUDの文言 */
+  function testP412RopeTexts(t, g) {
+    g.reset();
+    var N = ESCAPE.PROGRESS_NOTE_TEXTS, memo1 = N && N.a1_n5;
+    if (!t.ok(!!memo1, 'P4.12 正文: memo1（a1_n5）がある')) return;
+    var WANT = '夜勤の点検員へ\n\n' +
+      '隔壁が全部降りた。北の隔壁だけは手動で開くが、鍵がいる。\n' +
+      '鍵は所長室の金庫 —— 施設の一番奥だ。\n\n' +
+      '腰のロープを外すな。奴らが来る前、俺たちはこれで戻っていた。\n' +
+      'ロープの色が濁ったら道を外れている。戻れ。';
+    t.ok(memo1.title === '夜勤引継ぎのメモ', 'P4.12 正文: memo1 の表示タイトル', memo1.title);
+    t.ok(memo1.body === WANT, 'P4.12 正文: memo1 本文が改訂版と一字一句一致する',
+      memo1.body === WANT ? 'OK' : JSON.stringify(memo1.body));
+    t.ok(memo1.body.indexOf('ロープが張ったら') < 0,
+      'P4.12 正文: 旧末行「ロープが張ったら、それ以上は行くな。」が残っていない');
+    t.ok(/ロープの色が濁ったら道を外れている。戻れ。$/.test(memo1.body),
+      'P4.12 正文: 末行が「ロープの色が濁ったら道を外れている。戻れ。」');
+    t.ok(ESCAPE.PROGRESS_ROPE_HUD === 'ロープ',
+      'P4.12 正文: ロープHUDは `ロープ` のラベルのみ', ESCAPE.PROGRESS_ROPE_HUD);
+    t.ok(ESCAPE.PROGRESS_OBJECTIVE.ropeDetour === '遠回りしすぎだ —— 戻って巻き戻せ',
+      'P4.12 正文: 赤突入時の目的表示は維持', ESCAPE.PROGRESS_OBJECTIVE.ropeDetour);
+    g.reset();
+  }
+
+  ESCAPE.__extraSuites.push(testP412TensionByRatioOnly, testP412RopeTexts);
 
   /* 検証フック（機械テスト・E2E用）。ESCAPE.game.rope への遅延参照のみ */
   global.__ropeDebug = {

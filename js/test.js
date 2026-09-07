@@ -1200,12 +1200,13 @@
     return out.slice(1);
   }
 
-  /** 契約: L = スタート→出口の最短経路長 × (1+α)。α は定数集約されていること */
+  /** 【P4.12 改訂】旧「L = 最短 × (1+α)」は契約 §4「P4.12」項目4 で**失効**（L=無制限）。
+   *  残るのは「最短経路長が正しく求まっていること」＝張力インジケータの基準の健全性だけ。 */
   function testRopeLength(t, g) {
     g.reset();
     var rope = g.rope, T = ESCAPE.ROPE_TUNING;
     if (!t.ok(!!rope, 'ロープ: モジュールが組み込まれている')) return;
-    t.near(T.alpha, 0.70, 1e-9, 'ロープ: α は 0.70（契約 §4 P4.11 項目2）', T.alpha);
+    t.ok(T.alpha === undefined, 'P4.12: 定数 α は失効して消えている（L=無制限）', String(T.alpha));
     /* 独立に BFS して最短経路長を出し直す（Rope の実装と別経路で確かめる） */
     var meta = g.map.meta;
     var route = routeTo(g, meta.spawn.col, meta.spawn.row, meta.exitPad.col, meta.exitPad.row);
@@ -1213,9 +1214,9 @@
     var shortest = route.length * g.map.tileSize;
     t.near(rope.shortest, shortest, 1e-6, 'ロープ: 最短経路長がBFSと一致する',
       rope.shortest + ' vs ' + shortest);
-    t.near(rope.L, shortest * (1 + T.alpha), 1e-6, 'ロープ: L = 最短 × (1+α)', rope.L);
+    t.ok(rope.L === Infinity, 'P4.12: ロープの長さは無制限（Infinity）', String(rope.L));
     t.near(rope.used, 0, 1e-9, 'ロープ: 開始時は繰り出しゼロ');
-    t.near(rope.slack(), rope.L, 1e-9, 'ロープ: 開始時の余裕は L と等しい');
+    /* 【失効】「開始時の余裕は L と等しい」（余裕の概念そのものが失効） */
     t.ok(rope.isAttached() === true, 'ロープ: 開始時はスタートの結び目に結ばれている');
     t.ok(rope.stack.length === 1 && rope.stack[0].col === meta.spawn.col &&
       rope.stack[0].row === meta.spawn.row, 'ロープ: 錨はスタート地点');
@@ -1234,45 +1235,70 @@
     t.ok(usedOut > 0, '繰り出し: 前進でロープが繰り出される', usedOut.toFixed(1) + 'm');
     t.near(usedOut, (rope.stack.length - 1) * g.map.tileSize, 1e-6,
       '繰り出し: 繰り出し量 = 敷いたマス数 × 1マス', usedOut);
-    t.near(rope.slack(), rope.L - usedOut, 1e-9, '繰り出し: 余裕 = L - 繰り出し量');
+    /* 【P4.12 失効】「余裕 = L - 繰り出し量」。L=無制限なので余裕は常に Infinity。
+       代わりに「どれだけ歩いても余裕が減らない＝止まらない」ことを確かめる。 */
+    t.ok(rope.slack() === Infinity, 'P4.12: どれだけ繰り出しても余裕は減らない（無制限）', String(rope.slack()));
+    t.ok(rope.blocks === 0, 'P4.12: 前進が拒否されない', rope.blocks);
     /* 来た道を戻る */
     var back = out.slice(0, out.length - 1).reverse();
     back.push({ col: meta.spawn.col, row: meta.spawn.row });
     walkCells(g, back);
     t.near(rope.used, 0, 1e-6, '巻き戻し: 敷いたロープの上を戻ると余裕が完全に回復する', rope.used);
-    t.near(rope.slack(), rope.L, 1e-6, '巻き戻し: 余裕が L に戻る', rope.slack());
     t.ok(rope.stack.length === 1, '巻き戻し: 敷かれたロープが錨まで巻き取られる', rope.stack.length);
     t.ok(rope.rewinds > 0, '巻き戻し: 巻き戻しが実際に起きている', rope.rewinds);
     g.reset();
   }
 
-  /** 余裕0で前進不可（腰を引かれる）。戻れば必ず解ける＝詰まない */
-  function testRopeTautBlocks(t, g) {
+  /** 【P4.12 全面失効】旧 testRopeTautBlocks「余裕0で前進不可（腰を引かれる）」。
+   *  契約 §4「P4.12 再プレイ差し戻し」項目4 でロープの長さ制限が撤廃されたため、
+   *  「張った」状態・前進不可・腰を引かれる演出・正文「ロープが張った」は**すべて失効**。
+   *  代わりに「無制限であること」＝どれだけ歩いても止まらない・巻き戻し以外で used が減らない
+   *  ことを、旧テストと同じ経路（スタート→10,46）で確かめる。 */
+  function testP412RopeUnlimited(t, g) {
     g.reset();
     localStorage.removeItem(SAVE_KEY);
-    var rope = g.rope, meta = g.map.meta;
-    /* L を切り詰めて「余裕0」を短時間で作る（実装の分岐は同じものを通る） */
-    var savedL = rope.L;
+    var rope = g.rope, meta = g.map.meta, T = ESCAPE.ROPE_TUNING;
+    t.ok(rope.L === Infinity, 'P4.12 無制限: L は Infinity', String(rope.L));
+    t.ok(T.alpha === undefined && T.redSlackRatio === undefined,
+      'P4.12 無制限: α・余裕不足の閾値は定数ごと失効している');
+    t.ok(typeof rope._onTaut !== 'function' && typeof rope._pullBack !== 'function',
+      'P4.12 無制限: 「張った」演出・腰を引かれる演出のコードが到達不能化（削除）されている');
+    t.ok(ESCAPE.PROGRESS_UI_TEXT.taut === undefined &&
+      ESCAPE.PROGRESS_OBJECTIVE.taut === undefined &&
+      ESCAPE.PROGRESS_OBJECTIVE.ropeShort === undefined,
+      'P4.12 無制限: 正文「ロープが張った」「ロープが足りない」が失効している');
+
     var route = routeTo(g, meta.spawn.col, meta.spawn.row, 10, 46);
-    if (!t.ok(!!route && route.length >= 4, '張り: 試験用の経路がある')) return;
-    rope.L = 3 * g.map.tileSize;                 /* 3マスぶんだけ繰り出せる */
+    if (!t.ok(!!route && route.length >= 4, 'P4.12 無制限: 試験用の経路がある')) return;
+    /* 旧テストで「余裕0」を作っていた長さ（3マス分）よりはるかに長く歩く */
     walkCells(g, route);
-    t.near(rope.used, rope.L, 1e-6, '張り: 余裕を使い切るところまで進める', rope.used);
-    t.near(rope.slack(), 0, 1e-9, '張り: 余裕が0になる');
-    t.ok(rope.taut === true, '張り: 「ロープが張った」状態になる');
-    t.ok(rope.blocks > 0, '張り: 前進が実際に拒否された', rope.blocks);
-    t.ok(g.progress.objective() === ESCAPE.PROGRESS_OBJECTIVE.taut,
-      '張り: 目的表示が一時的に差し替わる（正文）', g.progress.objective());
-    t.ok(g.progress._flashMsg === ESCAPE.PROGRESS_UI_TEXT.taut,
-      '張り: 画面表示「ロープが張った」（正文）', g.progress._flashMsg);
-    var cell = g.player.col() + ',' + g.player.row();
-    var head = rope.head().col + ',' + rope.head().row;
-    t.ok(cell === head, '張り: 敷いたロープの先端より先へは出られない', cell + ' / ' + head);
-    /* 戻れば回復する（＝詰まない） */
-    walkCells(g, [{ col: meta.spawn.col, row: meta.spawn.row }]);
-    t.ok(rope.slack() > 0, '張り: 戻れば必ず余裕が戻る（詰み状態を作らない）', rope.slack());
-    rope.L = savedL;
+    var usedA = rope.used, cellA = g.player.col() + ',' + g.player.row();
+    t.ok(usedA > 3 * g.map.tileSize,
+      'P4.12 無制限: 旧Lの何倍歩いても繰り出しが続く', usedA.toFixed(0) + 'm');
+    t.ok(rope.blocks === 0, 'P4.12 無制限: 前進が一度も拒否されない', rope.blocks);
+    t.ok(rope.slack() === Infinity, 'P4.12 無制限: slack が減らない（常に Infinity）', String(rope.slack()));
+    t.ok(cellA === route[route.length - 1].col + ',' + route[route.length - 1].row,
+      'P4.12 無制限: 目的のマスまで実際に到達できる（腰を引き戻されない）', cellA);
+    t.ok(rope.head().col + ',' + rope.head().row === cellA,
+      'P4.12 無制限: ロープの先端が現在地に追随している');
+
+    /* さらに大回り（戻って再び行く）でも止まらない。
+       ※道中の捕獲は敵AI側の都合で起こり得るので、位置ではなく
+         「一度も前進が拒否されない・余裕が減らない」で判定する。 */
+    var far = routeTo(g, g.player.col(), g.player.row(), meta.spawn.col, meta.spawn.row);
+    if (far && far.length) walkCells(g, far);
+    var again = routeTo(g, g.player.col(), g.player.row(), 10, 46);
+    if (again && again.length) walkCells(g, again);
+    t.ok(rope.blocks === 0, 'P4.12 無制限: 往復を重ねても一度も止まらない', rope.blocks);
+    t.ok(rope.slack() === Infinity && rope.payouts > 40,
+      'P4.12 無制限: 往復のあとも余裕は無制限のまま', 'payouts=' + rope.payouts);
+    /* HUD/目的表示に「張った」系が現れない */
+    g.stepFrame(ESCAPE.FIXED_DT);
+    var obj = g.progress.objective();
+    t.ok(obj.indexOf('張った') < 0 && obj.indexOf('ロープが足りない') < 0,
+      'P4.12 無制限: 目的表示に失効した文言が出ない', obj);
     g.reset();
+    localStorage.removeItem(SAVE_KEY);
   }
 
   /** 捕獲でロープ端が結び目になり、スタート復帰 → 結び目まで戻って拾い直すと再接続する */
@@ -2082,13 +2108,8 @@
     }, '施錠された隔壁を調べる');
     delta('doorRoar', function () { interactAt(g, bulkG.col, bulkG.row); }, '隔壁の解錠（轟音）');
     t.ok(g.progress.gimmick.doorOpen === true, '音響フック: 隔壁が実際に開いている（前提）');
-    /* P4.8 ロープ: 張った瞬間の軋みと結び目の拾い上げ */
-    g.reset();
-    delta('handleCreak', function () {
-      var rope = g.rope, meta = g.map.meta;
-      rope.L = 2 * g.map.tileSize;
-      walkCells(g, routeTo(g, meta.spawn.col, meta.spawn.row, 10, 46));
-    }, 'ロープが張る');
+    /* 【P4.12 失効】「ロープが張った瞬間の軋み(handleCreak)」。長さ制限の撤廃で鳴らなくなった。
+       ロープ側の音は「赤に入った瞬間の警告(terminalErr)」と結び目の拾い上げ(pickup)だけになる。 */
     g.reset();
     delta('pickup', function () {
       g.stealth.capture();
@@ -3356,10 +3377,12 @@
     g.reset();
     localStorage.removeItem(SAVE_KEY);
     var rope = g.rope, meta = g.map.meta, T = ESCAPE.ROPE_TUNING;
-    t.near(T.alpha, 0.70, 1e-9, 'P4.11: α = 0.70（契約・緩和）', T.alpha);
     t.near(T.greenRatio, 1.10, 1e-9, 'P4.11: 緑の判定は最短×1.10（契約・緩和）', T.greenRatio);
     t.near(T.yellowRatio, 1.50, 1e-9, 'P4.11: 黄の判定は最短×1.50（契約・緩和）', T.yellowRatio);
-    t.near(T.redSlackRatio, 0.08, 1e-9, 'P4.9: 赤は余裕が L の8%未満でも立つ（契約・改訂）', T.redSlackRatio);
+    /* 【P4.12 失効】α = 0.70 ／「赤は余裕が L の8%未満でも立つ」（redSlackRatio）。
+       ロープ無制限化により色は遠回り率だけで決まる。 */
+    t.ok(T.alpha === undefined && T.redSlackRatio === undefined,
+      'P4.12: α と余裕不足の閾値が失効している（色は遠回り率だけ）');
     t.ok(T.tensionInterval <= 0.5 + 1e-9, 'P4.9: 張力の再計算は0.5秒以下の間引き', T.tensionInterval);
 
     /* スタート地点は必ず緑（使用長0＝最短） */
@@ -3374,8 +3397,8 @@
     t.ok(tg.state === 'green', 'P4.9 緑: 最短経路上を進んでいる間は緑',
       tg.state + ' ratio=' + tg.ratio.toFixed(3));
 
-    /* 遠回り率だけを動かして 緑→黄→赤 の閾値を検証する（余裕は潤沢なまま） */
-    var usedSave = rope.used, Lsave = rope.L;
+    /* 遠回り率だけを動かして 緑→黄→赤 の閾値を検証する */
+    var usedSave = rope.used;
     var best = tg.best;
     rope.used = best * 1.08; rope._tension = null;
     t.ok(rope.computeTension().state === 'green', 'P4.11 緑: 最短×1.08 は緑（1.10まで緑）');
@@ -3387,15 +3410,17 @@
     rope.used = best * 1.55; rope._tension = null;
     var tr = rope.computeTension();
     t.ok(tr.state === 'red', 'P4.11 赤: 最短×1.55 は赤（大きな遠回り）', tr.state);
-    t.ok(tr.lowSlack === false, 'P4.11 赤: この赤は「余裕不足」ではなく「遠回り」で立っている');
+    t.ok(tr.lowSlack === false, 'P4.12 赤: 赤は「遠回り」だけで立つ（余裕不足の赤は失効）');
 
-    /* 余裕が L の8%を切っても赤（遠回り率が小さくても） */
+    /* 【P4.12 失効】「余裕が L の8%を切っても赤」。L=無制限なので lowSlack は常に false。
+       どれだけ繰り出しても、遠回り率が小さければ赤にならないことを確かめる。 */
     rope.used = best * 1.05;
-    rope.L = rope.used * 1.05;                       /* 余裕 ≒ L の 4.8% */
     rope._tension = null;
     var tr2 = rope.computeTension();
-    t.ok(tr2.state === 'red', 'P4.9 赤: 余裕が L の8%未満なら赤', tr2.state);
-    t.ok(tr2.lowSlack === true, 'P4.9 赤: 余裕不足の赤として記録される');
+    t.ok(tr2.state === 'green' && tr2.lowSlack === false,
+      'P4.12: 繰り出し量が大きくても遠回り率が小さければ緑（余裕不足の赤は失効）',
+      tr2.state + ' slack=' + String(tr2.slack));
+    rope.used = best * 1.55;
 
     /* 赤に入った瞬間の警告は1回だけ／赤の間は繰り返さない／解除できる */
     rope.redT = 0;
@@ -3404,12 +3429,12 @@
     rope._tickTension(0.6);
     t.ok(rope.redWarns === warns0 + 1, 'P4.9 赤: 赤に入った瞬間に警告が1回だけ出る', rope.redWarns);
     t.ok(rope.redT > 0, 'P4.9 赤: 目的表示の一時差し替えが立つ', rope.redT.toFixed(2));
-    t.ok(g.progress.objective() === ESCAPE.PROGRESS_OBJECTIVE.ropeShort,
-      'P4.9 赤: 目的表示が「ロープが足りない —— 戻って巻き戻せ」（正文）', g.progress.objective());
+    t.ok(g.progress.objective() === ESCAPE.PROGRESS_OBJECTIVE.ropeDetour,
+      'P4.12 赤: 目的表示が「遠回りしすぎだ —— 戻って巻き戻せ」（正文・維持）', g.progress.objective());
     rope._tickTension(0.6);
     t.ok(rope.redWarns === warns0 + 1, 'P4.9 赤: 赤のままなら警告は繰り返さない', rope.redWarns);
     /* 巻き戻し相当（使用長を戻す）で赤が解ける */
-    rope.L = Lsave; rope.used = usedSave;
+    rope.used = usedSave;
     rope._tension = null;
     rope._tickTension(0.6);
     t.ok(rope.tension().state !== 'red', 'P4.9: 巻き戻して最短に近づけば赤が解ける', rope.tension().state);
@@ -3438,8 +3463,11 @@
     g.stepFrame(ESCAPE.FIXED_DT);
     var el = document.getElementById('rope-hud');
     t.ok(!!el, 'P4.9: ロープHUDのDOMが結線されている');
-    t.ok(/^ロープ 余裕 \d+m$/.test(g.progress.ropeHudText()),
-      'P4.9: HUD文言が「ロープ 余裕 {M}m」（正文）', g.progress.ropeHudText());
+    /* 【P4.12 改訂】旧「ロープ 余裕 {M}m」は失効。ラベルだけ＋色で示す。 */
+    t.ok(g.progress.ropeHudText() === 'ロープ',
+      'P4.12: HUD文言は `ロープ` のラベルのみ（正文・メートル表示は失効）', g.progress.ropeHudText());
+    t.ok(!/\d/.test(g.progress.ropeHudText()) && g.progress.ropeHudText().indexOf('m') < 0,
+      'P4.12: HUDに数値（余裕のメートル）を出さない', g.progress.ropeHudText());
     t.ok(['green', 'yellow', 'red', 'loose'].indexOf(g.progress.ropeHudState()) >= 0,
       'P4.9: HUDの色は緑/黄/赤（未接続はloose）', g.progress.ropeHudState());
     t.ok(el.className === g.progress.ropeHudState(), 'P4.9: HUDのクラスが状態に追従する', el.className);
@@ -3482,11 +3510,15 @@
     var dk = bfs(ks.col, ks.row);
     var de = bfs(meta.exitPad.col, meta.exitPad.row);
     var shortest = ds[meta.exitPad.row * W + meta.exitPad.col];
-    var L = shortest * (1 + ESCAPE.ROPE_TUNING.alpha);
+    /* 【P4.12 改訂】L = 最短×(1+α) は失効（L=無制限）。「鍵がロープ長の内側にあるか」
+       「巻き戻しを使えば届くか」という詰みの検査は、長さ制限ごと不要になった。
+       残るのは経路そのものの健全性＝到達できること・最短が有限であること。 */
     var toKey = ds[ks.row * W + ks.col];
     t.ok(toKey > 0, 'P4.9: 鍵まで到達できる', toKey + 'マス');
-    t.ok(toKey <= L, 'P4.9: 鍵はロープ長 L の内側にある', toKey + ' <= ' + L.toFixed(1));
-    /* 巻き戻しを使えば鍵→出口が成立する（最小ピーク = min_j d_s(j)+max(d_key(j), d_exit(j))） */
+    t.ok(shortest > 0, 'P4.9: スタート→出口の最短が有限', shortest + 'マス');
+    t.ok(g.rope.L === Infinity,
+      'P4.12: ロープ長で詰むことは起きない（L=無制限。旧「Lの内側」検査は失効）', String(g.rope.L));
+    /* 巻き戻しの「最小ピーク」= min_j d_s(j)+max(d_key(j), d_exit(j))。値の健全性だけ見る */
     var peak = Infinity;
     for (var r2 = 0; r2 < H; r2++) {
       for (var c2 = 0; c2 < W; c2++) {
@@ -3496,8 +3528,8 @@
         if (val < peak) peak = val;
       }
     }
-    t.ok(peak <= L, 'P4.9: 巻き戻しを使えば鍵経由で出口へ届く（詰まない）',
-      peak + ' <= ' + L.toFixed(1));
+    t.ok(peak > 0 && isFinite(peak),
+      'P4.9: 鍵経由で出口へ至る経路が実在する（巻き戻しの最小ピークが有限）', peak + 'マス');
   }
 
   /* ================================================================
@@ -3591,11 +3623,10 @@
     g.reset();
     localStorage.removeItem(SAVE_KEY);
     var T = ESCAPE.ROPE_TUNING, rope = g.rope, map = g.map, meta = map.meta;
-    t.near(T.alpha, 0.70, 1e-9, 'P4.11 項目2: α = 0.70（契約）', T.alpha);
-    t.near(T.greenRatio, 1.10, 1e-9, 'P4.11 項目2: 緑は最短×1.10まで（契約）', T.greenRatio);
-    t.near(T.yellowRatio, 1.50, 1e-9, 'P4.11 項目2: 黄は最短×1.50まで（契約）', T.yellowRatio);
-    t.near(T.redSlackRatio, 0.08, 1e-9, 'P4.11 項目2: 赤は余裕 < L×0.08（据え置き）', T.redSlackRatio);
-    t.near(rope.L, rope.shortest * 1.7, 1e-6, 'P4.11 項目2: L = 最短 × 1.7', rope.L.toFixed(1));
+    t.near(T.greenRatio, 1.10, 1e-9, 'P4.11 項目2: 緑は最短×1.10まで（契約・P4.12でも維持）', T.greenRatio);
+    t.near(T.yellowRatio, 1.50, 1e-9, 'P4.11 項目2: 黄は最短×1.50まで（契約・P4.12でも維持）', T.yellowRatio);
+    /* 【P4.12 失効】α = 0.70 ／ L = 最短 × 1.7 ／ 赤は余裕 < L×0.08。L は無制限になった。 */
+    t.ok(rope.L === Infinity, 'P4.12: L = 無制限（旧「最短×1.7」は失効）', String(rope.L));
 
     /* --- 最短ルートで 鍵 → 出口 まで通す（黄にならないこと） --- */
     var ks = rope._keyStand();
@@ -3619,10 +3650,9 @@
       '緑' + scanB.states.green + '/黄' + scanB.states.yellow + '/赤' + scanB.states.red +
       ' 最大遠回り率=' + scanB.maxRatio.toFixed(3) +
       ' 使用=' + scanB.used.toFixed(0) + 'm/L=' + rope.L.toFixed(0) +
-      'm 余裕=' + scanB.slack.toFixed(0) + 'm');
-    t.ok(scanB.slack > rope.L * 0.15,
-      'P4.11 項目2: 最短ルートを通しても余裕が15%以上残る（緩和の効き目）',
-      (scanB.slack / rope.L * 100).toFixed(1) + '%');
+      'm');
+    /* 【P4.12 失効】「最短ルートを通しても余裕が15%以上残る」。長さ制限が無いので常に成立する。 */
+    t.ok(scanB.slack === Infinity, 'P4.12: 最短ルートを通しても余裕は無制限のまま');
 
     /* --- 通り抜け口を1回間違える程度の遠回り（赤にならないこと） --- */
     g.reset();
@@ -3654,9 +3684,9 @@
         ' 迂回=' + ((viaCost / direct - 1) * 100).toFixed(1) + '% 使用=' + scan2.used.toFixed(0) +
         'm/L=' + rope.L.toFixed(0) + 'm');
     }
-    /* 旧αでは同じ遠回りが破綻していたこと＝緩和が効いていることの裏取り */
-    t.ok(rope.shortest * (1 + 0.35) < rope.L, 'P4.11: 新Lは旧α=0.35のLより長い',
-      (rope.shortest * 1.35).toFixed(0) + ' < ' + rope.L.toFixed(0));
+    /* 旧α（0.35 / 0.70）のどのLよりも長い＝長さで詰むことが二度と起きない */
+    t.ok(rope.shortest * 1.7 < rope.L, 'P4.12: 新Lは旧α=0.70のLより長い（無制限）',
+      (rope.shortest * 1.7).toFixed(0) + ' < ' + String(rope.L));
     g.reset();
     localStorage.removeItem(SAVE_KEY);
   }
@@ -3922,13 +3952,18 @@
     t.ok(parseFloat(cs2.paddingLeft) <= 4, 'P4.11 項目6: 全画面地図の余白も最小', cs2.padding);
     if (mm.full !== wasFull) mm.toggle();
 
-    /* --- プレイヤー矢印: 現行（旧実装）の3倍以上・向きが分かる --- */
-    t.ok(C.PLAYER_ARROW >= C.PLAYER_ARROW_LEGACY * 3,
-      'P4.11 項目6: プレイヤー矢印は旧サイズの3倍以上',
-      C.PLAYER_ARROW + ' / ' + C.PLAYER_ARROW_LEGACY);
+    /* --- プレイヤー矢印: P4.12 項目2 で 2.80 → 1.8マス（旧比 約2倍）へ縮小 ---
+       【P4.11 失効】「旧サイズの3倍以上」は実プレイで大きすぎたため失効。 */
+    t.near(C.PLAYER_ARROW, 1.80, 1e-9, 'P4.12 項目2: プレイヤー矢印は 1.8マス（契約）', C.PLAYER_ARROW);
+    t.ok(C.PLAYER_ARROW < 2.80, 'P4.12 項目2: 旧2.80マスより小さい', C.PLAYER_ARROW);
+    t.ok(C.PLAYER_ARROW >= C.PLAYER_ARROW_LEGACY * 2 &&
+      C.PLAYER_ARROW <= C.PLAYER_ARROW_LEGACY * 2.4,
+      'P4.12 項目2: 元（0.85マス）の約2倍に収まっている',
+      C.PLAYER_ARROW + ' / ' + C.PLAYER_ARROW_LEGACY +
+      ' = ×' + (C.PLAYER_ARROW / C.PLAYER_ARROW_LEGACY).toFixed(2));
     var v = mm.view();
-    t.ok(mm.playerArrowSize(v) >= mm.legacyArrowSize(v) * 3,
-      'P4.11 項目6: 実描画サイズでも3倍以上',
+    t.ok(mm.playerArrowSize(v) > mm.legacyArrowSize(v),
+      'P4.12 項目2: 実描画サイズでも旧実装より大きい（読める大きさは保つ）',
       mm.playerArrowSize(v).toFixed(1) + ' / ' + mm.legacyArrowSize(v).toFixed(1));
 
     /* 向きが分かる＝yaw を変えると矢印の先端が動き、先端は前方 */
@@ -4158,7 +4193,7 @@
       testCaptureCinematic, testCaptureFaceDetail, testCaptureMash, testEatenGameOver,
       testCaptureInterrupt, testNoiseSprint, testLockerSeen,
       /* P4.8: アリアドネ方式（ロープ・地図・銘板・鍵と隔壁・ヘッドライト） */
-      testRopeLength, testRopePayoutRewind, testRopeTautBlocks, testRopeKnotReattach,
+      testRopeLength, testRopePayoutRewind, testP412RopeUnlimited, testRopeKnotReattach,
       testAreaResetFogAndGhost, testFogOfWar, testRegionSigns, testKeyAndBulkhead,
       testHeadlight, testRetiredGimmicks, testArea1V3Contract, testSignTexts,
       /* P4.9: 新マップZ4・区画ごとの景観差・ロープ張力インジケータ */
@@ -4254,7 +4289,8 @@
       t.ok(g.rope.stack.length === 1, '復帰: ロープが錨まで巻き取られている', g.rope.stack.length);
       t.ok(g.rope.isAttached() && g.rope.knots.length === 0 && g.rope.ghosts.length === 0,
         '復帰: 結び目・古い軌跡が残っていない');
-      t.ok(g.rope.taut === false && g.rope.blocks === 0, '復帰: 張り状態が解除されている');
+      t.ok(g.rope.taut === undefined && g.rope.blocks === 0,
+        '復帰: 前進不可のカウンタがゼロ（P4.12: 「張り」状態そのものが失効）', g.rope.blocks);
     }
     if (g.minimap) {
       t.ok(g.minimap.info().zones.length === 0, '復帰: 地図の区画名が消えている');

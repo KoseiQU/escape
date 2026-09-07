@@ -253,9 +253,9 @@
       (this.progress && this.progress.gimmick ? ('\n鍵' + (this.progress.gimmick.key ? '○' : '×') +
              '  隔壁' + (this.progress.gimmick.doorOpen ? '開' : '施錠') +
              '  CP:' + (this.progress.checkpoint || '—')) : '') +
-      (this.rope ? ('\nロープ ' + this.rope.used.toFixed(0) + '/' + this.rope.L.toFixed(0) + 'm  余裕 ' +
-             this.rope.slack().toFixed(0) + 'm' + (this.rope.isAttached() ? '' : ' [外れている]') +
-             (this.rope.taut ? '  張った' : '')) : '') +
+      /* P4.12: L は無制限になったので長さ・余裕は出さない。繰り出し量と方向判定だけ */
+      (this.rope ? ('\nロープ ' + this.rope.used.toFixed(0) + 'm  ' + this.rope.tension().state +
+             (this.rope.isAttached() ? '' : ' [外れている]')) : '') +
       (this.minimap ? ('  踏破 ' + this.minimap.exploredCount) : '') +
       (this.headlight ? ('  ライト' + (this.headlight.on ? '点' : '消')) : '');
   };

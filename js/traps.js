@@ -51,11 +51,17 @@
     stepBand: 0.60,
     runSpeedMin: 0.50,        // これ以上の実速度で「走っている」と見なす(m/s)
 
-    /* 吊るした缶のワイヤー */
-    wireHeight: 1.18,         // 糸の高さ(m)。立位(視点1.62m)の胸〜腹に当たる
+    /* 吊るした缶のワイヤー。P4.12 項目1: 造形を「膝〜腰の高さに張った**光る糸**＋吊り缶」に。
+       高さはしゃがみ視点(0.95m)より上・立位視点(1.62m)より下を保つ（しゃがめば潜れる契約）。 */
+    wireHeight: 1.10,         // 糸の高さ(m)。立位の腰に当たる（P4.12 1.18→1.10）
+    wireGlowR: 0.030,         // 微発光の糸の見かけの太さ(m)。芯(0.016)より一回り太い衣
+    wireGlowOpacity: 0.62,    // 微発光の強さ（加算合成。遠目でも線として読める最小限）
     wireCanDrop: 0.26,        // 糸から缶を吊るす長さ(m)
     wireCross: 0.62,          // 糸の中心線からこの距離まで寄ると引っ掛かる(m)
     wireMoveMin: 0.15,        // 立ち止まっていると鳴らない(m/s)
+
+    /* P4.12 項目1: 罠の案内を出す距離(m)。表示は js/progress.js（#trap-hint） */
+    hintRange: 2.50,
 
     /* 倒れかけの什器（棚・ロッカー）。
        契約 §3「立体物は壁付き（突出0.3m以下）」を守るため、通路側への傾き(lean)は
@@ -92,6 +98,9 @@
   };
   /* 背の低い小物（缶・床板）は接地AOを浅くしないと真っ黒に沈む */
   var AO_LOW = 0.88;
+  /* P4.12: 微発光の糸の色（無照明・加算合成なので AO も区画色も乗せない） */
+  var WIRE_GLOW = [1.00, 0.80, 0.46];
+  function WIRE_GLOW_SHADE() { return WIRE_GLOW; }
 
   /** 発火する罠の種類（造形と当たりを Traps が持つもの）。step/sensor は既存モジュールの担当 */
   var OWN_KINDS = ['can', 'creak', 'wire', 'shelf', 'locker'];
@@ -239,11 +248,21 @@
     return this._track(new THREE.MeshBasicMaterial({ map: TX.get(tex), vertexColors: true, fog: true }));
   };
 
+  /** P4.12: ワイヤーの微発光（無照明・加算合成・奥行き書き込みなし） */
+  Traps.prototype._glowMaterial = function () {
+    return this._track(new THREE.MeshBasicMaterial({
+      vertexColors: true, fog: true, transparent: true,
+      opacity: TRAP_TUNING.wireGlowOpacity,
+      blending: THREE.AdditiveBlending, depthWrite: false
+    }));
+  };
+
   Traps.prototype._build = function () {
     var W = ESCAPE.World, world = this.game.world;
     if (!W || !W.Builder || !world || !world.propShader) return;
     var Builder = W.Builder, buildMesh = W.buildMesh, setY = W.setYBias;
-    var bags = { metal: new Builder(), wood: new Builder(), litter: new Builder() };
+    var bags = { metal: new Builder(), wood: new Builder(), litter: new Builder(),
+      glow: new Builder() };   /* P4.12: ワイヤーの微発光の糸（加算合成・無照明） */
 
     for (var i = 0; i < this.own.length; i++) {
       var t = this.own[i];
@@ -264,6 +283,14 @@
       mesh.name = 'trap_' + order[m][0];
       mesh.renderOrder = order[m][2] ? 40 : 1;
       this.group.add(mesh);
+    }
+    /* P4.12 項目1: 微発光の糸。無照明＋加算合成なので暗い通路でも遠目から線として読める */
+    if (!bags.glow.isEmpty()) {
+      var gmesh = buildMesh(bags.glow, this._glowMaterial());
+      this._track(gmesh.geometry);
+      gmesh.name = 'trap_wire_glow';
+      gmesh.renderOrder = 42;
+      this.group.add(gmesh);
     }
     /* 倒せる什器は「立っている姿」と「倒れた姿」を切り替えるので個別メッシュにする */
     for (var p = 0; p < this.props.length; p++) this._buildProp(this.props[p]);
@@ -311,7 +338,8 @@
     }
   };
 
-  /** 吊るした缶のワイヤー: 通路をまたぐ低い糸＋缶3つ。当たり判定は持たない */
+  /** 吊るした缶のワイヤー: 通路をまたぐ低い糸＋缶3つ。当たり判定は持たない。
+   *  P4.12 項目1: 芯の金属糸に**微発光の衣**を重ね、遠目でも「張ってある」と読めるようにする。 */
   Traps.prototype._shapeWire = function (bags, t, sh) {
     var K = TRAP_TUNING, T = this.map.tileSize;
     var y = t.y + K.wireHeight;
@@ -320,6 +348,11 @@
     var p0 = ax ? [t.x - half, y, t.z] : [t.x, y, t.z - half];
     var p1 = ax ? [t.x + half, y, t.z] : [t.x, y, t.z + half];
     bags.metal.tube(p0, p1, 0.016, 4, sh);
+    /* 微発光の衣（琥珀色。無照明なので区画の暗さに沈まない） */
+    bags.glow.tube(p0, p1, K.wireGlowR, 5, WIRE_GLOW_SHADE);
+    /* 留め具の側にも小さな灯り＝端点が見える */
+    bags.glow.tube([p0[0], y - 0.05, p0[2]], [p0[0], y + 0.05, p0[2]], K.wireGlowR * 1.2, 4, WIRE_GLOW_SHADE);
+    bags.glow.tube([p1[0], y - 0.05, p1[2]], [p1[0], y + 0.05, p1[2]], K.wireGlowR * 1.2, 4, WIRE_GLOW_SHADE);
     /* 壁に打った留め具 */
     bags.metal.box(p0[0] + (ax ? 0.06 : 0), y, p0[2] + (ax ? 0 : 0.06), 0.10, 0.08, 0.10, 4, sh);
     bags.metal.box(p1[0] - (ax ? 0.06 : 0), y, p1[2] - (ax ? 0 : 0.06), 0.10, 0.08, 0.10, 4, sh);
@@ -507,6 +540,34 @@
     if (wall < -0.10 || wall > K.propWallBand) return;
     if (Math.abs(da) > P.w / 2 + K.propSide) return;
     this.topple(t);
+  };
+
+  /* ---------------- P4.12 項目1: 罠の案内（判定だけ。表示は js/progress.js） ----------------
+   * 契約 §4「P4.12 再プレイ差し戻し」項目1。
+   *   ワイヤー … **立位**（しゃがんでいない）で hintRange 以内
+   *   センサー … **走行中**（mode==='run'）で hintRange 以内
+   * どちらも該当する時は近い方を1つだけ返す。案内は「見て気づける」造形の補助であって、
+   * 罠の位置を地図に描くようなことはしない（手探りを壊さない）。 */
+  Traps.prototype.hintKind = function () {
+    var t = this.hintTarget();
+    return t ? t.kind : null;
+  };
+
+  /** 案内の対象になっている罠（機械テスト・E2Eが位置を読むために公開する） */
+  Traps.prototype.hintTarget = function () {
+    if (!this.enabled || this._suspended()) return null;
+    var p = this.game.player, K = TRAP_TUNING;
+    var best = null, bd = Infinity;
+    for (var i = 0; i < this.list.length; i++) {
+      var t = this.list[i];
+      if (t.kind === 'wire') { if (p.crouching) continue; }
+      else if (t.kind === 'sensor') { if (p.mode !== 'run') continue; }
+      else continue;
+      var d = Math.hypot(p.x - t.x, p.z - t.z);
+      if (d > K.hintRange || d >= bd) continue;
+      bd = d; best = t;
+    }
+    return best;
   };
 
   /* ---------------- 後始末 ---------------- */
@@ -1562,6 +1623,152 @@
     };
   }
 
+  /* ---------------- P4.12 項目1: 罠の案内 ----------------
+   * 契約 §4「P4.12 再プレイ差し戻し」項目1 ／ 正文 docs/notes.md「P4.12追加（罠の案内・HUD）」。
+   * 表示条件だけを機械で確かめる（造形の見え方は目視スクショの担当）。 */
+  function testP412TrapHints(t, g) {
+    g.reset();
+    var tr = g.traps, pr = g.progress, K = ESCAPE.TRAP_TUNING;
+    if (!t.ok(!!tr && !!tr.hintKind, 'P4.12 案内: Traps.hintKind() が生えている')) return;
+    t.near(K.hintRange, 2.50, 1e-9, 'P4.12 案内: 案内の距離は 2.5m（契約）', K.hintRange);
+    var H = ESCAPE.PROGRESS_TRAP_HINT;
+    t.ok(H.wire === 'しゃがんで潜れ —— ワイヤー', 'P4.12 案内: ワイヤーの正文', H.wire);
+    t.ok(H.sensor === '走るな —— センサー', 'P4.12 案内: センサーの正文', H.sensor);
+    var el = document.getElementById('trap-hint');
+    t.ok(!!el, 'P4.12 案内: #trap-hint のDOMが結線されている');
+    t.ok(!!el && el !== pr.dom.prompt,
+      'P4.12 案内: 「調べる」プロンプトとは別のDOM（互いに消し合わない）');
+
+    /* プレイヤーの姿勢は毎フレーム input から書き戻されるので、
+       g.player.* を直に書くのではなく入力側（crouchOn / _keyRun）を切り替える。 */
+    function pose(mode) {
+      g.input.moveX = 0; g.input.moveY = 0;
+      g.input.crouchOn = (mode === 'crouch');
+      g.input._keyRun = (mode === 'run');
+      g.stepFrame(ESCAPE.FIXED_DT);
+    }
+
+    /* --- ワイヤー: 立位2.5m以内で出る / しゃがむと消える --- */
+    var wire = null;
+    for (var i = 0; i < tr.list.length && !wire; i++) if (tr.list[i].kind === 'wire') wire = tr.list[i];
+    if (t.ok(!!wire, 'P4.12 案内: ワイヤー罠がある')) {
+      /* 罠の真上ではなく「2.5m 以内の手前」に立つ（歩けるマスから寄る） */
+      var near = nearStand(g, wire, K.hintRange);
+      if (t.ok(!!near, 'P4.12 案内: ワイヤーの 2.5m 以内に立てるマスがある')) {
+        parkEnemies(g, near.col, near.row);
+        place(g, near.col, near.row, 0);
+        pose('walk');
+        t.ok(tr.hintKind() === 'wire', 'P4.12 案内: 立位で2.5m以内なら案内が出る', String(tr.hintKind()));
+        t.ok(pr.trapHintText() === H.wire, 'P4.12 案内: 文言が正文どおり', pr.trapHintText());
+        t.ok(el.textContent === H.wire && el.classList.contains('show'),
+          'P4.12 案内: DOMに書き出され表示状態になる', el.textContent + ' / ' + el.className);
+        /* しゃがむと消える */
+        pose('crouch');
+        t.ok(tr.hintKind() === null, 'P4.12 案内: しゃがみ中は出ない（契約）', String(tr.hintKind()));
+        t.ok(pr.trapHintText() === '' && !el.classList.contains('show'),
+          'P4.12 案内: しゃがむと消灯する', el.textContent + ' / ' + el.className);
+        /* 立ち上がると戻る */
+        pose('walk');
+        t.ok(el.classList.contains('show'), 'P4.12 案内: 立ち上がると再表示される');
+        /* 離れると消える */
+        var far = farStand(g, wire, K.hintRange);
+        if (far) {
+          place(g, far.col, far.row, 0);
+          pose('walk');
+          t.ok(tr.hintKind() === null && !el.classList.contains('show'),
+            'P4.12 案内: 2.5m より離れれば消える', String(tr.hintKind()));
+        }
+        g.input.reset();
+      }
+    }
+
+    /* --- センサー: 走行中だけ。歩き・しゃがみでは出ない --- */
+    g.reset();
+    var sen = null;
+    for (var j = 0; j < tr.list.length && !sen; j++) if (tr.list[j].kind === 'sensor') sen = tr.list[j];
+    if (t.ok(!!sen, 'P4.12 案内: センサーがある')) {
+      var ns = nearStand(g, sen, K.hintRange);
+      if (t.ok(!!ns, 'P4.12 案内: センサーの 2.5m 以内に立てるマスがある')) {
+        parkEnemies(g, ns.col, ns.row);
+        place(g, ns.col, ns.row, 0);
+        pose('walk');
+        t.ok(tr.hintKind() === null, 'P4.12 案内: 歩きでは出ない（契約は走行中のみ）', String(tr.hintKind()));
+        pose('crouch');
+        t.ok(tr.hintKind() === null, 'P4.12 案内: しゃがみでも出ない', String(tr.hintKind()));
+        pose('run');
+        t.ok(tr.hintKind() === 'sensor', 'P4.12 案内: 走行中で2.5m以内なら出る', String(tr.hintKind()));
+        t.ok(el.textContent === H.sensor && el.classList.contains('show'),
+          'P4.12 案内: 文言が正文どおり', el.textContent);
+        pose('walk');
+        t.ok(!el.classList.contains('show'), 'P4.12 案内: 走るのをやめると消える', el.className);
+        g.input.reset();
+      }
+    }
+
+    /* --- モーダル中は出さない（中断安全） --- */
+    g.reset();
+    pr.modal = 'memo';
+    t.ok(pr.trapHintKind() === null, 'P4.12 案内: モーダル中は出さない');
+    pr.modal = null;
+    g.input.reset();
+    g.reset();
+  }
+
+  /** 罠から range 以内で立てるマス（罠のマスそのものは除く＝「近づいた」状態を作る） */
+  function nearStand(g, trap, range) {
+    var map = g.map, best = null, bd = Infinity;
+    for (var dr = -2; dr <= 2; dr++) {
+      for (var dc = -2; dc <= 2; dc++) {
+        if (dc === 0 && dr === 0) continue;
+        var c = trap.col + dc, r = trap.row + dr;
+        if (!map.isWalkable(c, r)) continue;
+        var cc = map.cellCenter(c, r);
+        var d = Math.hypot(cc.x - trap.x, cc.z - trap.z);
+        if (d > range - 0.15 || d >= bd) continue;
+        bd = d; best = { col: c, row: r, d: d };
+      }
+    }
+    return best;
+  }
+  /** 罠から range より離れた立てるマス */
+  function farStand(g, trap, range) {
+    var map = g.map;
+    for (var rad = 3; rad <= 8; rad++) {
+      for (var dr = -rad; dr <= rad; dr++) {
+        for (var dc = -rad; dc <= rad; dc++) {
+          var c = trap.col + dc, r = trap.row + dr;
+          if (!map.isWalkable(c, r)) continue;
+          var cc = map.cellCenter(c, r);
+          if (Math.hypot(cc.x - trap.x, cc.z - trap.z) <= range + 0.6) continue;
+          return { col: c, row: r };
+        }
+      }
+    }
+    return null;
+  }
+
+  /** P4.12 項目1: ワイヤーの造形＝膝〜腰の高さの「光る糸」＋吊り缶（遠目でも読める） */
+  function testP412WireGlow(t, g) {
+    g.reset();
+    var K = ESCAPE.TRAP_TUNING, P = ESCAPE.Player;
+    t.ok(K.wireHeight > P.EYE_CROUCH && K.wireHeight < P.EYE_STAND,
+      'P4.12 造形: ワイヤーはしゃがみで潜れる高さのまま', K.wireHeight + 'm');
+    t.ok(K.wireHeight <= 1.15, 'P4.12 造形: 膝〜腰の高さに下げた（旧1.18m）', K.wireHeight + 'm');
+    t.ok(K.wireGlowR > 0.016, 'P4.12 造形: 微発光の衣は芯の糸より太い', K.wireGlowR + 'm');
+    t.ok(K.wireGlowOpacity > 0.3 && K.wireGlowOpacity <= 1,
+      'P4.12 造形: 微発光の強さが定数化されている', K.wireGlowOpacity);
+    var mesh = null;
+    g.traps.group.traverse(function (o) { if (o.name === 'trap_wire_glow') mesh = o; });
+    if (t.ok(!!mesh, 'P4.12 造形: 微発光の糸のメッシュが生成されている')) {
+      var m = mesh.material;
+      t.ok(m.blending === THREE.AdditiveBlending && m.depthWrite === false,
+        'P4.12 造形: 加算合成・奥行き書き込みなし（暗い通路でも線として読める）');
+      t.ok(mesh.geometry.attributes.position.count > 0,
+        'P4.12 造形: 頂点が積まれている', mesh.geometry.attributes.position.count);
+    }
+    g.reset();
+  }
+
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', install);
   else install();
 
@@ -1579,6 +1786,9 @@
     testP411TrapEdgeAvoid,
     testTrapAlertsBothEnemies,
     testTrapInterruptSafety,
-    testTrapAudio
+    testTrapAudio,
+    /* P4.12 レーンB: 罠の案内とワイヤーの造形 */
+    testP412TrapHints,
+    testP412WireGlow
   );
 })(window);

@@ -32,14 +32,15 @@
    * memo2 / memo3 / memo6 は旧本文のまま（v3節「旧本文のまま」）。
    * ============================================================== */
   var NOTE_TEXTS = {
-    /* memo1 — 受入ホール（v3差し替え） */
+    /* memo1 — 受入ホール（v3差し替え／P4.12改訂: 末行を「ロープの色が濁ったら…」へ。
+       ロープ無制限化で旧「ロープが張ったら、それ以上は行くな。戻れ。」は失効） */
     a1_n5: {
       title: '夜勤引継ぎのメモ',
       body: '夜勤の点検員へ\n\n' +
         '隔壁が全部降りた。北の隔壁だけは手動で開くが、鍵がいる。\n' +
         '鍵は所長室の金庫 —— 施設の一番奥だ。\n\n' +
         '腰のロープを外すな。奴らが来る前、俺たちはこれで戻っていた。\n' +
-        'ロープが張ったら、それ以上は行くな。戻れ。'
+        'ロープの色が濁ったら道を外れている。戻れ。'
     },
     /* memo2 — 病室区画の行き止まり（旧本文のまま） */
     a1_n2: {
@@ -105,7 +106,7 @@
     bulkheadLocked: '施錠されている —— 鍵がいる',
     bulkheadUnlock: '隔壁を解錠する',
     knot: 'ロープを拾って結ぶ',
-    taut: 'ロープが張った',
+    /* 【P4.12 失効】taut: 'ロープが張った' —— ロープ無制限化で表示そのものが失効 */
     mapTitle: '地図'
   };
 
@@ -113,16 +114,23 @@
   var OBJECTIVE = {
     findKey: '出口の鍵を探す —— 施設の一番奥へ',
     haveKey: '鍵を手に入れた —— 北の隔壁へ戻る',
-    taut: 'ロープが張った —— 来た道を戻れ',
     knot: '落ちたロープの結び目へ戻る',
-    /* P4.9: 張力インジケータが赤に入った瞬間の一時表示（docs/notes.md「目的表示（P4.9追加）」） */
-    ropeShort: 'ロープが足りない —— 戻って巻き戻せ',
-    /* 2026-09-04: 赤の理由が「遠回り率超過」の時はこちら（docs/notes.md 目的表示 P4.9追加・改訂） */
+    /* 【P4.12 失効】taut: 'ロープが張った —— 来た道を戻れ' ／
+       ropeShort: 'ロープが足りない —— 戻って巻き戻せ' —— どちらも長さ制限ごと失効。 */
+    /* 赤（遠回り率超過）に入った瞬間の一時表示。P4.12 でも維持（docs/notes.md P4.12追加） */
     ropeDetour: '遠回りしすぎだ —— 戻って巻き戻せ'
   };
 
-  /* P4.9 HUD文言（docs/notes.md「HUD文言（P4.9追加）」）。{M} は余裕(m)の整数 */
-  var ROPE_HUD = 'ロープ 余裕 {M}m';
+  /* P4.12 HUD文言（docs/notes.md「P4.12追加（罠の案内・HUD）」）。
+     メートル表示は廃止し、ラベル＋色だけで方向判定を伝える。 */
+  var ROPE_HUD = 'ロープ';
+
+  /* P4.12 項目1: 通路を覆う罠の案内（docs/notes.md「P4.12追加（罠の案内・HUD）」の正文）。
+     画面下・「調べる」プロンプトとは別の行に出す（competing しない＝互いに消し合わない）。 */
+  var TRAP_HINT = {
+    wire: 'しゃがんで潜れ —— ワイヤー',
+    sensor: '走るな —— センサー'
+  };
 
   /* 壁の掲示（docs/notes.md「掲示（短文・使い回し可のフレーバー）」の正文）。
    * P4.8: 配電順序・制御室・排水路・12秒開放の掲示は失効（該当の仕掛けが無い）。 */
@@ -165,6 +173,7 @@
       prompt: document.getElementById('prompt'),
       objective: document.getElementById('objective'),
       ropeHud: document.getElementById('rope-hud'),
+      trapHint: document.getElementById('trap-hint'),
       memoOverlay: document.getElementById('memo-overlay'),
       memoTitle: document.getElementById('memo-title'),
       memoBody: document.getElementById('memo-body'),
@@ -198,8 +207,12 @@
     this.memoId = null;
     this.darkLevel = 0;
     this._flashMsg = ''; this._flashT = 0;
-    this._wasTaut = false;
     this._objText = '';
+    this._trapHint = '';
+    if (this.dom.trapHint) {
+      this.dom.trapHint.textContent = '';
+      this.dom.trapHint.classList.remove('show');
+    }
     this._rebuildLookups();
     this._syncModalDom();
     this.dom._promptText = undefined;
@@ -376,18 +389,14 @@
   /* ---------------- 毎フレーム ---------------- */
   Progress.prototype.step = function (dt) {
     if (this._flashT > 0) { this._flashT -= dt; if (this._flashT < 0) this._flashT = 0; }
-    /* ロープが張った瞬間の画面表示（正文『ロープが張った』）。
-       目的表示の一時差し替えは objective() 側が rope.taut を見て行う。 */
-    var rope = this.game.rope;
-    var taut = !!(rope && rope.taut);
-    if (taut && !this._wasTaut) this._flash(UI_TEXT.taut);
-    this._wasTaut = taut;
+    /* 【P4.12 失効】ここにあった「ロープが張った」の画面表示は、ロープ無制限化で失効した。 */
     this._checkCheckpoint();
     this._checkClear();
     this._updateNoteGlow(dt);
     this._updatePrompt();
     this._updateObjective();
     this._updateRopeHud();
+    this._updateTrapHint();
     this._syncHud();
   };
 
@@ -457,12 +466,9 @@
   Progress.prototype.objective = function () {
     var rope = this.game.rope;
     if (rope && !rope.isAttached()) return OBJECTIVE.knot;
-    if (rope && rope.taut) return OBJECTIVE.taut;
-    /* P4.9: 張力インジケータが赤に入った直後は目的表示を差し替える */
-    if (rope && rope.redT > 0) {
-      var ten = rope.tension ? rope.tension() : null;
-      return (ten && ten.lowSlack) ? OBJECTIVE.ropeShort : OBJECTIVE.ropeDetour;
-    }
+    /* P4.12: 赤（＝大きな遠回り）に入った直後だけ目的表示を差し替える。
+       赤の理由は遠回り率のみ＝分岐は1本（旧「余裕不足」の ropeShort は失効）。 */
+    if (rope && rope.redT > 0) return OBJECTIVE.ropeDetour;
     /* 鍵を得たら以後はずっとこの行（クリア画面が出た後も戻さない） */
     if (this.gimmick.key) return OBJECTIVE.haveKey;
     return OBJECTIVE.findKey;
@@ -473,17 +479,18 @@
     if (!el) return;
     var s = this.objective();
     if (el.textContent !== s) el.textContent = s;
-    var taut = (s === OBJECTIVE.taut || s === OBJECTIVE.ropeShort || s === OBJECTIVE.ropeDetour);
-    if (el._taut !== taut) { el.classList.toggle('taut', taut); el._taut = taut; }
+    var warn = (s === OBJECTIVE.ropeDetour);
+    if (el._taut !== warn) { el.classList.toggle('taut', warn); el._taut = warn; }
     this._objText = s;
   };
 
-  /* P4.9 ロープ張力インジケータ（DESIGN.md §4「エリア1 新マップ Z4」）。
-   * 表示は余裕(m)のみ・状態は色だけで示す（GPS的な矢印は出さない＝手探りを壊さない）。 */
+  /* P4.12 ロープ張力インジケータ＝方向判定（DESIGN.md §4「P4.12」項目4）。
+   * 表示は `ロープ` のラベルだけ・状態は色（緑/黄/赤）で示す。
+   * 【失効】余裕(m)の表示。GPS的な矢印は今も出さない（手探りを壊さない）。 */
   Progress.prototype.ropeHudText = function () {
     var rope = this.game.rope;
     if (!rope) return '';
-    return ROPE_HUD.replace('{M}', String(Math.round(rope.slack())));
+    return ROPE_HUD;
   };
   Progress.prototype.ropeHudState = function () {
     var rope = this.game.rope;
@@ -500,6 +507,33 @@
       el.className = st;
       el._st = st;
     }
+  };
+
+  /* ---------------- P4.12 項目1: 通路を覆う罠の案内 ----------------
+   * 契約 §4「P4.12 再プレイ差し戻し」項目1 / 正文 docs/notes.md「P4.12追加（罠の案内・HUD）」。
+   *   ワイヤー  … **立位**で 2.5m 以内 → `しゃがんで潜れ —— ワイヤー`（しゃがみ中は消える）
+   *   センサー  … **走行中**に 2.5m 以内 → `走るな —— センサー`
+   * 判定はプレイヤー側の状態（しゃがみ／走り）と距離だけ。罠の表の走査は js/traps.js が持つ。
+   * 「調べる」プロンプト（#prompt）とは**別のDOM行**に出すので互いを消し合わない。
+   * 優先順位: 近い方を1つだけ。モーダル中・演出中は出さない。 */
+  Progress.prototype.trapHintKind = function () {
+    if (this.modal) return null;
+    var tr = this.game.traps;
+    if (!tr || !tr.hintKind) return null;
+    return tr.hintKind();
+  };
+  Progress.prototype.trapHintText = function () {
+    var k = this.trapHintKind();
+    return k ? (TRAP_HINT[k] || '') : '';
+  };
+  Progress.prototype._updateTrapHint = function () {
+    var el = this.dom.trapHint;
+    if (!el) return;
+    var s = this.trapHintText();
+    if (this._trapHint === s) return;
+    this._trapHint = s;
+    el.textContent = s;
+    el.classList.toggle('show', !!s);
   };
 
   /* ---------------- 本物のメモの見分け（近接で縁が淡く光る） ---------------- */
@@ -717,6 +751,8 @@
   ESCAPE.PROGRESS_NOTE_TEXTS = NOTE_TEXTS;
   ESCAPE.PROGRESS_UI_TEXT = UI_TEXT;
   ESCAPE.PROGRESS_OBJECTIVE = OBJECTIVE;
+  ESCAPE.PROGRESS_TRAP_HINT = TRAP_HINT;
+  ESCAPE.PROGRESS_ROPE_HUD = ROPE_HUD;
   ESCAPE.PROGRESS_SIGN_TEXT = SIGN_TEXT;
   ESCAPE.ZONE_NAMES = ZONE_NAMES;
   ESCAPE.zoneLabel = zoneLabel;
@@ -734,7 +770,8 @@
         checkpoint: pr.checkpoint, cleared: pr.cleared, clearedBy: pr.clearedBy,
         notesRead: Object.keys(pr.notesRead), signsRead: Object.keys(pr.signsRead),
         objective: pr.objective(), prompt: pr.dom.prompt ? pr.dom.prompt.textContent : '',
-        ropeHud: pr.ropeHudText(), ropeState: pr.ropeHudState()
+        ropeHud: pr.ropeHudText(), ropeState: pr.ropeHudState(),
+        trapHint: pr.trapHintText(), trapHintKind: pr.trapHintKind()
       };
     }
   };
