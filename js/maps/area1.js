@@ -548,8 +548,21 @@
       boards: [
         { col: 9, row: 9 }, { col: 15, row: 78 }, { col: 67, row: 3 }, { col: 57, row: 3 }, { col: 5, row: 11 }, { col: 22, row: 24 }
       ],
+      /* P4.13 項目1（契約 §4「P4.13 再プレイ差し戻し」項目1）: 暗所帯 dz_A〜dz_F（6帯）と
+       * 真っ暗帯 bz_C/bz_D/bz_E（3帯）に各1〜2基を増設（4基→16基）。通路マス・既存の罠
+       * （音地盤・ワイヤー・缶・棚・ロッカー・センサー）から3マス以上離す。造形・発火は
+       * js/world.js の既存 _sensor()（自発光の赤いランプ＋通路を横切る感知ビーム。
+       * 点光源は追加しない）をそのまま流用。audit/map-mocks/mockZ4.js の meta.sensors も
+       * 同じ座標を追加してある。
+       */
       sensors: [
-        { col: 20, row: 18 }, { col: 4, row: 78 }, { col: 22, row: 68 }, { col: 61, row: 6 }
+        { col: 20, row: 18 }, { col: 4, row: 78 }, { col: 22, row: 68 }, { col: 61, row: 6 },
+        { col: 77, row: 78, id: 's_dzA' }, { col: 64, row: 48, id: 's_dzB' },
+        { col: 12, row: 63, id: 's_dzC' }, { col: 1, row: 29, id: 's_dzD' },
+        { col: 53, row: 12, id: 's_dzE' }, { col: 9, row: 18, id: 's_dzF' },
+        { col: 34, row: 55, id: 's_bzC1' }, { col: 30, row: 55, id: 's_bzC2' },
+        { col: 10, row: 37, id: 's_bzD1' }, { col: 16, row: 37, id: 's_bzD2' },
+        { col: 37, row: 2, id: 's_bzE1' }, { col: 34, row: 2, id: 's_bzE2' }
       ],
       checkpoints: [
         { col: 4, row: 5, id: "a1_cp1" },

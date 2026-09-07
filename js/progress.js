@@ -10,7 +10,9 @@
  *   2 区画銘板（A〜F）          … 地図に区画名を記入
  *   3 所長室の金庫              … 隔壁の鍵を手に入れる
  *   4 北の隔壁                  … 鍵で解錠 → EXIT でクリア
- *   ＋ 落ちたロープの結び目     … 拾って結ぶ（Rope へ委譲）
+ * 【P4.13 失効】「落ちたロープの結び目を拾って結ぶ」は失効。捕獲は Rope 側で
+ *   「周回ごとの軌跡」に切り替わり（js/rope.js）、復帰後は拾い直し不要で
+ *   自動的にスタートから新しい周が始まる。
  *
  * 既存システムとの結線:
  *   - js/game.js stepFrame(): モーダル中は視点・移動を止める。「調べる」は
@@ -105,8 +107,8 @@
     bulkheadLook: '隔壁を調べる',
     bulkheadLocked: '施錠されている —— 鍵がいる',
     bulkheadUnlock: '隔壁を解錠する',
-    knot: 'ロープを拾って結ぶ',
     /* 【P4.12 失効】taut: 'ロープが張った' —— ロープ無制限化で表示そのものが失効 */
+    /* 【P4.13 失効】knot: 'ロープを拾って結ぶ' —— 結び目の拾い直し自体が失効 */
     mapTitle: '地図'
   };
 
@@ -114,16 +116,19 @@
   var OBJECTIVE = {
     findKey: '出口の鍵を探す —— 施設の一番奥へ',
     haveKey: '鍵を手に入れた —— 北の隔壁へ戻る',
-    knot: '落ちたロープの結び目へ戻る',
     /* 【P4.12 失効】taut: 'ロープが張った —— 来た道を戻れ' ／
        ropeShort: 'ロープが足りない —— 戻って巻き戻せ' —— どちらも長さ制限ごと失効。 */
+    /* 【P4.13 失効】knot: '落ちたロープの結び目へ戻る' —— 結び目の拾い直し自体が失効。
+       復帰後は通常の目的（鍵／隔壁）にそのまま戻る（下の objective() を参照）。 */
     /* 赤（遠回り率超過）に入った瞬間の一時表示。P4.12 でも維持（docs/notes.md P4.12追加） */
     ropeDetour: '遠回りしすぎだ —— 戻って巻き戻せ'
   };
 
   /* P4.12 HUD文言（docs/notes.md「P4.12追加（罠の案内・HUD）」）。
-     メートル表示は廃止し、ラベル＋色だけで方向判定を伝える。 */
-  var ROPE_HUD = 'ロープ';
+     メートル表示は廃止し、ラベル＋色だけで方向判定を伝える。
+     P4.13（docs/notes.md「P4.13追加（声・軌跡）」）: ラベルは `ロープ` → `軌跡` に改訂。
+     結び目の拾い直しが失効し、周回ごとに色分けした軌跡だけが残る運用に変わったため。 */
+  var ROPE_HUD = '軌跡';
 
   /* P4.12 項目1: 通路を覆う罠の案内（docs/notes.md「P4.12追加（罠の案内・HUD）」の正文）。
      画面下・「調べる」プロンプトとは別の行に出す（competing しない＝互いに消し合わない）。 */
@@ -331,11 +336,9 @@
     if (this.modal === 'memo') { this._closeModal(); return true; }
     if (this.modal === 'ending') return true;
 
-    /* 落ちたロープの結び目を拾って結ぶ（契約 §4「捕獲時」） */
-    var rope = this.game.rope;
-    if (rope && !rope.isAttached() && rope.nearKnot()) {
-      if (rope.pickUp()) { this._flash(UI_TEXT.knot); return true; }
-    }
+    /* 【P4.13 失効】ここにあった「落ちたロープの結び目を拾って結ぶ」処理は失効。
+       捕獲は Rope 側で「周回ごとの軌跡」に切り替わり、復帰後は拾い直し不要で
+       自動的にスタートから新しい周が始まる（js/rope.js dropKnot() を参照）。 */
 
     var t = this._findTarget();
     if (t) {
@@ -427,20 +430,16 @@
     if (this._flashT > 0) {
       s = this._flashMsg || '';
     } else if (!this.modal) {
-      var rope = this.game.rope;
-      if (rope && !rope.isAttached() && rope.nearKnot()) {
-        s = UI_TEXT.knot;
+      /* 【P4.13 失効】ここにあった「結び目が近ければ拾って結ぶ」の分岐は失効。 */
+      var t = this._findTarget();
+      if (t) {
+        s = (t.kind === 'note') ? UI_TEXT.note : this._gimmickPrompt(t.entry);
       } else {
-        var t = this._findTarget();
-        if (t) {
-          s = (t.kind === 'note') ? UI_TEXT.note : this._gimmickPrompt(t.entry);
-        } else {
-          var rs = this._findRegionSign();
-          if (rs) s = UI_TEXT.regionSign;
-          else {
-            var sg = this._findSign();
-            if (sg) s = SIGN_TEXT[sg.id] || '';
-          }
+        var rs = this._findRegionSign();
+        if (rs) s = UI_TEXT.regionSign;
+        else {
+          var sg = this._findSign();
+          if (sg) s = SIGN_TEXT[sg.id] || '';
         }
       }
     }
@@ -465,7 +464,9 @@
   /** 目的表示（画面上部1行・正文4種）。メモ・鍵取得・ロープ張りで更新される */
   Progress.prototype.objective = function () {
     var rope = this.game.rope;
-    if (rope && !rope.isAttached()) return OBJECTIVE.knot;
+    /* 【P4.13 失効】ここにあった「結び目が外れていたら戻る」の分岐は失効。
+       復帰後は自動でスタートから新しい周が始まるため、通常の目的（鍵／隔壁）へ
+       そのまま戻る。 */
     /* P4.12: 赤（＝大きな遠回り）に入った直後だけ目的表示を差し替える。
        赤の理由は遠回り率のみ＝分岐は1本（旧「余裕不足」の ropeShort は失効）。 */
     if (rope && rope.redT > 0) return OBJECTIVE.ropeDetour;

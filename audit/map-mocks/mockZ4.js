@@ -268,11 +268,22 @@
         { col: 5, row: 11 },
         { col: 22, row: 24 }
       ],
+      /* P4.13 項目1: js/maps/area1.js の meta.sensors 追加分と同じ座標を反映（暗所帯
+       * dz0〜dz5・真っ暗帯 bz0/bz2/bz4 に各1〜2基）。area1.js 側の darkZones/blackZones
+       * は当時から座標・IDが再編されているためこのファイルの帯とは直接対応しないが、
+       * このモックの rows は area1.js とほぼ同一（P4.9注記の3種の差分のみ）なので、
+       * 座標そのものは両ファイルで床マス・壁隣接とも成立する。 */
       sensors: [
         { col: 20, row: 18 },
         { col: 4, row: 78 },
         { col: 22, row: 68 },
-        { col: 61, row: 6 }
+        { col: 61, row: 6 },
+        { col: 77, row: 78 }, { col: 64, row: 48 },
+        { col: 12, row: 63 }, { col: 1, row: 29 },
+        { col: 53, row: 12 }, { col: 9, row: 18 },
+        { col: 34, row: 55 }, { col: 30, row: 55 },
+        { col: 10, row: 37 }, { col: 16, row: 37 },
+        { col: 37, row: 2 }, { col: 34, row: 2 }
       ],
       noise: [
         { col: 67, row: 33, kind: 'glass' },

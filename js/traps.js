@@ -1769,6 +1769,63 @@
     g.reset();
   }
 
+  /** P4.13 項目1（契約 §4「P4.13 再プレイ差し戻し」項目1）: 暗所帯・真っ暗帯の
+   *  センサー増設。各帯に1基以上／全センサーが床マス／新設12基は既存の罠・音地盤・
+   *  旧センサーから3マス以上／合計数が13〜16。 */
+  function testP413DarkZoneSensors(t, g) {
+    g.reset();
+    var map = g.map, meta = map.meta || {};
+    var sensors = meta.sensors || [];
+    var traps = meta.traps || [], noise = meta.noise || [];
+    var zones = (meta.darkZones || []).concat(meta.blackZones || []);
+
+    t.ok(sensors.length >= 13 && sensors.length <= 16,
+      'P4.13 暗所センサー: 合計数が13〜16（旧4基→増設後）', sensors.length);
+
+    var offFloor = 0;
+    for (var i = 0; i < sensors.length; i++) {
+      if (!map.isWalkable(sensors[i].col, sensors[i].row)) offFloor++;
+    }
+    t.ok(offFloor === 0, 'P4.13 暗所センサー: 全センサーが床マス（歩行可能マス）の上', offFloor + '件');
+
+    var missing = [];
+    for (var z = 0; z < zones.length; z++) {
+      var zn = zones[z], cnt = 0;
+      for (var s = 0; s < sensors.length; s++) {
+        if (sensors[s].col >= zn.c0 && sensors[s].col <= zn.c1 &&
+            sensors[s].row >= zn.r0 && sensors[s].row <= zn.r1) cnt++;
+      }
+      if (cnt < 1) missing.push(zn.id);
+    }
+    t.ok(zones.length > 0 && missing.length === 0,
+      'P4.13 暗所センサー: 暗所帯・真っ暗帯すべてに1基以上ある（' + zones.length + '帯）',
+      missing.join(',') || 'なし');
+
+    /* P4.13 で新設した分（meta.sensors に id 付きで登録してある）は、既存の罠・音地盤・
+       旧センサー（id無し）と新設どうしの両方から3マス以上離れていること */
+    var added = [], old = [];
+    for (var a = 0; a < sensors.length; a++) {
+      if (sensors[a].id) added.push(sensors[a]); else old.push(sensors[a]);
+    }
+    var against = traps.concat(noise).concat(old);
+    function dist(p, q) { return Math.hypot(p.col - q.col, p.row - q.row); }
+    var tooClose = [];
+    for (var b = 0; b < added.length; b++) {
+      var minD = Infinity;
+      for (var c = 0; c < against.length; c++) minD = Math.min(minD, dist(added[b], against[c]));
+      for (var d2 = 0; d2 < added.length; d2++) {
+        if (d2 === b) continue;
+        minD = Math.min(minD, dist(added[b], added[d2]));
+      }
+      if (minD < 3) tooClose.push(added[b].id + '(' + minD.toFixed(2) + ')');
+    }
+    t.ok(added.length === 12, 'P4.13 暗所センサー: 新設は12基（既存4基＋新設12基=16基）', added.length);
+    t.ok(tooClose.length === 0,
+      'P4.13 暗所センサー: 新設センサーは既存の罠・音地盤・旧センサー・新設どうしから3マス以上離れている',
+      tooClose.join(' ') || 'なし');
+    g.reset();
+  }
+
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', install);
   else install();
 
@@ -1789,6 +1846,8 @@
     testTrapAudio,
     /* P4.12 レーンB: 罠の案内とワイヤーの造形 */
     testP412TrapHints,
-    testP412WireGlow
+    testP412WireGlow,
+    /* P4.13 レーンB: 暗所センサー増設 */
+    testP413DarkZoneSensors
   );
 })(window);

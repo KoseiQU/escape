@@ -152,8 +152,10 @@
     trapLockerPeekChance: 0.92, // 罠の探索中にロッカーを覗く確率（通常0.55から上げる）
     trapPeekRadius: 13.0,     // 罠の探索中に覗く対象を探す半径(m)
     /* 復帰直後の猶予（契約 §4 の「復帰の緊張」は残しつつ、スタート地点に張り付かれる
-       理不尽を避ける）。捕獲から復帰した後、結び目を拾うまでの間だけスタート周辺を空ける。 */
-    respawnGraceDur: 60.0,    // 猶予の長さ(s)。結び目を拾えば即座に終わる
+       理不尽を避ける）。捕獲から復帰した後、固定の秒数だけスタート周辺を空ける。
+       【P4.13】結び目の拾い直しが失効したため「拾えば即座に終わる」旧仕様は失効。
+       固定 respawnGraceDur 秒で終える（下の AIManager.prototype.step() を参照）。 */
+    respawnGraceDur: 60.0,    // 猶予の長さ(s)。固定時間で終わる（P4.13）
     respawnGraceRadius: 22.0, // スタート地点からこの距離には入らない(m)
     farReactDelay: 1.20,      // 近い個体が先着する。遠い個体はこの秒数だけ遅れて動く(s)
     farReactGap: 12.0,        // 「遠い個体」と見なす距離差(m)。これ未満なら同時に反応する
@@ -1374,7 +1376,8 @@
 
   AIManager.prototype.afterJail = function () {
     for (var i = 0; i < this.list.length; i++) this.list[i].afterJail();
-    /* 契約 §4「復帰後は自分のロープだけが頼り」。拾いに戻る間だけスタートを空ける */
+    /* 契約 §4「復帰後は自分の軌跡だけが頼り」（P4.13）。復帰直後の respawnGraceDur 秒だけ
+       スタートを空ける（旧「拾いに戻る間だけ」は結び目の拾い直しの失効で失効） */
     this.beginGrace();
   };
 
@@ -1424,11 +1427,11 @@
 
   AIManager.prototype.step = function (dt) {
     var st = this.game.stealth;
-    /* 猶予は「60秒経つ」か「結び目を拾ってロープに再接続する」かで終わる */
+    /* P4.13: 結び目の拾い直しが失効し isAttached() は常時 true になったため、旧
+       「ロープに再接続したら即座に猶予終了」は意味を失った（毎フレーム即終了してしまう）。
+       猶予は respawnGraceDur 秒の固定時間だけで終える。 */
     if (this.graceT > 0) {
-      var rope = this.game.rope;
-      if (rope && rope.isAttached && rope.isAttached()) this.clearGrace();
-      else this.graceT -= dt;
+      this.graceT -= dt;
       if (this.graceT < 0) this.graceT = 0;
     }
     /* 捕獲演出中は全個体を止める。演出が画面を握っている間に別個体が歩き回ると、
@@ -1808,13 +1811,15 @@
     this.capturedBy = byAi || this.game.ai;
     this.game.player.speed = 0;
     /* P4.10（契約 §4「捕獲のたびに地図を真っ暗に戻す」）: fog of war の踏破を全消去。
-       ロープの軌跡・結び目・錨（rope が持つ）／鍵の取得（progress が持つ）／
-       読んだ区画名（minimap.zones）は残る＝復帰後は自分のロープだけが頼りになる。 */
+       ロープの軌跡・錨（rope が持つ）／鍵の取得（progress が持つ）／
+       読んだ区画名（minimap.zones）は残る＝復帰後は自分の軌跡だけが頼りになる。 */
     if (this.game.minimap && this.game.minimap.onCapture) this.game.minimap.onCapture();
-    /* P4.8（契約 §4「捕獲時」）: 掴まれた瞬間にロープ端が床に落ちて結び目になる。
-       復帰後は自分の敷いたロープを辿って結び目まで戻り「拾って結ぶ」で再接続する。 */
+    /* 【P4.13 全面改訂】旧「掴まれた瞬間にロープ端が床に落ちて結び目になる／復帰後に
+       拾って結ぶ」は失効。dropKnot() の中身を「捕まった周の軌跡をその周の色で固定表示に
+       回し、次の周をスタートから即座に始める」処理へ差し替えた（js/rope.js）。この
+       呼び出し口自体は変更していない。 */
     if (this.game.rope) this.game.rope.dropKnot();
-    /* 消した地図と落ちた結び目をこの時点で保存する（次のセーブ機会まで古い踏破が
+    /* 消した地図と確定した周の軌跡をこの時点で保存する（次のセーブ機会まで古い踏破が
        残り、再読み込みで地図が戻ってしまうのを防ぐ）。鍵・読んだメモは save が保持する。 */
     if (this.game.progress && this.game.progress.save) this.game.progress.save();
     /* 契約 §4「捕獲時に耳元の音＋暗転」 */
@@ -2688,7 +2693,7 @@
     mm.learnZone('C');
     g.progress.gimmick.key = true;
     var explored = mm.exploredCount, zones = mm.info().zones.join('');
-    var stack = rope.stack.length, ghosts = rope.ghosts.length, wipes = mm.wipes;
+    var stack = rope.stack.length, ghosts = rope.ghosts.length, wipes = mm.wipes, lapIdx = rope.lapIndex;
     t.ok(explored > base + 10, 'P4.10 地図リセット: 検証用に踏破が溜まっている', explored + ' / 基準' + base);
     var known = 0;
     for (var k = 0; k < far.length; k++) if (mm.isExplored(far[k].col, far[k].row)) known++;
@@ -2703,7 +2708,11 @@
     t.ok(rope.stack.length === stack, 'P4.10 地図リセット: ロープの軌跡は残る',
       rope.stack.length + ' / ' + stack);
     t.ok(rope.ghosts.length === ghosts, 'P4.10 地図リセット: 古い軌跡も残る');
-    t.ok(rope.knots.length === 1, 'P4.10 地図リセット: 結び目は落ちて残る', rope.knots.length);
+    /* 【P4.13】旧「結び目は落ちて残る」は失効。捕獲は周を確定して次の周を始める処理に
+       変わった（js/rope.js dropKnot()）ので、代わりに周番号が進むことを確認する。 */
+    t.ok(rope.lapIndex === lapIdx + 1,
+      'P4.13 地図リセット: 捕獲で周番号が進む（結び目は失効し「周回ごとの軌跡」へ）',
+      rope.lapIndex + ' / ' + (lapIdx + 1));
     t.ok(g.progress.gimmick.key === true, 'P4.10 地図リセット: 鍵の取得は残る');
 
     var done = simUntil(g, function () { return st.jail.phase === 'none'; },
@@ -2716,8 +2725,11 @@
       mm.exploredCount + ' / 基準' + base);
     t.ok(mm.knowsZone('C') === true, 'P4.10 地図リセット: 復帰後も区画名は残っている');
     t.ok(g.progress.gimmick.key === true, 'P4.10 地図リセット: 復帰後も鍵は残っている');
-    t.ok(rope.knots.length === 1 && rope.isAttached() === false,
-      'P4.10 地図リセット: 結び目を拾い直す動線は生きている');
+    /* 【P4.13】旧「結び目を拾い直す動線」は失効。復帰後は拾い直し不要で自動的に
+       スタートから新しい周が始まる（常時接続＝isAttached() は常に true）。 */
+    t.ok(rope.isAttached() === true && rope.stack.length === 1 &&
+      rope.stack[0].col === rope.anchor.col && rope.stack[0].row === rope.anchor.row,
+      'P4.13 地図リセット: 復帰後は拾い直し不要でスタートから新しい周が始まっている');
 
     /* 2回目の捕獲でも同じように消える（毎回＝契約） */
     var w2 = mm.wipes;

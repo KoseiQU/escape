@@ -18,6 +18,24 @@
   'use strict';
   var ESCAPE = global.ESCAPE;
 
+  /* P4.13（契約 §4「P4.13」項目2）: ロープ（軌跡）は「結び目」ではなく「周ごとの色」で
+     描く。色そのものは js/rope.js の ESCAPE.ROPE_LAP_COLORS が唯一の真実（床リボンと
+     同じ配列を見る＝床とミニマップ/全画面地図で必ず同じ対応になる）。ここでは
+     16進数 → rgba() 文字列への変換だけを持つ。COL より先に定義する（COL の互換キーが
+     直後で呼ぶため）。 */
+  var CUR_LAP_ALPHA = 0.98;   /* 現在の周（太く・不透明） */
+  var PAST_LAP_ALPHA = 0.45;  /* 過去の周（薄く。契約「過去の周は現在の周より薄く」） */
+  function hexToRgba(hex, a) {
+    var r = (hex >> 16) & 255, g = (hex >> 8) & 255, b = hex & 255;
+    return 'rgba(' + r + ',' + g + ',' + b + ',' + a + ')';
+  }
+  function lapColors() { return (ESCAPE.ROPE_LAP_COLORS || [0xc9b489, 0xaee4ff, 0xc45fce]); }
+  function lapStroke(idx, alpha) {
+    var cs = lapColors();
+    var hex = cs[Math.max(0, Math.min(idx | 0, cs.length - 1))];
+    return hexToRgba(hex, alpha);
+  }
+
   /* P4.11 項目6: 暗い背景でも読めるコントラストへ引き上げた（未踏破＝ほぼ黒に対し
      踏破は明度3倍以上）。旧値（floor #28303a / room #39434f）は実機で沈んでいた。 */
   var COL = {
@@ -25,16 +43,18 @@
     floor: '#55687d',
     room: '#6f8599',
     edge: '#151b22',
-    rope: 'rgba(255,228,158,0.98)',
-    ghost: 'rgba(158,146,114,0.70)',
-    knot: '#ffeeb4',
     anchor: '#a9e0ff',
     player: '#ffffff',
     playerEdge: 'rgba(0,0,0,0.85)',
     exit: '#8dffc2',
     label: 'rgba(232,244,255,0.98)',
     labelSub: 'rgba(200,222,240,0.92)',
-    labelShadow: 'rgba(0,0,0,0.95)'
+    labelShadow: 'rgba(0,0,0,0.95)',
+    /* P4.13 互換: 「結び目」は失効し描画には使わないが、コントラスト検査（P4.11項目6）が
+       固定色を1つ要求するため、1周目色ベースの代表値を残す（実描画は lapStroke() 側）。 */
+    rope: lapStroke(0, CUR_LAP_ALPHA),
+    ghost: lapStroke(0, PAST_LAP_ALPHA),
+    knot: '#ffeeb4'
   };
   var MINI_PX = 320;   /* 小さいときのバッキング解像度（P4.11: 224→320） */
   var FULL_PX = 760;   /* 全画面のバッキング解像度（P4.11: 616→760） */
@@ -224,7 +244,7 @@
     /* 「変更時のみ再描画」。プレイヤー印は 0.6m / 0.25rad 単位で追従させる */
     var rope = this.game.rope;
     var sig = this.exploredCount + '|' + this.zoneCount + '|' +
-      (rope ? (rope.stack.length + ',' + rope.knots.length + ',' + rope.ghosts.length + ',' + (rope.attached ? 1 : 0)) : '');
+      (rope ? (rope.stack.length + ',' + rope.laps.length + ',' + rope.lapIndex) : '');
     var moved = Math.hypot(p.x - this._lastX, p.z - this._lastZ) > 0.6;
     var turned = Math.abs(p.yaw - this._lastYaw) > 0.25;
     if (!this._dirty && sig === this._sig && !moved && !turned) return;
@@ -296,28 +316,24 @@
     if (rope) {
       ctx.lineCap = 'round';
       ctx.lineJoin = 'round';
-      /* エリアリセット後も残る古い軌跡 */
-      ctx.lineWidth = Math.max(2, s * 0.42);
-      ctx.strokeStyle = COL.ghost;
-      for (var g = 0; g < rope.ghosts.length; g++) this._stroke(ctx, rope.ghosts[g], v);
-      /* いまのロープ（P4.11: 太く・不透明に） */
+      /* P4.13（契約 §4「P4.13」項目2）: 「結び目」は失効。周ごとに固定色の軌跡を描く。
+         過去の周（確定済み・書き換わらない）を先に薄く描いてから、現在の周を太く・
+         不透明に重ねる。色は js/rope.js の ESCAPE.ROPE_LAP_COLORS が唯一の真実。 */
+      ctx.lineWidth = Math.max(2, s * 0.46);
+      for (var g = 0; g < rope.laps.length; g++) {
+        var lp = rope.laps[g];
+        ctx.strokeStyle = lapStroke(lp.lapIndex, PAST_LAP_ALPHA);
+        this._stroke(ctx, lp.stack, v);
+      }
+      /* いまの周（P4.11: 太く・不透明に） */
       ctx.lineWidth = Math.max(3, s * 0.58);
-      ctx.strokeStyle = COL.rope;
+      ctx.strokeStyle = lapStroke(rope.lapIndex, CUR_LAP_ALPHA);
       this._stroke(ctx, rope.stack, v);
-      /* 固定結び目（スタート） */
+      /* 固定結び目（スタート＝錨。全ての周がここから始まる） */
       var qa = this.cellToPx(rope.anchor.col, rope.anchor.row, v);
       var as = Math.max(4, s * 0.72);
       ctx.fillStyle = COL.anchor;
       ctx.fillRect(qa.x - as / 2, qa.y - as / 2, as, as);
-      /* 落ちた結び目 */
-      for (var i = 0; i < rope.knots.length; i++) {
-        var kn = rope.knots[i];
-        var qk = this.worldToPx(kn.x, kn.z, v);
-        ctx.fillStyle = COL.knot;
-        ctx.beginPath();
-        ctx.arc(qk.x, qk.y, Math.max(3, s * 0.55), 0, Math.PI * 2);
-        ctx.fill();
-      }
     }
 
     /* 区画名（銘板を読んだ区画だけ） */
