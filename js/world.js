@@ -167,6 +167,24 @@
 
   var FACE_VEC = { n: [0, 0, -1], s: [0, 0, 1], e: [1, 0, 0], w: [-1, 0, 0] };
 
+  /**
+   * P4.11 項目3「罠は道の端で回避可能」の帯。マス中心からの半幅を軸ごとに返す。
+   * 狭めるのは「壁に挟まれている軸」＝端を歩いて避けられる軸だけ。
+   * 例: 東西の通路（南北が壁）なら Z を 0.6m に狭め、X は通路なので全幅のまま
+   *     ＝通路を走れば必ず踏み、北/南の壁際を歩けば踏まない。
+   * どちらの軸にも壁が無い広間では両軸を狭める（マスの隅を通れば避けられる）。
+   * 半幅の値そのものは js/traps.js の TRAP_TUNING.stepBand が正。
+   * 造形（world）・発火（traps / enemy_ai）が全部この1か所を見る。
+   */
+  function stepBandHalf(map, col, row) {
+    var T = map.tileSize;
+    var b = (ESCAPE.TRAP_TUNING && ESCAPE.TRAP_TUNING.stepBand) || 0.60;
+    var bx = map.isSolid(col - 1, row) || map.isSolid(col + 1, row);
+    var bz = map.isSolid(col, row - 1) || map.isSolid(col, row + 1);
+    if (!bx && !bz) { bx = true; bz = true; }
+    return { x: bx ? b : T / 2, z: bz ? b : T / 2, bx: bx, bz: bz };
+  }
+
   /* ---- 決定的ハッシュ ---- */
   function hash2(a, b) {
     var h = (a * 374761393 + b * 668265263) | 0;
@@ -1595,11 +1613,13 @@
     var up = [0, 1, 0];
 
     var bset = this._bset || function () {};
-    function quad(builderFn, col, row, size, y, tintArr) {
+    function quad(builderFn, col, row, size, y, tintArr, sizeZ) {
       bset(col, row);
       var builder = builderFn();
-      var cx = col * T + T / 2, cz = row * T + T / 2, h = size / 2;
-      builder.grid([cx - h, 0, cz + h], [size, 0, 0], [0, 0, -size], 1, 1, 1, 1,
+      var cx = col * T + T / 2, cz = row * T + T / 2;
+      var sz = (sizeZ === undefined) ? size : sizeZ;
+      var hx = size / 2, hz = sz / 2;
+      builder.grid([cx - hx, 0, cz + hz], [size, 0, 0], [0, 0, -sz], 1, 1, 1, 1,
         planeShader(col + ',' + row, tintArr, up), null,
         function (x, z) { return map.floorYAt(x, z) + y; });
     }
@@ -1607,9 +1627,14 @@
     var noise = meta.noise || [];
     for (var i = 0; i < noise.length; i++) {
       var n = noise[i];
-      if (n.kind === 'glass') quad(function () { return B.glass; }, n.col, n.row, 1.9, 0.016, [1.5, 1.5, 1.5]);
+      /* P4.11 項目3「罠は道の端で回避可能」: 踏む系は通路の幅方向で中央60%（1.2m）に限る。
+         両端 0.4m は造形も発火もなし＝端を慎重に歩けば鳴らない。 */
+      var bh = stepBandHalf(map, n.col, n.row);
+      if (n.kind === 'glass') quad(function () { return B.glass; }, n.col, n.row,
+        bh.x * 2 - 0.06, 0.016, [1.5, 1.5, 1.5], bh.z * 2 - 0.06);
       else if (n.kind === 'metal') this._metalPlate(B, n.col, n.row, shader, planeShader);
-      else quad(function () { return B.water; }, n.col, n.row, 1.94, 0.012, [1.15, 1.15, 1.2]);
+      else quad(function () { return B.water; }, n.col, n.row,
+        bh.x * 2 - 0.04, 0.012, [1.15, 1.15, 1.2], bh.z * 2 - 0.04);
     }
     var cps = meta.checkpoints || [];
     for (var j = 0; j < cps.length; j++) {
@@ -1643,10 +1668,13 @@
     setYBias(this.map.cellFloorY(col, row));
     var cx = col * T + T / 2, cz = row * T + T / 2;
     var sh = shader(col + ',' + row, [1.05, 1.06, 1.10]);
+    /* P4.11 項目3: 造形は通路の幅方向で中央60%（両端0.4mは空ける）に収める */
+    var bh = stepBandHalf(this.map, col, row);
+    var hx = bh.x, hz = bh.z;
     /* 大判1枚＋めくれた小片2枚。めくれは高さを変えて影の段を作る */
-    B.metal.box(cx, 0.022, cz, T * 0.86, 0.044, T * 0.72, 0.9, sh);
-    B.metal.box(cx - T * 0.30, 0.060, cz + T * 0.26, T * 0.26, 0.040, T * 0.20, 1.2, sh);
-    B.metal.box(cx + T * 0.28, 0.052, cz - T * 0.24, T * 0.22, 0.036, T * 0.24, 1.2, sh);
+    B.metal.box(cx, 0.022, cz, hx * 1.90, 0.044, hz * 1.60, 0.9, sh);
+    B.metal.box(cx - hx * 0.40, 0.060, cz + hz * 0.52, hx * 0.60, 0.040, hz * 0.44, 1.2, sh);
+    B.metal.box(cx + hx * 0.38, 0.052, cz - hz * 0.48, hx * 0.52, 0.036, hz * 0.52, 1.2, sh);
     setYBias(0);
   };
 
@@ -2100,10 +2128,62 @@
 
   /* ---------------- 什器 ---------------- */
 
+  /* P4.11 項目1「見た目と当たり判定の一致（隙間問題）」。
+   * 什器マスは当たりがマス全面なのに造形は 1.6m x 0.9m 程度しかなく、
+   * 「通れそうに見えて通れない」隙間を大量に作っていた（実測 211マス）。
+   * 対処は什器を大きくすることではなく、什器を**設備ベイ**として据え直すこと:
+   *   基壇(plinth)  マスいっぱいの台座。床から立ち上がって足元の抜けを塞ぐ
+   *   仕切り板(bay) 側面・背面の板。什器同士・什器と壁の隙間を塞ぐ（正面だけ開ける）
+   * 什器そのものは基壇の上に載せる（脚が床に埋まらない）。
+   * 背の高い什器は天井(3.0m)を突き抜けないよう基壇を低くする。 */
+  var PLINTH_H = { specTank: 0.14, cageStack: 0.20, machine: 0.20, tank: 0.20, incubator: 0.24 };
+  var PLINTH_DEFAULT = 0.30;
+  /** 通路側に見せる仕切り板の高さ(m)。腰高＝跨げないと一目で分かる高さ。
+   *  背の低い什器（寝台・机・端末台）は什器そのものが隠れないよう少し低くする。 */
+  var BAY_H = 1.16;
+  var BAY_LOW = { gurney: 0.90, desk: 0.90, console: 0.90, crate: 0.90, benchIsland: 0.90, opTable: 0.90 };
+
+  /** 什器マスの基壇と仕切り板。什器本体より先に積む（本体は基壇の上へ乗る） */
+  World.prototype._furnBase = function (B, f, shader, ph) {
+    var map = this.map, T = map.tileSize;
+    var base = map.cellFloorY(f.col, f.row);
+    var cx = f.col * T + T / 2, cz = f.row * T + T / 2;
+    var key = this._ownerOf(f.col, f.row);
+    var tint = this._tintAt(f.col, f.row);
+    var shBase = shader(key, [0.58, 0.60, 0.62]);
+    var shLip = shader(key, [0.94, 0.95, 0.92]);
+    var shBay = shader(key, [0.80, 0.82, 0.84]);
+    var shWall = shader(key, tint.w);
+    setYBias(base);
+    /* 基壇: 本体＋天端の張り出し（縁に影の線が出て「段」だと読める） */
+    B.dark.box(cx, (ph - 0.06) / 2, cz, T - 0.08, ph - 0.06, T - 0.08, 0.7, shBase);
+    B.metal.box(cx, ph - 0.03, cz, T - 0.01, 0.06, T - 0.01, 0.7, shLip);
+    /* 仕切り板。隣が実体なら天井まで（＝壁の殻を閉じて向こうを覗かせない）、
+       隣が通路なら腰高。正面（dir）だけは開けて什器を見せる。 */
+    var ch = map.ceilHAt(f.col, f.row);
+    var fv = FACE_VEC[f.dir] || FACE_VEC.n;
+    var DD = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+    for (var d = 0; d < 4; d++) {
+      var dc = DD[d][0], dr = DD[d][1];
+      var walk = map.isWalkable(f.col + dc, f.row + dr);
+      var front = (fv[0] === dc && fv[2] === dr);
+      var h, th, bag, sh2;
+      if (!walk) { h = ch; th = 0.10; bag = B.wall; sh2 = shWall; }
+      else if (front) continue;                 /* 正面は開けたまま */
+      else if (!f.open) continue;               /* アルコーブ: 既に壁面が張られている */
+      else { h = BAY_LOW[f.type] || BAY_H; th = 0.12; bag = B.metal; sh2 = shBay; }
+      bag.box(cx + dc * (T / 2 - th / 2), h / 2, cz + dr * (T / 2 - th / 2),
+        dc ? th : T - 0.02, h, dr ? th : T - 0.02, 0.5, sh2);
+    }
+    setYBias(0);
+  };
+
   World.prototype._furniture = function (B, f, shader) {
     var T = this.map.tileSize;
     if (this._bset) this._bset(f.col, f.row);
-    setYBias(this.map.cellFloorY(f.col, f.row));
+    var ph = (PLINTH_H[f.type] === undefined) ? PLINTH_DEFAULT : PLINTH_H[f.type];
+    this._furnBase(B, f, shader, ph);
+    setYBias(this.map.cellFloorY(f.col, f.row) + ph);
     var cx = f.col * T + T / 2, cz = f.row * T + T / 2;
     var key = this._ownerOf(f.col, f.row);
     var sh = shader(key, [1, 1, 1]);
@@ -2553,9 +2633,164 @@
     };
   };
 
+  /* ================================================================
+   * 機械テスト（契約 §6）。P4.11 項目1「見た目と当たり判定の一致（隙間問題）」。
+   * runAll は ESCAPE.__extraSuites を拾う（js/traps.js と同じ流儀）。
+   * ============================================================== */
+
+  /**
+   * 実体マス1つぶんの「造形フットプリント」を測る。
+   * 床・天井・デカール・明滅の加算メッシュは数えない（それらは当たりを表さない）。
+   * 頂点はプレイヤーが通る高さ帯（床+0.02〜床+2.0m）だけを見る。
+   * 戻り値: マスの床面積に対する頂点AABBの被覆率（0..1）
+   */
+  function footprintCoverage(world) {
+    var map = world.map, T = map.tileSize;
+    var SKIP = {
+      floor: 1, floorTile: 1, floorWet: 1, floorMetal: 1, ceil: 1,
+      litter: 1, poster: 1, sign: 1, zonesign: 1, hatch: 1, blood: 1, water: 1, glass: 1
+    };
+    var furnAt = Object.create(null);
+    var furn = (map.meta && map.meta.furniture) || [];
+    for (var i = 0; i < furn.length; i++) furnAt[furn[i].col + ',' + furn[i].row] = furn[i];
+    var D = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+    var cells = [], index = Object.create(null);
+    for (var r = 1; r < map.height - 1; r++) {
+      for (var c = 1; c < map.width - 1; c++) {
+        if (!map.isSolid(c, r)) continue;
+        var nw = 0;
+        for (var d = 0; d < 4; d++) if (map.isWalkable(c + D[d][0], r + D[d][1])) nw++;
+        if (nw === 0) continue;
+        /* 検査対象＝「2方向以上から回り込んで見える実体マス」と全ての什器マス。
+           1方向しか露出していない壁は面が当たりの位置そのもの＝隙間になりようがない。 */
+        var f = furnAt[c + ',' + r];
+        if (nw < 2 && !f) continue;
+        var e = { col: c, row: r, nw: nw, furn: f ? f.type : null,
+                  x0: Infinity, x1: -Infinity, z0: Infinity, z1: -Infinity, n: 0, cov: 0 };
+        index[c + ',' + r] = e;
+        cells.push(e);
+      }
+    }
+    var EPS = 0.03;
+    var kids = world.group.children;
+    for (var m = 0; m < kids.length; m++) {
+      var mesh = kids[m], nm = mesh.name || '';
+      if (SKIP[nm] || nm.indexOf('flick_') === 0) continue;
+      var arr = mesh.geometry.getAttribute('position').array;
+      for (var v = 0; v < arr.length; v += 3) {
+        var x = arr[v], y = arr[v + 1], z = arr[v + 2];
+        var cHi = Math.floor((x + EPS) / T), cLo = Math.floor((x - EPS) / T);
+        var rHi = Math.floor((z + EPS) / T), rLo = Math.floor((z - EPS) / T);
+        for (var cc = cLo; cc <= cHi; cc++) {
+          for (var rr = rLo; rr <= rHi; rr++) {
+            var e2 = index[cc + ',' + rr];
+            if (!e2) continue;
+            var fy = map.cellFloorY(cc, rr);
+            if (y < fy + 0.02 || y > fy + 2.0) continue;
+            var lx = x < cc * T ? cc * T : (x > (cc + 1) * T ? (cc + 1) * T : x);
+            var lz = z < rr * T ? rr * T : (z > (rr + 1) * T ? (rr + 1) * T : z);
+            if (lx < e2.x0) e2.x0 = lx;
+            if (lx > e2.x1) e2.x1 = lx;
+            if (lz < e2.z0) e2.z0 = lz;
+            if (lz > e2.z1) e2.z1 = lz;
+            e2.n++;
+          }
+        }
+      }
+    }
+    for (var k = 0; k < cells.length; k++) {
+      var e3 = cells[k];
+      e3.cov = e3.n ? ((e3.x1 - e3.x0) * (e3.z1 - e3.z0)) / (T * T) : 0;
+    }
+    return cells;
+  }
+
+  function testP411FootprintCoverage(t, g) {
+    g.reset();
+    var cells = footprintCoverage(g.world);
+    t.ok(cells.length > 800, 'P4.11 隙間: 検査対象の実体マスを全数拾えている', cells.length + 'マス');
+    var bad = [], worst = 1, worstCell = '';
+    for (var i = 0; i < cells.length; i++) {
+      var e = cells[i];
+      if (e.cov < worst) { worst = e.cov; worstCell = e.col + ',' + e.row + (e.furn ? '(' + e.furn + ')' : ''); }
+      if (e.cov < 0.90 - 1e-9) bad.push(e.col + ',' + e.row + (e.furn ? '(' + e.furn + ')' : '') + '=' + e.cov.toFixed(3));
+    }
+    t.ok(bad.length === 0,
+      'P4.11 隙間: 全実体マスの造形フットプリントがマスの90%以上を覆う（契約 項目1）',
+      bad.slice(0, 8).join(' ') || ('最小 ' + worst.toFixed(3) + ' @' + worstCell));
+    /* 什器マスは基壇でマス全面を占める（回帰の芯） */
+    var furn = (g.map.meta && g.map.meta.furniture) || [];
+    var byCell = Object.create(null);
+    for (var c = 0; c < cells.length; c++) byCell[cells[c].col + ',' + cells[c].row] = cells[c];
+    var missing = [], low = 1;
+    for (var f = 0; f < furn.length; f++) {
+      var e2 = byCell[furn[f].col + ',' + furn[f].row];
+      if (!e2) { missing.push(furn[f].col + ',' + furn[f].row); continue; }
+      if (e2.cov < low) low = e2.cov;
+    }
+    t.ok(missing.length === 0, 'P4.11 隙間: 什器マスが全て検査対象に入っている', missing.join(' ') || furn.length + '件');
+    t.ok(low >= 0.90, 'P4.11 隙間: 什器マスの被覆率の最小値が90%以上', low.toFixed(3));
+  }
+
+  /** 什器マスの「殻」が閉じている＝隣が実体の面にも造形がある（向こう側が透けない） */
+  function testP411FurnitureShellClosed(t, g) {
+    g.reset();
+    var map = g.map, T = map.tileSize;
+    var furn = (map.meta && map.meta.furniture) || [];
+    var kids = g.world.group.children;
+    var SKIP = { floor: 1, floorTile: 1, floorWet: 1, floorMetal: 1, ceil: 1,
+                 litter: 1, poster: 1, sign: 1, zonesign: 1, hatch: 1, blood: 1, water: 1, glass: 1 };
+    /* 面ごとに「境界面から0.16m以内に、床際と目線より上の両方に頂点があるか」を見る。
+       箱の面は四隅にしか頂点が無いので、高さ帯の途中に頂点があることは期待しない。
+       下(床際)と上(2.2m超)の両方に頂点があれば、その面は立った視線を遮る板が立っている。 */
+    var hitLo = Object.create(null);
+    var hitHi = Object.create(null);
+    var need = Object.create(null);
+    var D = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+    for (var i = 0; i < furn.length; i++) {
+      for (var d = 0; d < 4; d++) {
+        var nc = furn[i].col + D[d][0], nr = furn[i].row + D[d][1];
+        if (map.isWalkable(nc, nr)) continue;         /* 通路に面する側は見せる面 */
+        need[furn[i].col + ',' + furn[i].row + ',' + d] = true;
+      }
+    }
+    for (var m = 0; m < kids.length; m++) {
+      var mesh = kids[m], nm = mesh.name || '';
+      if (SKIP[nm] || nm.indexOf('flick_') === 0) continue;
+      var arr = mesh.geometry.getAttribute('position').array;
+      for (var v = 0; v < arr.length; v += 3) {
+        var x = arr[v], y = arr[v + 1], z = arr[v + 2];
+        var c = Math.floor(x / T), r = Math.floor(z / T);
+        for (var cc = c - 1; cc <= c + 1; cc++) {
+          for (var rr = r - 1; rr <= r + 1; rr++) {
+            var fy = map.cellFloorY(cc, rr);
+            var lo = (y <= fy + 0.12), hi = (y >= fy + 2.2);
+            if (!lo && !hi) continue;
+            var hit = lo ? hitLo : hitHi;
+            var lx = x - cc * T, lz = z - rr * T;
+            if (lx < -0.02 || lx > T + 0.02 || lz < -0.02 || lz > T + 0.02) continue;
+            if (lx > T - 0.16) hit[cc + ',' + rr + ',0'] = true;
+            if (lx < 0.16) hit[cc + ',' + rr + ',1'] = true;
+            if (lz > T - 0.16) hit[cc + ',' + rr + ',2'] = true;
+            if (lz < 0.16) hit[cc + ',' + rr + ',3'] = true;
+          }
+        }
+      }
+    }
+    var open = [];
+    for (var key in need) if (!hitLo[key] || !hitHi[key]) open.push(key);
+    t.ok(open.length === 0,
+      'P4.11 隙間: 什器マスの実体側の面が全て塞がっている（向こうが透けない）',
+      open.slice(0, 8).join(' ') || (Object.keys(need).length + '面を検査'));
+  }
+
+  ESCAPE.__extraSuites = ESCAPE.__extraSuites || [];
+  ESCAPE.__extraSuites.push(testP411FootprintCoverage, testP411FurnitureShellClosed);
+
   World.Builder = Builder;
   World.buildMesh = buildMesh;
   World.setYBias = setYBias;
+  World.stepBandHalf = stepBandHalf;
 
   World.FOG_COLOR = FOG_COLOR;
   World.LIGHT_R = LIGHT_R;

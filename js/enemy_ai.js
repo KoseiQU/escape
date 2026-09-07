@@ -1554,6 +1554,12 @@
     if (tile !== TILE.NOISE && tile !== TILE.SENSOR) return;
     var c = map.cellCenter(col, row);
     if (tile === TILE.NOISE) {
+      /* P4.11 項目3「罠は道の端で回避可能」: 音地盤（ガラス片・金属板・水たまり）も
+         造形と発火をマス中央の60%幅に限る。両端 0.4m は素の床＝端を走っても鳴らない。
+         幅の定数は js/traps.js の TRAP_TUNING.stepBand が正（造形も同じ値を読む）。 */
+      var bh = (ESCAPE.World && ESCAPE.World.stepBandHalf)
+        ? ESCAPE.World.stepBandHalf(map, col, row) : { x: 0.60, z: 0.60 };
+      if (Math.abs(p.x - c.x) > bh.x || Math.abs(p.z - c.z) > bh.z) return;
       this.noiseSteps++;
       ESCAPE.noise.emit(c.x, c.z, this.T.runNoiseRadius, 'step');
       /* 契約 §4:「音イベントが起きた」と分かる強い音。床種は meta.noise の kind */

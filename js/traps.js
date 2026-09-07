@@ -43,7 +43,12 @@
       sensor: 40.0     // センサー警報（ENEMY_TUNING.sensorNoiseRadius と同値）
     },
 
-    /* 踏む系（can / creak）: 走った時だけ鳴る。歩き・しゃがみは無音（契約 §4「音システム」） */
+    /* 踏む系（can / creak / step）: 走った時だけ鳴る。歩き・しゃがみは無音（契約 §4「音システム」）。
+       P4.11 項目3「罠は道の端で回避可能」: 造形も発火帯も**マス中央の60%幅**に限る。
+       stepBand はマス中心からの半幅(m)。2m のマスなら中央 1.2m ＝ 両端 0.4m は素通り。
+       プレイヤー半径 0.32m なので、壁に寄れば中心が 0.32m ＝ 帯の外を歩ける。
+       この定数は js/world.js（床の造形）と js/enemy_ai.js（音地盤の発火）も読む。 */
+    stepBand: 0.60,
     runSpeedMin: 0.50,        // これ以上の実速度で「走っている」と見なす(m/s)
 
     /* 吊るした缶のワイヤー */
@@ -60,11 +65,11 @@
     propLean: 0.042,          // 通路側への傾き(rad)。1.86mの高さで +0.078m
     propTilt: 0.135,          // 壁に沿った横倒れ(rad)。「倒れかけ」はこちらで見せる
     propMaxStick: 0.30,       // 突出の上限(m)。契約 §3
-    /* 接触の幅。什器の前面から通路側へこの距離までが「ぶつかった」。
-       マス(2m)の中央は前面から 0.71m なので、そのマスを走り抜ければ確実に倒れる。
-       同じマスの反対の縁は 1.71m、隣のマスの中央は 2.71m ＝ どちらも band の外なので、
-       「壁際を避けて走る」「隣の車線を通る」で回避できる（契約「慎重なら回避可」）。 */
-    propContact: 1.05,
+    /* 接触の幅。P4.11 項目3「倒れかけ什器の接触帯は壁から0.55m以内
+       （反対側の端を通れば倒れない）」。壁の面からプレイヤー中心までの距離で測る。
+       プレイヤー半径 0.32m なので壁際を走れば 0.32〜0.55m ＝ 帯の中で必ず倒れ、
+       マスの中央(1.0m)も反対の縁(1.68m)も帯の外＝避けて走れば倒れない。 */
+    propWallBand: 0.55,
     propSide: 0.32,           // 幅方向のあたりの余白(m)
     propShelfW: 0.92,         // 棚の幅(m)
     propShelfH: 1.72,         // 棚の高さ(m)
@@ -214,6 +219,13 @@
 
   /* ---------------- 造形 ---------------- */
 
+  /** P4.11 項目3: 踏む系の帯（マス中心からの半幅）。規則は js/world.js の stepBandHalf が正 */
+  Traps.prototype._band = function (col, row) {
+    var W = ESCAPE.World;
+    if (W && W.stepBandHalf) return W.stepBandHalf(this.map, col, row);
+    return { x: TRAP_TUNING.stepBand, z: TRAP_TUNING.stepBand, bx: true, bz: true };
+  };
+
   Traps.prototype._track = function (o) { this.disposables.push(o); return o; };
 
   Traps.prototype._material = function (tex, isDecal) {
@@ -257,18 +269,20 @@
     for (var p = 0; p < this.props.length; p++) this._buildProp(this.props[p]);
   };
 
-  /** 空き缶の散乱: 床のゴミデカール＋転がった缶4つ（膝より下・逃走路を塞がない） */
+  /** 空き缶の散乱: 床のゴミデカール＋転がった缶（膝より下・逃走路を塞がない）。
+   *  P4.11 項目3: 造形はマス中央の60%幅（±stepBand）に収める＝端は素通りできる。 */
   Traps.prototype._shapeCans = function (bags, t, sh, world) {
-    var T = this.map.tileSize;
+    var bh = this._band(t.col, t.row);
     var lit = world.decalShader(t.col, t.row, [1.15, 1.10, 0.98]);
-    var s = 1.86, h = s / 2;
-    bags.litter.grid([t.x - h, t.y + 0.014, t.z + h], [s, 0, 0], [0, 0, -s], 1, 1, 1, 1,
+    var sx = bh.x * 2 - 0.04, sz = bh.z * 2 - 0.04;
+    bags.litter.grid([t.x - sx / 2, t.y + 0.014, t.z + sz / 2], [sx, 0, 0], [0, 0, -sz], 1, 1, 1, 1,
       function (x, y, z) { return lit(x, y, z); });
     /* 転がった缶。高さ0.11mの寝かせた円筒（角柱で代用）＝踏むと転がって鳴る見た目 */
     var OFF = [[-0.42, -0.30, 0.0], [0.28, -0.46, 1.0], [0.46, 0.34, 0.4], [-0.20, 0.44, 1.3], [0.02, 0.06, 0.8]];
+    var L = 0.115, r = 0.060;
+    var kx = (bh.x - L - r) / 0.50, kz = (bh.z - L - r) / 0.50;  /* 缶の端まで帯の中に収める */
     for (var i = 0; i < OFF.length; i++) {
-      var cx = t.x + OFF[i][0], cz = t.z + OFF[i][1], a = OFF[i][2];
-      var L = 0.135, r = 0.066;
+      var cx = t.x + OFF[i][0] * kx, cz = t.z + OFF[i][1] * kz, a = OFF[i][2];
       bags.metal.tube(
         [cx - Math.cos(a) * L, t.y + r + 0.012, cz - Math.sin(a) * L],
         [cx + Math.cos(a) * L, t.y + r + 0.012, cz + Math.sin(a) * L],
@@ -276,23 +290,24 @@
     }
     /* 潰れた缶を1つ立てておく（目印になる縦の形） */
     bags.metal.box(t.x + 0.10, t.y + 0.075, t.z - 0.08, 0.095, 0.15, 0.095, 3, sh);
-    if (T) { /* T は将来のサイズ変更に備えて参照だけ持つ */ }
   };
 
-  /** 軋む床板: 色の違う板を3枚＋端が浮いた1枚＋錆びた釘。踏むと鳴りそうに見えること */
+  /** 軋む床板: 色の違う板を3枚＋端が浮いた1枚＋錆びた釘。踏むと鳴りそうに見えること。
+   *  P4.11 項目3: 板もマス中央の60%幅に収める（両端0.4mは素の床＝端を歩けば鳴らない）。 */
   Traps.prototype._shapeCreak = function (bags, t, sh) {
-    var y = t.y;
+    var y = t.y, bh = this._band(t.col, t.row);
+    var bw = (bh.x * 2 - 0.06) / 3;              /* 板1枚の幅 */
     for (var i = 0; i < 3; i++) {
-      var off = (i - 1) * 0.56;
+      var off = (i - 1) * (bw + 0.02);
       var lift = (i === 1) ? 0.055 : 0.022;      /* 中央の1枚だけ浮いている */
-      bags.wood.box(t.x + off, y + lift / 2 + 0.006, t.z, 0.50, lift, 1.78, 1.1, sh);
+      bags.wood.box(t.x + off, y + lift / 2 + 0.006, t.z, bw, lift, bh.z * 1.86, 1.1, sh);
     }
     /* 浮いた板の端に噛ませた添え木（横から見て段差が分かる） */
-    bags.wood.box(t.x, y + 0.075, t.z + 0.80, 0.52, 0.05, 0.14, 1.4, sh);
+    bags.wood.box(t.x, y + 0.075, t.z + bh.z * 0.78, bw + 0.02, 0.05, 0.14, 1.4, sh);
     /* 抜けかけた釘（頭だけ光る） */
     for (var k = 0; k < 4; k++) {
-      bags.metal.box(t.x + ((k % 2) ? 0.42 : -0.42), y + 0.058, t.z + ((k < 2) ? 0.62 : -0.62),
-        0.035, 0.030, 0.035, 6, sh);
+      bags.metal.box(t.x + ((k % 2) ? 1 : -1) * (bh.x - 0.14), y + 0.058,
+        t.z + ((k < 2) ? 1 : -1) * (bh.z - 0.10), 0.035, 0.030, 0.035, 6, sh);
     }
   };
 
@@ -455,9 +470,12 @@
     if (!t.armed && Math.hypot(dx, dz) > K.rearmDist) t.armed = true;
 
     if (t.kind === 'can' || t.kind === 'creak') {
-      /* 踏む系: 自分のマスに入って「走って」いる時だけ（歩き・しゃがみは無音） */
+      /* 踏む系: 自分のマスに入って「走って」いる時だけ（歩き・しゃがみは無音）。
+         P4.11 項目3: さらに**マス中央の60%幅**を踏んだ時だけ＝端を歩けば回避できる。 */
       if (!t.armed) return;
       if (t.col !== col || t.row !== row) return;
+      var bh = this._band(col, row);
+      if (Math.abs(dx) > bh.x || Math.abs(dz) > bh.z) return;
       if (p.mode !== 'run' || p.speed < K.runSpeedMin) return;
       this.fire(t);
       return;
@@ -476,14 +494,17 @@
       this.fire(t);
       return;
     }
-    /* 倒れかけの什器: 走ってぶつかった時だけ倒れる（歩き・しゃがみでは倒れない） */
+    /* 倒れかけの什器: 走ってぶつかった時だけ倒れる（歩き・しゃがみでは倒れない）。
+       P4.11 項目3: 接触帯は**背を預けた壁から propWallBand(0.55m) 以内**。
+       壁際を走れば倒れ、マスの中央〜反対の端を通れば倒れない。 */
     if (t.toppled) return;
     if (p.mode !== 'run' || p.speed < K.runSpeedMin) return;
-    var P = t.prop;
-    var ex = p.x - t.hitX, ez = p.z - t.hitZ;
-    var dn = ex * P.nx + ez * P.nz;                 /* 前面から通路側への距離 */
+    var P = t.prop, T2 = this.map.tileSize;
+    var ex = p.x - t.x, ez = p.z - t.z;             /* マス中心から見た位置 */
+    var pn = ex * P.nx + ez * P.nz;                 /* 壁 -> 通路 向きの座標。壁の面は -T/2 */
     var da = ex * P.sx + ez * P.sz;                 /* 壁に沿った距離 */
-    if (dn < -0.10 || dn > K.propContact) return;
+    var wall = pn + T2 / 2;                         /* 壁の面からの距離(m) */
+    if (wall < -0.10 || wall > K.propWallBand) return;
     if (Math.abs(da) > P.w / 2 + K.propSide) return;
     this.topple(t);
   };
@@ -653,6 +674,79 @@
     sim(g, 26);
     g.input.reset();
     return frames;
+  }
+
+  /**
+   * P4.11 項目3 の検証用。(col,row) を「進行方向に対して lateral メートル横へ寄って」通り抜ける。
+   * lateral=0 でマスの中央、lateral=±0.67 で端（プレイヤー半径0.32mの限界）。
+   * 進む向きは approachTo と同じ＝2マス手前から直進。
+   */
+  function traverseLat(g, col, row, mode, lateral) {
+    var map = g.map, T = map.tileSize;
+    var ap = approachTo(map, col, row);
+    if (!ap) return null;
+    var dc = (ap.col - col) / 2, dr = (ap.row - row) / 2;   /* 手前側への単位ベクトル */
+    var px = -dr, pz = dc;                                   /* 進行方向に直交する軸 */
+    parkEnemies(g, col, row);
+    place(g, ap.col, ap.row, ap.yawDeg);
+    g.player.x += px * lateral;
+    g.player.z += pz * lateral;
+    g.input.moveY = 1;
+    g.input._keyRun = (mode === 'run');
+    g.input.crouchOn = (mode === 'crouch');
+    var frames = simUntil(g, function () {
+      return g.player.col() === col && g.player.row() === row;
+    }, 400);
+    sim(g, 26);
+    g.input.reset();
+    if (T) { /* T は参照のみ */ }
+    return frames;
+  }
+
+  /**
+   * 倒れかけ什器を「背を預けた壁からの距離 d(m)」で走り抜ける。
+   * 進行方向は壁に沿った軸＝什器の横を走り抜ける経路（契約「反対側の端を通れば倒れない」）。
+   */
+  function runPastProp(g, t, d, mode) {
+    var map = g.map, T = map.tileSize, P = t.prop;
+    var dc = P.sx, dr = P.sz;                 /* 壁に沿った軸 */
+    var sign = 0;
+    for (var s = 1; s >= -1; s -= 2) {
+      if (map.isWalkable(t.col + dc * s, t.row + dr * s) &&
+          map.isWalkable(t.col + dc * s * 2, t.row + dr * s * 2)) { sign = s; break; }
+    }
+    if (!sign) return null;
+    parkEnemies(g, t.col, t.row);
+    var startC = t.col + dc * sign * 2, startR = t.row + dr * sign * 2;
+    /* 進行方向 = -(dc,dr)*sign。yaw は approachTo と同じ規約 */
+    place(g, startC, startR, Math.atan2(dc * sign, dr * sign) * 180 / Math.PI);
+    /* 壁の面（マス中心から -P.n 側へ T/2）から d だけ通路側へ寄せる */
+    g.player.x = g.map.cellCenter(startC, startR).x + P.nx * (d - T / 2);
+    g.player.z = g.map.cellCenter(startC, startR).z + P.nz * (d - T / 2);
+    g.input.moveY = 1;
+    g.input._keyRun = (mode === 'run');
+    g.input.crouchOn = (mode === 'crouch');
+    var frames = simUntil(g, function () {
+      return g.player.col() === t.col && g.player.row() === t.row;
+    }, 400);
+    sim(g, 30);
+    g.input.reset();
+    return frames;
+  }
+
+  /** 壁に沿って走り抜けられる什器（両隣が歩けて、壁際に寄れる）を集める */
+  function propsRunnableAlongWall(g) {
+    var map = g.map, out = [];
+    for (var i = 0; i < g.traps.props.length; i++) {
+      var t = g.traps.props[i], P = t.prop;
+      var ok = false;
+      for (var s = 1; s >= -1; s -= 2) {
+        if (map.isWalkable(t.col + P.sx * s, t.row + P.sz * s) &&
+            map.isWalkable(t.col + P.sx * s * 2, t.row + P.sz * s * 2)) ok = true;
+      }
+      if (ok) out.push(t);
+    }
+    return out;
   }
 
   /* ---------------- A: 造形と定数 ---------------- */
@@ -902,46 +996,84 @@
     t.ok(hitBad.length === 0, 'P4.10b 什器: 当たりの前面が造形と同じ場所にある',
       hitBad.slice(0, 6).join(' ') || tr.props.length + '件');
 
-    /* マスの中央は接触帯の中／同じマスの反対の縁と隣のマスは帯の外
-       ＝「走り抜ければ倒れる・寄れば避けられる」が成り立つ幅であること */
-    var mid = T / 2 - (K.propDepth + Math.sin(K.propLean) * K.propLockerH);
-    t.ok(mid < K.propContact, 'P4.10b 什器: マスの中央を走れば必ず接触する',
-      mid.toFixed(3) + ' < ' + K.propContact);
-    t.ok(mid + T / 2 > K.propContact, 'P4.10b 什器: 同じマスでも壁際を避ければ通れる',
-      (mid + T / 2).toFixed(3) + ' > ' + K.propContact);
-    t.ok(mid + T > K.propContact, 'P4.10b 什器: 隣のマス（別の車線）は接触しない',
-      (mid + T).toFixed(3) + ' > ' + K.propContact);
+    /* P4.11 項目3: 接触帯は「壁から0.55m以内」。
+       壁際（プレイヤー半径0.32m の限界）は帯の中、マスの中央も反対の端も帯の外＝避けられる。 */
+    var R = ESCAPE.Player.RADIUS;
+    t.near(K.propWallBand, 0.55, 1e-9, 'P4.11 什器: 接触帯は壁から0.55m以内（契約）');
+    t.ok(R < K.propWallBand, 'P4.11 什器: 壁際を走れば必ず接触する（帯の中に入れる）',
+      R + ' < ' + K.propWallBand);
+    t.ok(T / 2 > K.propWallBand, 'P4.11 什器: マスの中央は接触帯の外＝走っても倒れない',
+      (T / 2).toFixed(2) + ' > ' + K.propWallBand);
+    t.ok(T - R > K.propWallBand, 'P4.11 什器: 反対側の端を通れば倒れない（契約）',
+      (T - R).toFixed(2) + ' > ' + K.propWallBand);
+    t.ok(K.propWallBand - R >= 0.05, 'P4.11 什器: 壁際の帯にプレイヤーが入れる余地がある',
+      (K.propWallBand - R).toFixed(3) + 'm');
+    /* 什器の前面（最大突出）が帯の中にある＝「造形に触れたら倒れる」が一致する */
+    var frontAt = K.propDepth + Math.sin(K.propLean) * K.propLockerH;
+    t.ok(frontAt < K.propWallBand, 'P4.11 什器: 造形の前面は接触帯の中にある（見た目と一致）',
+      frontAt.toFixed(3) + ' < ' + K.propWallBand);
   }
 
-  /** 「走ってそのマスを通れば倒れる」を1件ではなく多数で確かめる（据え位置の取りこぼし検出） */
+  /** 「壁際を走れば倒れる／中央を走れば倒れない」を1件ではなく多数で確かめる（P4.11 項目3） */
   function testTrapPropToppleCoverage(t, g) {
     g.reset();
     var tr = g.traps;
     if (!tr) return;
+    var K = ESCAPE.TRAP_TUNING;
+    var runnable = propsRunnableAlongWall(g);
     var ids = [];
-    for (var i = 0; i < tr.own.length && ids.length < 10; i++) {
-      var o = tr.own[i];
-      if (o.kind !== 'shelf' && o.kind !== 'locker') continue;
-      if (!approachTo(g.map, o.col, o.row)) continue;
-      ids.push({ id: o.id, col: o.col, row: o.row });
+    for (var i = 0; i < runnable.length && ids.length < 10; i++) {
+      ids.push({ id: runnable[i].id, col: runnable[i].col, row: runnable[i].row });
     }
     if (!t.ok(ids.length >= 8, 'P4.10b 什器: 走行接触の検査に使える什器がある', ids.length + '件')) return;
-    var miss = [];
-    for (var j = 0; j < ids.length; j++) {
-      g.reset();
-      traverse(g, ids[j].col, ids[j].row, 'run');
-      if (g.traps.topples === 0) miss.push(ids[j].id);
+
+    function findBy(gg, id) {
+      for (var j = 0; j < gg.traps.props.length; j++) if (gg.traps.props[j].id === id) return gg.traps.props[j];
+      return null;
     }
-    t.ok(miss.length === 0, 'P4.10b 什器: どの什器も走って通れば倒れる（向きに依らない）',
+    /* 壁際（壁から 0.40m ＝ 帯の中）を走る -> 全部倒れる */
+    var miss = [];
+    for (var a = 0; a < ids.length; a++) {
+      g.reset();
+      var pa = findBy(g, ids[a].id);
+      runPastProp(g, pa, 0.40, 'run');
+      if (g.traps.topples === 0) miss.push(ids[a].id);
+    }
+    t.ok(miss.length === 0, 'P4.11 什器: どの什器も壁際(0.40m)を走れば倒れる（向きに依らない）',
       miss.join(' ') || ids.length + '件すべて倒れた');
-    /* 同じ経路を歩けば1つも倒れない */
+
+    /* 反対側の端（壁から T-0.35m）を走る -> 1つも倒れない（契約「反対側の端を通れば倒れない」） */
+    var far = g.map.tileSize - 0.35;
+    var wrong = [];
+    for (var b = 0; b < ids.length; b++) {
+      g.reset();
+      var pb = findBy(g, ids[b].id);
+      runPastProp(g, pb, far, 'run');
+      if (g.traps.topples > 0) wrong.push(ids[b].id);
+    }
+    t.ok(wrong.length === 0, 'P4.11 什器: 反対側の端(' + far.toFixed(2) + 'm)を走れば1つも倒れない',
+      wrong.join(' ') || ids.length + '件すべて無事');
+
+    /* マスの中央（壁から 1.0m）を走っても倒れない */
+    var midBad = 0;
+    for (var c = 0; c < ids.length; c++) {
+      g.reset();
+      var pc = findBy(g, ids[c].id);
+      runPastProp(g, pc, g.map.tileSize / 2, 'run');
+      midBad += g.traps.topples;
+    }
+    t.ok(midBad === 0, 'P4.11 什器: マスの中央を走っても倒れない（帯の外）', midBad + '件');
+
+    /* 壁際でも歩けば1つも倒れない */
     var walkTop = 0;
     for (var k = 0; k < ids.length; k++) {
       g.reset();
-      traverse(g, ids[k].col, ids[k].row, 'walk');
+      var pk = findBy(g, ids[k].id);
+      runPastProp(g, pk, 0.40, 'walk');
       walkTop += g.traps.topples;
     }
     t.ok(walkTop === 0, 'P4.10b 什器: 同じ経路を歩いても1つも倒れない', walkTop + '件');
+    if (K) { /* 参照のみ */ }
     g.reset();
   }
 
@@ -1042,11 +1174,8 @@
     g.reset();
     var tr = g.traps;
     if (!tr) return;
-    var target = null;
-    for (var i = 0; i < tr.own.length && !target; i++) {
-      if (tr.own[i].kind !== 'shelf' && tr.own[i].kind !== 'locker') continue;
-      if (approachTo(g.map, tr.own[i].col, tr.own[i].row)) target = tr.own[i];
-    }
+    var runnable = propsRunnableAlongWall(g);
+    var target = runnable[0] || null;
     if (!t.ok(!!target, 'P4.10b 什器: 検証に使える罠がある')) return;
     var key = target.id;
 
@@ -1057,19 +1186,19 @@
 
     /* 歩いて触れても倒れない */
     g.reset();
-    traverse(g, target.col, target.row, 'walk');
+    runPastProp(g, find(g), 0.40, 'walk');
     var w = find(g);
     t.ok(w && !w.toppled, 'P4.10b 什器: 歩いて触れても倒れない（契約）', w ? w.toppled : 'なし');
     t.ok(g.traps.topples === 0, 'P4.10b 什器: 歩きでは倒壊が起きない', g.traps.topples);
 
     /* しゃがみでも倒れない */
     g.reset();
-    traverse(g, target.col, target.row, 'crouch');
+    runPastProp(g, find(g), 0.40, 'crouch');
     t.ok(g.traps.topples === 0, 'P4.10b 什器: しゃがみでも倒れない', g.traps.topples);
 
     /* 走ってぶつかると倒れて大音＋以後はデカール */
     g.reset();
-    traverse(g, target.col, target.row, 'run');
+    runPastProp(g, find(g), 0.40, 'run');
     var r = find(g);
     if (t.ok(!!r && r.toppled, 'P4.10b 什器: 走って接触すると倒れる（契約）', r ? r.toppled : 'なし')) {
       t.ok(g.traps.topples === 1, 'P4.10b 什器: 倒壊は1回だけ数える', g.traps.topples);
@@ -1090,6 +1219,163 @@
     var back = find(g);
     t.ok(back && !back.toppled && back.mesh && back.mesh.visible !== false,
       'P4.10b 什器: reset で立っている姿に戻る');
+  }
+
+  /* ---------------- C2: P4.11 項目3「罠は道の端で回避可能」 ---------------- */
+
+  /** 進行方向の両脇が壁の「1車線の通路」にある罠を探す（端を歩く検証に使える罠） */
+  function corridorTrapOf(g, kind, source) {
+    var map = g.map, list = g.traps.list;
+    for (var i = 0; i < list.length; i++) {
+      var t = list[i];
+      if (t.kind !== kind) continue;
+      if (source && t.source !== source) continue;
+      var ax = [[1, 0], [0, 1]];
+      for (var a = 0; a < 2; a++) {
+        var dc = ax[a][0], dr = ax[a][1], pc = ax[1 - a][0], pr = ax[1 - a][1];
+        if (!map.isWalkable(t.col + dc, t.row + dr) || !map.isWalkable(t.col + dc * 2, t.row + dr * 2)) continue;
+        if (!map.isWalkable(t.col - dc, t.row - dr)) continue;
+        if (map.isWalkable(t.col + pc, t.row + pr) || map.isWalkable(t.col - pc, t.row - pr)) continue;
+        return t;
+      }
+    }
+    return null;
+  }
+
+  /** 造形の広がりを実測する（マス中心からの最大の半幅）。缶・床板・金属板を組み直して測る */
+  function shapeSpread(g, t) {
+    var W = ESCAPE.World, world = g.world;
+    var b = { metal: new W.Builder(), wood: new W.Builder(), litter: new W.Builder() };
+    var sh = world.propShader(t.col, t.row, TINT[t.kind] || [1, 1, 1], AO_LOW);
+    if (t.kind === 'can') g.traps._shapeCans(b, t, sh, world);
+    else if (t.kind === 'creak') g.traps._shapeCreak(b, t, sh);
+    else if (t.kind === 'step' && t.mat === 'metal') {
+      var one = function () { return function () { return [1, 1, 1]; }; };
+      world._metalPlate({ metal: b.metal }, t.col, t.row, one, one);
+    } else return null;
+    var mx = 0, mz = 0;
+    for (var k in b) {
+      var arr = b[k].pos;
+      for (var i = 0; i < arr.length; i += 3) {
+        var ax2 = Math.abs(arr[i] - t.x), az = Math.abs(arr[i + 2] - t.z);
+        if (ax2 > mx) mx = ax2;
+        if (az > mz) mz = az;
+      }
+    }
+    return { x: mx, z: mz };
+  }
+
+  /** 音地盤の床デカール（水たまり・ガラス片）を、実際に組まれたワールドのメッシュから測る */
+  function noiseDecalSpread(g, t) {
+    var map = g.map, T = map.tileSize, out = { x: 0, z: 0 };
+    var kids = g.world.group.children;
+    for (var m = 0; m < kids.length; m++) {
+      var mesh = kids[m];
+      if (mesh.name !== 'water' && mesh.name !== 'glass') continue;
+      var arr = mesh.geometry.getAttribute('position').array;
+      for (var v = 0; v < arr.length; v += 3) {
+        var x = arr[v], z = arr[v + 2];
+        if (Math.floor(x / T) !== t.col || Math.floor(z / T) !== t.row) continue;
+        var dx = Math.abs(x - t.x), dz = Math.abs(z - t.z);
+        if (dx > out.x) out.x = dx;
+        if (dz > out.z) out.z = dz;
+      }
+    }
+    return out;
+  }
+
+  function testP411TrapEdgeAvoid(t, g) {
+    g.reset();
+    var tr = g.traps, K = ESCAPE.TRAP_TUNING, T = g.map.tileSize;
+    if (!tr) return;
+    t.near(K.stepBand, 0.60, 1e-9, 'P4.11 端回避: 踏む系の帯はマス中央の60%幅（中央1.2m）');
+    t.ok(T / 2 - K.stepBand >= 0.40 - 1e-9, 'P4.11 端回避: 両端0.4mは造形も発火もない',
+      (T / 2 - K.stepBand).toFixed(2) + 'm');
+    t.ok(ESCAPE.Player.RADIUS < K.stepBand, 'P4.11 端回避: プレイヤーが帯の外を歩ける（半径0.32m）',
+      ESCAPE.Player.RADIUS + ' < ' + K.stepBand);
+
+    /* 造形が帯からはみ出していないこと（缶・床板・金属板は組み直して、
+       水たまり・ガラス片はワールドの実物のメッシュから実測する）。
+       帯は「壁に挟まれた軸だけ狭める」＝通路の幅方向。1車線の通路では必ず狭い方の軸がある。 */
+    var over = [], bandedTiles = 0;
+    for (var i = 0; i < tr.list.length; i++) {
+      var o = tr.list[i];
+      var isStep = (o.kind === 'can' || o.kind === 'creak' || o.kind === 'step');
+      if (!isStep) continue;
+      var bh = ESCAPE.World.stepBandHalf(g.map, o.col, o.row);
+      if (bh.bx || bh.bz) bandedTiles++;
+      var sp = (o.kind === 'step' && o.mat !== 'metal') ? noiseDecalSpread(g, o) : shapeSpread(g, o);
+      if (!sp) continue;
+      if (sp.x > bh.x + 1e-6 || sp.z > bh.z + 1e-6) {
+        over.push(o.id + '=' + sp.x.toFixed(2) + '/' + sp.z.toFixed(2) +
+          ' 帯' + bh.x.toFixed(2) + '/' + bh.z.toFixed(2));
+      }
+    }
+    t.ok(over.length === 0, 'P4.11 端回避: 踏む系の造形が全部「通路の幅方向で中央60%」に収まる（実測）',
+      over.slice(0, 5).join(' ') || (bandedTiles + 'マスを実測'));
+    t.ok(bandedTiles > 100, 'P4.11 端回避: 帯が効くマス（壁に挟まれた軸を持つ）が十分ある', bandedTiles);
+
+    /* 発火: 中央を走れば鳴る／端を走れば鳴らない */
+    var EDGE = T / 2 - ESCAPE.Player.RADIUS - 0.01;      /* 壁に寄れる限界 */
+    var kinds = ['can', 'creak'];
+    for (var k = 0; k < kinds.length; k++) {
+      var target = corridorTrapOf(g, kinds[k]);
+      if (!t.ok(!!target, 'P4.11 端回避: ' + kinds[k] + ' の1車線通路の罠がある')) continue;
+      g.reset();
+      traverseLat(g, target.col, target.row, 'run', 0);
+      t.ok((g.traps.firedByKind[kinds[k]] || 0) >= 1,
+        'P4.11 端回避: ' + kinds[k] + ' は中央を走ると鳴る', JSON.stringify(g.traps.firedByKind));
+      g.reset();
+      traverseLat(g, target.col, target.row, 'run', EDGE);
+      var a1 = g.traps.fired;
+      g.reset();
+      traverseLat(g, target.col, target.row, 'run', -EDGE);
+      t.ok(a1 === 0 && g.traps.fired === 0,
+        'P4.11 端回避: ' + kinds[k] + ' は端(' + EDGE.toFixed(2) + 'm)を走っても鳴らない（両側）',
+        a1 + '/' + g.traps.fired);
+    }
+
+    /* 音地盤（step）も同じ規約。Stealth 側の発火を数える */
+    var st = corridorTrapOf(g, 'step');
+    if (t.ok(!!st, 'P4.11 端回避: 音地盤の1車線通路のマスがある')) {
+      g.reset();
+      traverseLat(g, st.col, st.row, 'run', 0);
+      var mid = g.stealth.noiseSteps;
+      g.reset();
+      traverseLat(g, st.col, st.row, 'run', EDGE);
+      var e1 = g.stealth.noiseSteps;
+      g.reset();
+      traverseLat(g, st.col, st.row, 'run', -EDGE);
+      t.ok(mid >= 1, 'P4.11 端回避: 音地盤は中央を走ると鳴る', mid);
+      t.ok(e1 === 0 && g.stealth.noiseSteps === 0,
+        'P4.11 端回避: 音地盤は端を走っても鳴らない（両側）', e1 + '/' + g.stealth.noiseSteps);
+    }
+
+    /* ワイヤーは全幅のまま（しゃがみで潜る）＝端を歩いても鳴る（契約） */
+    var wire = corridorTrapOf(g, 'wire');
+    if (t.ok(!!wire, 'P4.11 端回避: ワイヤーの1車線通路の罠がある')) {
+      g.reset();
+      traverseLat(g, wire.col, wire.row, 'walk', EDGE);
+      t.ok((g.traps.firedByKind.wire || 0) >= 1,
+        'P4.11 端回避: ワイヤーは端を歩いても鳴る（全幅のまま・契約）',
+        JSON.stringify(g.traps.firedByKind));
+      g.reset();
+      traverseLat(g, wire.col, wire.row, 'crouch', EDGE);
+      t.ok(g.traps.fired === 0, 'P4.11 端回避: ワイヤーは端でもしゃがめば潜れる', g.traps.fired);
+    }
+
+    /* センサーは全幅のまま＝端を走っても警報（歩けば無音は既存テストの担当） */
+    var sen = corridorTrapOf(g, 'sensor');
+    if (t.ok(!!sen, 'P4.11 端回避: センサーの1車線通路のマスがある')) {
+      g.reset();
+      traverseLat(g, sen.col, sen.row, 'run', EDGE);
+      t.ok(g.stealth.alarms >= 1, 'P4.11 端回避: センサーは端を走っても鳴る（全幅のまま・契約）',
+        g.stealth.alarms);
+      g.reset();
+      traverseLat(g, sen.col, sen.row, 'walk', EDGE);
+      t.ok(g.stealth.alarms === 0, 'P4.11 端回避: センサーは歩けば無音（契約）', g.stealth.alarms);
+    }
+    g.reset();
   }
 
   function testTrapAlertsBothEnemies(t, g) {
@@ -1290,6 +1576,7 @@
     testTrapStepKinds,
     testTrapWireCrouch,
     testTrapPropTopple,
+    testP411TrapEdgeAvoid,
     testTrapAlertsBothEnemies,
     testTrapInterruptSafety,
     testTrapAudio
