@@ -1176,6 +1176,18 @@
     }
   };
 
+  /** 停止中のコンテキストを再開する（表示中・非テスト時のみ。呼び出しは1秒に1回に間引く） */
+  Engine.prototype.tryResume = function (dt) {
+    var ctx = this.ctx;
+    if (!ctx || this.hidden || this.testMode) return false;
+    if (ctx.state === 'running') return false;
+    this._resumeT = (this._resumeT || 0) - (dt || 0);
+    if (this._resumeT > 0) return false;
+    this._resumeT = 1.0;
+    try { var pr = ctx.resume && ctx.resume(); if (pr && pr.catch) pr.catch(function () {}); } catch (e) { this.errors++; }
+    return true;
+  };
+
   Engine.prototype._buildBuses = function () {
     var ctx = this.ctx;
     this.master = gainOf(ctx, this.muted ? 0 : this.volume);
@@ -1674,6 +1686,10 @@
     if (!g || !g.player) return;
     if (!isFinite(dt) || dt <= 0) dt = 0;
     this.time += dt;
+    /* 2026-09-07 音消失バグ対策: タブ切替（visibilitychange→suspend）やOSの割り込みで
+       AudioContext が 'suspended'/'interrupted' のまま戻らないと、以後ずっと無音になる。
+       表示中でテスト中でなければ毎秒1回だけ resume() を試みる（失敗は握り潰す） */
+    this.tryResume(dt);
     if (this.duckT > 0) this.duckT = Math.max(0, this.duckT - dt);
 
     var p = g.player;
@@ -2067,6 +2083,16 @@
   document.addEventListener('touchstart', onFirstGesture, true);
   document.addEventListener('mousedown', onFirstGesture, true);
   global.addEventListener('keydown', onFirstGesture, true);
+
+  /* 2026-09-07: 解錠後も外さない操作フック。ユーザー操作があれば停止中の
+     AudioContext を即座に再開する（ブラウザは操作起点の resume を最も確実に通す） */
+  function onAnyGesture() {
+    if (!engine.ctx || engine.hidden || engine.testMode) return;
+    if (engine.ctx.state !== 'running') { engine._resumeT = 0; engine.tryResume(0); }
+  }
+  document.addEventListener('pointerdown', onAnyGesture, true);
+  document.addEventListener('touchstart', onAnyGesture, true);
+  global.addEventListener('keydown', onAnyGesture, true);
 
   /* ページ非表示で環境音を止める（契約: 鳴りっぱなしにしない） */
   document.addEventListener('visibilitychange', function () {
