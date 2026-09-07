@@ -54,7 +54,14 @@
        固定色を1つ要求するため、1周目色ベースの代表値を残す（実描画は lapStroke() 側）。 */
     rope: lapStroke(0, CUR_LAP_ALPHA),
     ghost: lapStroke(0, PAST_LAP_ALPHA),
-    knot: '#ffeeb4'
+    knot: '#ffeeb4',
+    /* P4.14 項目2: 目標地点の星（淡い黄・点滅なし・ラベルと凡例は付けない） */
+    goal: 'rgba(255,232,160,0.95)',
+    goalEdge: 'rgba(60,44,10,0.9)',
+    /* P4.14 項目1: セーブポイント（近づいて発見したものだけ小さな四角で出す） */
+    save: 'rgba(120,224,150,0.82)',
+    saveOn: 'rgba(170,255,190,0.98)',
+    saveCur: 'rgba(226,255,236,1)'
   };
   var MINI_PX = 320;   /* 小さいときのバッキング解像度（P4.11: 224→320） */
   var FULL_PX = 760;   /* 全画面のバッキング解像度（P4.11: 616→760） */
@@ -243,8 +250,12 @@
 
     /* 「変更時のみ再描画」。プレイヤー印は 0.6m / 0.25rad 単位で追従させる */
     var rope = this.game.rope;
+    var pr = this.game.progress;
     var sig = this.exploredCount + '|' + this.zoneCount + '|' +
-      (rope ? (rope.stack.length + ',' + rope.laps.length + ',' + rope.lapIndex) : '');
+      (rope ? (rope.stack.length + ',' + rope.laps.length + ',' + rope.lapIndex) : '') + '|' +
+      /* P4.14: 目標地点（鍵の有無で移る星）とセーブポイントの発見/記録状態 */
+      (pr ? ((pr.hasKey && pr.hasKey() ? 'K' : '-') + ',' +
+        (pr.savePointsSeenCount || 0) + ',' + (pr.checkpoint || '-')) : '');
     var moved = Math.hypot(p.x - this._lastX, p.z - this._lastZ) > 0.6;
     var turned = Math.abs(p.yaw - this._lastYaw) > 0.25;
     if (!this._dirty && sig === this._sig && !moved && !turned) return;
@@ -336,11 +347,83 @@
       ctx.fillRect(qa.x - as / 2, qa.y - as / 2, as, as);
     }
 
+    /* P4.14 項目1: 発見済みのセーブポイント（現在の復帰地点は明るく縁取る） */
+    this._drawSavePoints(ctx, v);
+    /* P4.14 項目2: 現在の目標地点の星（未踏破でも常時表示・経路や矢印は出さない） */
+    this._drawGoalStar(ctx, v);
+
     /* 区画名（銘板を読んだ区画だけ） */
     this._drawZones(ctx, v, full);
 
     /* プレイヤー（向きの分かる矢印。P4.12 項目2 で旧比 約2.1倍へ縮小） */
     this._drawPlayer(ctx, v);
+  };
+
+  /* ---------------- P4.14 項目2: ゴールの星 ----------------
+   * 契約 §4「P4.14 再プレイ差し戻し」項目2 / 正文 docs/notes.md「P4.14追加」。
+   * 現在の目標地点を5角星で常時表示する。鍵未取得＝所長室の金庫（meta.keySafe）、
+   * 鍵取得後＝北の出口（meta.exitPad）。淡い黄・点滅なし・ラベル/凡例/経路/矢印は出さない。 */
+
+  /** 現在の目標地点のマス（テストからも参照する） */
+  Minimap.prototype.goalCell = function () {
+    var meta = (this.map && this.map.meta) || {};
+    var pr = this.game.progress;
+    var hasKey = !!(pr && pr.hasKey && pr.hasKey());
+    var c = hasKey ? meta.exitPad : (meta.keySafe || meta.exitPad);
+    if (!c) return null;
+    return { col: c.col, row: c.row, kind: hasKey ? 'exit' : 'key' };
+  };
+
+  /** 星の外接半径（画素） */
+  Minimap.prototype.goalStarSize = function (v) {
+    v = v || this.view();
+    return Math.max(6, v.s * 1.5);
+  };
+
+  Minimap.prototype._drawGoalStar = function (ctx, v) {
+    var g = this.goalCell();
+    if (!g) return;
+    var q = this.cellToPx(g.col, g.row, v);
+    var R = this.goalStarSize(v), r = R * 0.42;
+    ctx.beginPath();
+    for (var i = 0; i < 10; i++) {
+      var rad = (i % 2 === 0) ? R : r;
+      var a = -Math.PI / 2 + i * Math.PI / 5;
+      var x = q.x + Math.cos(a) * rad, y = q.y + Math.sin(a) * rad;
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+    ctx.strokeStyle = COL.goalEdge;
+    ctx.lineWidth = Math.max(1.2, R * 0.22);
+    ctx.lineJoin = 'round';
+    ctx.stroke();
+    ctx.fillStyle = COL.goal;
+    ctx.fill();
+  };
+
+  /* ---------------- P4.14 項目1: セーブポイント ----------------
+   * 「近づいて発見した（2マス以内に入った）」端末だけを小さな四角で描く。
+   * 現在の復帰地点（＝記録済みのうち最も奥）は明るく縁取る。 */
+  Minimap.prototype._drawSavePoints = function (ctx, v) {
+    var pr = this.game.progress;
+    if (!pr || !pr.savePoints) return;
+    var list = pr.savePoints, s = v.s;
+    var side = Math.max(3, s * 0.62);
+    var cur = pr.checkpoint;
+    for (var i = 0; i < list.length; i++) {
+      var sp = list[i];
+      if (!pr.savePointsSeen[sp.id]) continue;
+      var q = this.cellToPx(sp.col, sp.row, v);
+      ctx.fillStyle = pr.saved[sp.id] ? COL.saveOn : COL.save;
+      ctx.fillRect(q.x - side / 2, q.y - side / 2, side, side);
+      if (sp.id === cur) {
+        ctx.strokeStyle = COL.saveCur;
+        ctx.lineWidth = Math.max(1.4, s * 0.22);
+        ctx.lineJoin = 'miter';
+        var o = side * 0.5 + Math.max(1.4, s * 0.22);
+        ctx.strokeRect(q.x - o, q.y - o, o * 2, o * 2);
+      }
+    }
   };
 
   /** プレイヤー矢印の一辺（画素）。テストから比率を検査できるよう関数に切り出す */
@@ -479,7 +562,8 @@
     return {
       explored: this.exploredCount, zones: zs, full: this.full, wipes: this.wipes,
       px: v.px, scale: v.s, arrow: this.playerArrowSize(v), arrowLegacy: this.legacyArrowSize(v),
-      rooms: this.roomRegions().length
+      rooms: this.roomRegions().length,
+      goal: this.goalCell(), star: this.goalStarSize(v)
     };
   };
 

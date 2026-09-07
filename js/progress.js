@@ -107,6 +107,10 @@
     bulkheadLook: '隔壁を調べる',
     bulkheadLocked: '施錠されている —— 鍵がいる',
     bulkheadUnlock: '隔壁を解錠する',
+    /* P4.14 セーブポイント（正文 docs/notes.md「P4.14追加（セーブポイント・地図）」） */
+    savePoint: '端末に記録する',
+    savedNow: '記録した —— ここから再開できる',
+    savedAlready: '記録済み',
     /* 【P4.12 失効】taut: 'ロープが張った' —— ロープ無制限化で表示そのものが失効 */
     /* 【P4.13 失効】knot: 'ロープを拾って結ぶ' —— 結び目の拾い直し自体が失効 */
     mapTitle: '地図'
@@ -137,6 +141,11 @@
     sensor: '走るな —— センサー'
   };
 
+  /* P4.14 項目1: セーブポイントの案内（正文 docs/notes.md「P4.14追加（セーブポイント・地図）」）。
+     TRAP_HINT と同じ表示経路（#trap-hint）に出す。罠の案内（走るな／しゃがめ）は
+     即応が要る警告なので、両方成立したときは罠の案内を優先する。 */
+  var SAVE_HINT = 'セーブポイント —— 壁の端末を調べて記録しろ';
+
   /* 壁の掲示（docs/notes.md「掲示（短文・使い回し可のフレーバー）」の正文）。
    * P4.8: 配電順序・制御室・排水路・12秒開放の掲示は失効（該当の仕掛けが無い）。 */
   var SIGN_TEXT = {
@@ -150,6 +159,14 @@
   var REGION_SIGN_RANGE = 3.0;
   var NOTE_GLOW_RANGE = 3.4;        /* 本物のメモの縁が淡く光り始める距離(m) */
   var FLASH_DUR = 1.9;              /* 応答表示の持続(s) */
+
+  /* P4.14 セーブポイント（契約 §4「P4.14 再プレイ差し戻し」項目1） */
+  var SAVE_RANGE = 2.4;             /* 記録端末を「調べる」ことのできる距離(m)。壁面からの直線 */
+  var SAVE_NEAR_CELLS = 2;          /* 案内・地図への記入が起きる距離（マス。正文「2マス以内」） */
+  var SAVE_HINT_COOLDOWN = 30.0;    /* 同じ端末で案内を出す間隔(s)。正文「30秒に1回まで」 */
+  var SAVE_HINT_DUR = 3.4;          /* 案内の表示持続(s) */
+  /* 端末の向き（壁の向き）→ 復帰時に向く方角(deg)。端末（緑のランプ）が正面に来る */
+  var SAVE_YAW_DEG = { n: 0, s: 180, e: -90, w: 90 };
 
   var SAVE_KEY = 'escape.save.area1.v2';
   var SAVE_KEY_OLD = 'escape.save.area1.v1';   /* P4.7 以前のセーブ（読まずに消す） */
@@ -207,7 +224,19 @@
     };
     this.cleared = false;
     this.clearedBy = null;                   /* 'main'（アリアドネ方式では正規1本のみ） */
+    /* P4.14 項目1: セーブポイント。
+       saved            … 記録済みの端末 {id:true}（セーブデータに永続）
+       savePointsSeen   … 2マス以内に入って「発見」した端末 {id:true}（地図に四角で出る）
+       checkpoint       … 現在の復帰地点の端末id（＝記録済みのうち最も奥。未記録なら null）。
+                          【失効】旧「最後に踏んだチェックポイント」の意味は失効した。 */
+    this.saved = Object.create(null);
+    this.savePointsSeen = Object.create(null);
+    this.savePointsSeenCount = 0;
     this.checkpoint = null;
+    this._t = 0;
+    this._saveHintT = 0;
+    this._saveHintId = null;
+    this._saveHintAt = Object.create(null);
     this.modal = null;                       /* null | 'memo' | 'ending' */
     this.memoId = null;
     this.darkLevel = 0;
@@ -235,9 +264,13 @@
     this._gimmickAt = Object.create(null);
     var gm = meta.gimmicks || [];
     for (var j = 0; j < gm.length; j++) this._gimmickAt[gm[j].col + ',' + gm[j].row] = gm[j];
-    this._checkpointAt = Object.create(null);
-    var cps = meta.checkpoints || [];
-    for (var k = 0; k < cps.length; k++) this._checkpointAt[cps[k].col + ',' + cps[k].row] = cps[k];
+    /* P4.14: セーブポイント（旧チェックポイント6か所を転用）。
+       進行順（＝スタートからの経路距離）と、壁面の端末の座標をここで1回だけ焼く。 */
+    this.savePoints = this._buildSavePoints(meta);
+    this._savePointById = Object.create(null);
+    for (var k = 0; k < this.savePoints.length; k++) {
+      this._savePointById[this.savePoints[k].id] = this.savePoints[k];
+    }
     this._signAt = Object.create(null);
     var sg = meta.signs || [];
     for (var s = 0; s < sg.length; s++) this._signAt[sg[s].col + ',' + sg[s].row] = sg[s];
@@ -245,6 +278,184 @@
     var rs = meta.regionSigns || [];
     for (var r = 0; r < rs.length; r++) this._regionSignAt[rs[r].col + ',' + rs[r].row] = rs[r];
     this.regionSigns = rs;
+  };
+
+  /* ================================================================
+   * P4.14 項目1: セーブポイント（契約 §4「P4.14 再プレイ差し戻し」項目1）
+   *
+   * 旧チェックポイント6か所（meta.checkpoints = a1_cp1〜cp6）をそのまま転用する。
+   * 【失効】「マスを踏むと自動で記録＋効果音」「ロード時にチェックポイントへ配置」。
+   *
+   * データの読み方（js/maps/area1.js meta.checkpoints が唯一の真実）:
+   *   col,row … 端末の**前に立つ歩行可能マス**／dir … そのマスから見た**壁の向き**
+   *   tx,tz  … 壁面の中心（＝端末そのもの）のワールド座標。「調べる」の距離・向きはここで測る
+   *   zone   … 帯（meta.bands）から引いた区画A〜F。地図の表示と報告用
+   *   order  … **スタートからの経路距離（マス）**。大きいほど奥＝復帰地点として優先される
+   *
+   * 「奥」の決め方について（実装の判断・報告に明記した既知の妥協点）:
+   *   契約は「区画の進行順（A→F＝スタートから奥）」と書くが、このマップの帯は北から
+   *   E/F/D/B/C/A の順に並んでおり、記号の A→F 順では最北（＝鍵と出口がある最奥）の
+   *   区画Eが5番目になってしまい「スタートから奥」と矛盾する。そこで**スタートからの
+   *   実経路距離**を進行順の実体とした（結果の並びは A→B→C→D→F→E で、Eが最奥）。
+   * ============================================================== */
+
+  /** 素の歩行可能判定（牢の鉄格子などの runtime の通行止めを無視する＝進行順は静的） */
+  function rawWalkable(map, col, row) {
+    if (!map.inBounds(col, row)) return false;
+    var d = ESCAPE.TILE_DEFS[map.tileAt(col, row)];
+    return !!(d && d.walkable);
+  }
+
+  /** スタートからの経路距離（マス）。到達不能は -1 */
+  function spawnDistMap(map) {
+    var meta = map.meta || {}, sp = meta.spawn;
+    var W = map.width, H = map.height;
+    var d = new Int32Array(W * H);
+    for (var i = 0; i < d.length; i++) d[i] = -1;
+    if (!sp || !rawWalkable(map, sp.col, sp.row)) return d;
+    d[sp.row * W + sp.col] = 0;
+    var q = [sp.col, sp.row], head = 0;
+    var D = [1, 0, -1, 0, 0, 1, 0, -1];
+    while (head < q.length) {
+      var c = q[head++], r = q[head++];
+      var d0 = d[r * W + c];
+      for (var k = 0; k < 8; k += 2) {
+        var nc = c + D[k], nr = r + D[k + 1];
+        if (!rawWalkable(map, nc, nr) || d[nr * W + nc] >= 0) continue;
+        d[nr * W + nc] = d0 + 1;
+        q.push(nc, nr);
+      }
+    }
+    return d;
+  }
+
+  Progress.prototype._buildSavePoints = function (meta) {
+    var map = this.map || this.game.map;
+    var list = (meta && meta.checkpoints) || [];
+    if (!list.length) return [];
+    var dist = spawnDistMap(map), W = map.width, T = map.tileSize;
+    var bands = (meta.bands) || [];
+    var out = [];
+    for (var i = 0; i < list.length; i++) {
+      var cp = list[i];
+      var v = FACE[cp.dir] || FACE.n;
+      var cc = map.cellCenter(cp.col, cp.row);
+      var zone = null;
+      for (var b = 0; b < bands.length; b++) {
+        if (cp.row >= bands[b].r0 && cp.row <= bands[b].r1) { zone = bands[b].zone; break; }
+      }
+      var dd = dist[cp.row * W + cp.col];
+      out.push({
+        id: cp.id, col: cp.col, row: cp.row, dir: cp.dir || 'n', zone: zone,
+        tx: cc.x + v[0] * (T * 0.5), tz: cc.z + v[2] * (T * 0.5),
+        yawDeg: (SAVE_YAW_DEG[cp.dir] === undefined) ? 0 : SAVE_YAW_DEG[cp.dir],
+        order: (dd >= 0) ? dd : 0
+      });
+    }
+    /* 手前 → 奥（同着は id 順）で並べておく。復帰地点は末尾側が勝つ */
+    out.sort(function (a, b2) { return (a.order - b2.order) || (a.id < b2.id ? -1 : 1); });
+    return out;
+  };
+
+  /** 現在の復帰地点。記録済みのうち**最も奥**（order 最大）。未記録ならスタート */
+  Progress.prototype.respawnPoint = function () {
+    var list = this.savePoints || [], best = null;
+    for (var i = 0; i < list.length; i++) {
+      if (!this.saved[list[i].id]) continue;
+      if (!best || list[i].order > best.order) best = list[i];
+    }
+    if (best) {
+      return { id: best.id, col: best.col, row: best.row, yawDeg: best.yawDeg,
+        zone: best.zone, order: best.order, isSpawn: false };
+    }
+    var sp = (this.game.map.meta && this.game.map.meta.spawn) || { col: 1, row: 1, yawDeg: 0 };
+    return { id: null, col: sp.col, row: sp.row, yawDeg: sp.yawDeg || 0,
+      zone: null, order: 0, isSpawn: true };
+  };
+
+  /** this.checkpoint（＝復帰地点の端末id）を記録集合から引き直す */
+  Progress.prototype._syncRespawn = function () {
+    this.checkpoint = this.respawnPoint().id;
+    return this.checkpoint;
+  };
+
+  Progress.prototype.isSavePointRecorded = function (id) { return !!this.saved[id]; };
+  Progress.prototype.isSavePointSeen = function (id) { return !!this.savePointsSeen[id]; };
+
+  /** プレイヤーを復帰地点へ置く（ロード時・捕獲からの復帰時の共通経路） */
+  Progress.prototype._placeAtRespawn = function () {
+    var rp = this.respawnPoint();
+    var map = this.game.map, p = this.game.player;
+    var c = map.cellCenter(rp.col, rp.row);
+    p.x = c.x; p.z = c.z;
+    p.y = map.floorYAt(p.x, p.z);
+    p.yaw = (rp.yawDeg || 0) * Math.PI / 180;
+    return rp;
+  };
+
+  /** 記録端末を「調べる」対象として探す（壁面からの距離＋見ている向き） */
+  Progress.prototype._findSaveTerminal = function () {
+    var p = this.game.player, T = ESCAPE.ENEMY_TUNING;
+    var f = { x: -Math.sin(p.yaw), z: -Math.cos(p.yaw) };
+    var list = this.savePoints || [], best = null, bestD = Infinity;
+    for (var i = 0; i < list.length; i++) {
+      var s = list[i];
+      var dx = s.tx - p.x, dz = s.tz - p.z;
+      var d = Math.hypot(dx, dz);
+      if (d > SAVE_RANGE) continue;
+      if (d > 0.2 && (f.x * dx + f.z * dz) / d < T.interactDot) continue;
+      if (d < bestD) { bestD = d; best = s; }
+    }
+    return best;
+  };
+
+  /** 「調べる」で記録する。記録済みなら `記録済み` を返すだけ（どちらも処理した扱い） */
+  Progress.prototype._recordSavePoint = function (s) {
+    if (this.saved[s.id]) { this._flash(UI_TEXT.savedAlready); return true; }
+    this.saved[s.id] = true;
+    if (!this.savePointsSeen[s.id]) { this.savePointsSeen[s.id] = true; this.savePointsSeenCount++; }
+    this._syncRespawn();
+    this._saveHintT = 0;                 /* 記録した端末の案内は即座に消す */
+    sfx('checkpoint', {});
+    this._flash(UI_TEXT.savedNow);
+    this.save();
+    return true;
+  };
+
+  /** 毎フレーム: 2マス以内で「発見」＋未記録なら案内（同じ端末は30秒に1回まで） */
+  Progress.prototype._checkSavePoints = function (dt) {
+    this._t += dt;
+    if (this._saveHintT > 0) { this._saveHintT -= dt; if (this._saveHintT < 0) this._saveHintT = 0; }
+    var g = this.game, p = g.player;
+    var st = g.stealth;
+    /* 捕獲シネマティック中・モーダル中は案内も発見もしない（中断安全） */
+    if (this.modal) return;
+    if (st && st.jail && st.jail.phase && st.jail.phase !== 'none') return;
+    var col = p.col(), row = p.row();
+    var list = this.savePoints || [], near = null, nearD = Infinity;
+    for (var i = 0; i < list.length; i++) {
+      var s = list[i];
+      var dc = Math.abs(s.col - col), dr = Math.abs(s.row - row);
+      var d = (dc > dr) ? dc : dr;
+      if (d > SAVE_NEAR_CELLS) continue;
+      if (!this.savePointsSeen[s.id]) { this.savePointsSeen[s.id] = true; this.savePointsSeenCount++; }
+      if (this.saved[s.id]) continue;    /* 記録済みでは案内を出さない */
+      if (d < nearD) { nearD = d; near = s; }
+    }
+    if (!near) return;
+    if (this._saveHintId === near.id && this._saveHintT > 0) return;
+    var last = this._saveHintAt[near.id];
+    if (last !== undefined && this._t - last < SAVE_HINT_COOLDOWN) return;
+    this._saveHintAt[near.id] = this._t;
+    this._saveHintId = near.id;
+    this._saveHintT = SAVE_HINT_DUR;
+  };
+
+  /** 案内の本文（表示中でなければ空文字） */
+  Progress.prototype.saveHintText = function () {
+    if (this._saveHintT <= 0 || !this._saveHintId) return '';
+    if (this.saved[this._saveHintId]) return '';
+    return SAVE_HINT;
   };
 
   Progress.prototype.modalOpen = function () { return !!this.modal; };
@@ -345,6 +556,9 @@
       if (t.kind === 'note') { this._openMemo(t.entry.id); return true; }
       return this._useGimmick(t);
     }
+    /* P4.14 項目1: 壁面の記録端末（セーブポイント） */
+    var sp = this._findSaveTerminal();
+    if (sp) return this._recordSavePoint(sp);
     var rs = this._findRegionSign();
     if (rs) { this._readRegionSign(rs); return true; }
     return false;
@@ -393,7 +607,8 @@
   Progress.prototype.step = function (dt) {
     if (this._flashT > 0) { this._flashT -= dt; if (this._flashT < 0) this._flashT = 0; }
     /* 【P4.12 失効】ここにあった「ロープが張った」の画面表示は、ロープ無制限化で失効した。 */
-    this._checkCheckpoint();
+    /* P4.14: セーブポイントの発見と案内（【失効】旧「マスを踏むと自動で記録＋効果音」） */
+    this._checkSavePoints(dt);
     this._checkClear();
     this._updateNoteGlow(dt);
     this._updatePrompt();
@@ -401,16 +616,6 @@
     this._updateRopeHud();
     this._updateTrapHint();
     this._syncHud();
-  };
-
-  Progress.prototype._checkCheckpoint = function () {
-    var g = this.game, TILE = ESCAPE.TILE;
-    if (g.map.tileAt(g.player.col(), g.player.row()) !== TILE.CHECKPOINT) return;
-    var entry = this._checkpointAt[g.player.col() + ',' + g.player.row()];
-    if (!entry || entry.id === this.checkpoint) return;
-    this.checkpoint = entry.id;
-    sfx('checkpoint', {});
-    this.save();
   };
 
   Progress.prototype._checkClear = function () {
@@ -435,11 +640,16 @@
       if (t) {
         s = (t.kind === 'note') ? UI_TEXT.note : this._gimmickPrompt(t.entry);
       } else {
-        var rs = this._findRegionSign();
-        if (rs) s = UI_TEXT.regionSign;
+        /* P4.14: 記録端末は記録済みでもプロンプトを出す（調べると `記録済み` が返る） */
+        var stm = this._findSaveTerminal();
+        if (stm) s = UI_TEXT.savePoint;
         else {
-          var sg = this._findSign();
-          if (sg) s = SIGN_TEXT[sg.id] || '';
+          var rs = this._findRegionSign();
+          if (rs) s = UI_TEXT.regionSign;
+          else {
+            var sg = this._findSign();
+            if (sg) s = SIGN_TEXT[sg.id] || '';
+          }
         }
       }
     }
@@ -527,10 +737,15 @@
     var k = this.trapHintKind();
     return k ? (TRAP_HINT[k] || '') : '';
   };
+  /** #trap-hint に実際に出る1行。罠の案内（即応が要る警告）が最優先、次にセーブポイント案内 */
+  Progress.prototype.hintLineText = function () {
+    if (this.modal) return '';
+    return this.trapHintText() || this.saveHintText();
+  };
   Progress.prototype._updateTrapHint = function () {
     var el = this.dom.trapHint;
     if (!el) return;
-    var s = this.trapHintText();
+    var s = this.hintLineText();
     if (this._trapHint === s) return;
     this._trapHint = s;
     el.textContent = s;
@@ -654,6 +869,14 @@
   /** 契約 §4: エリア最初から。地図の踏破は消え、ロープの軌跡は世界に残る。
    *  鍵と読んだメモ（＝知識）は保持する（牢送りの「進行状態は保持」の継承）。 */
   Progress.prototype.onAreaReset = function () {
+    /* P4.14 項目1: 3回目の捕獲＝食われた。セーブポイントの記録も**全消去**し、
+       復帰地点はスタートへ戻る（地図での発見済み表示も消える）。 */
+    this.saved = Object.create(null);
+    this.savePointsSeen = Object.create(null);
+    this.savePointsSeenCount = 0;
+    this._saveHintAt = Object.create(null);
+    this._saveHintT = 0;
+    this._saveHintId = null;
     this.checkpoint = null;
     this.modal = null;
     this._flashT = 0;
@@ -667,8 +890,12 @@
   Progress.prototype.save = function () {
     try {
       var data = {
-        v: 3, mapId: this.game.mapId,
+        v: 4, mapId: this.game.mapId,
+        /* P4.14: 記録済み／発見済みのセーブポイント。checkpoint は復帰地点の端末id
+           （旧セーブとの後方互換のためキー名はそのまま）。 */
         checkpoint: this.checkpoint,
+        savePoints: Object.keys(this.saved),
+        savePointsSeen: Object.keys(this.savePointsSeen),
         gimmick: { key: this.gimmick.key, doorOpen: this.gimmick.doorOpen },
         notesRead: Object.keys(this.notesRead),
         signsRead: Object.keys(this.signsRead),
@@ -698,26 +925,27 @@
     for (var j = 0; j < sr.length; j++) this.signsRead[sr[j]] = true;
     this.cleared = !!data.cleared;
     if (this.game.minimap && data.map) this.game.minimap.load(data.map);
-    if (data.checkpoint) {
-      this.checkpoint = data.checkpoint;
-      this._placeAtCheckpoint(data.checkpoint);
+    /* P4.14: 記録済みセーブポイント。旧セーブ（v3以前）は checkpoint に文字列が入っている
+       だけなので、それを「1本だけ記録済み」として読む＝旧セーブでも壊れない。 */
+    var rec = data.savePoints;
+    if (!rec && data.checkpoint) rec = [data.checkpoint];
+    rec = rec || [];
+    for (var s2 = 0; s2 < rec.length; s2++) {
+      if (this._savePointById[rec[s2]]) this.saved[rec[s2]] = true;
     }
+    var seen = data.savePointsSeen || rec;
+    for (var s3 = 0; s3 < seen.length; s3++) {
+      if (this._savePointById[seen[s3]] && !this.savePointsSeen[seen[s3]]) {
+        this.savePointsSeen[seen[s3]] = true;
+        this.savePointsSeenCount++;
+      }
+    }
+    this._syncRespawn();
+    /* 【失効】旧「ロード時はチェックポイントへ配置」。復帰地点（＝最も奥の記録済み端末）へ置く */
+    if (this.checkpoint) this._placeAtRespawn();
     /* ロープは位置の復元より後（stack の先頭＝現在地の整合を保つ） */
     if (this.game.rope && data.rope) this.game.rope.load(data.rope);
     return true;
-  };
-
-  Progress.prototype._placeAtCheckpoint = function (id) {
-    var list = (this.game.map.meta && this.game.map.meta.checkpoints) || [];
-    for (var i = 0; i < list.length; i++) {
-      if (list[i].id === id) {
-        var c = this.game.map.cellCenter(list[i].col, list[i].row);
-        var p = this.game.player;
-        p.x = c.x; p.z = c.z; p.y = this.game.map.floorYAt(p.x, p.z);
-        return true;
-      }
-    }
-    return false;
   };
 
   /** 契約 §2「永続フラグには必ずリセット経路」。暫定UI（設定/タイトル前）から呼ぶ */
@@ -753,6 +981,11 @@
   ESCAPE.PROGRESS_UI_TEXT = UI_TEXT;
   ESCAPE.PROGRESS_OBJECTIVE = OBJECTIVE;
   ESCAPE.PROGRESS_TRAP_HINT = TRAP_HINT;
+  ESCAPE.PROGRESS_SAVE_HINT = SAVE_HINT;
+  ESCAPE.PROGRESS_SAVE_CONST = {
+    SAVE_RANGE: SAVE_RANGE, SAVE_NEAR_CELLS: SAVE_NEAR_CELLS,
+    SAVE_HINT_COOLDOWN: SAVE_HINT_COOLDOWN, SAVE_HINT_DUR: SAVE_HINT_DUR
+  };
   ESCAPE.PROGRESS_ROPE_HUD = ROPE_HUD;
   ESCAPE.PROGRESS_SIGN_TEXT = SIGN_TEXT;
   ESCAPE.ZONE_NAMES = ZONE_NAMES;
@@ -772,7 +1005,10 @@
         notesRead: Object.keys(pr.notesRead), signsRead: Object.keys(pr.signsRead),
         objective: pr.objective(), prompt: pr.dom.prompt ? pr.dom.prompt.textContent : '',
         ropeHud: pr.ropeHudText(), ropeState: pr.ropeHudState(),
-        trapHint: pr.trapHintText(), trapHintKind: pr.trapHintKind()
+        trapHint: pr.trapHintText(), trapHintKind: pr.trapHintKind(),
+        hintLine: pr.hintLineText(), saveHint: pr.saveHintText(),
+        saved: Object.keys(pr.saved), seen: Object.keys(pr.savePointsSeen),
+        respawn: pr.respawnPoint()
       };
     }
   };

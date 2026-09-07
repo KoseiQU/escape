@@ -159,6 +159,8 @@
     this._tenCell = null;
     this._dirty = true;
     this._lastX = 0; this._lastZ = 0;
+    /* P4.14: 距離場は錨（＝復帰地点）に紐づく。map ごと作り直すので必ず捨てる */
+    this._dFromSpawn = null; this._dFromAnchor = null; this._dAnchorKey = null;
     this._pastRibbons = [];
     this._clearFX();
   };
@@ -224,6 +226,9 @@
     var map = this.map, meta = map.meta || {};
     this._W = map.width;
     this._dFromSpawn = this._distMap(meta.spawn.col, meta.spawn.row);
+    /* P4.14 項目1: 錨（＝復帰地点）からの距離場。錨が動くたびに焼き直す */
+    this._dFromAnchor = this._distMap(this.anchor.col, this.anchor.row);
+    this._dAnchorKey = this.anchor.col + ',' + this.anchor.row;
     this._dToExit = meta.exitPad ? this._distMap(meta.exitPad.col, meta.exitPad.row) : null;
     var ks = this._keyStand();
     this._dToKey = ks ? this._distMap(ks.col, ks.row) : null;
@@ -239,7 +244,8 @@
   /** 張力インジケータの状態を計算する（緑/黄/赤 と数値） */
   Rope.prototype.computeTension = function () {
     var map = this.map, T = map.tileSize;
-    if (!this._dFromSpawn) this._buildDistMaps();
+    var akey = this.anchor.col + ',' + this.anchor.row;
+    if (!this._dFromSpawn || this._dAnchorKey !== akey) this._buildDistMaps();
     var h = this.head();
     var idx = h.row * this._W + h.col;
     var slack = this.slack();
@@ -247,17 +253,28 @@
     var field = (goal === 'exit') ? this._dToExit : this._dToKey;
     var needTiles = (field && field[idx] >= 0) ? field[idx] : -1;
     var need = (needTiles >= 0) ? needTiles * T : 0;
-    /* 遠回り率の基準最短（契約 P4.11 項目2 追記）:
-       鍵未取得＝スタート→現在地の最短／鍵取得後＝スタート→鍵の最短＋鍵→現在地の最短
-       （鍵に寄った分を遠回りに数えない。最短で鍵→出口へ戻る間は緑のまま） */
-    var bestTiles = this._dFromSpawn ? this._dFromSpawn[idx] : -1;
+    /* P4.14 項目1「軌跡の錨移動」: 錨（＝復帰地点）はスタートから離れうる。
+       スタート→錨の最短（lead）を**基準最短にも使用長にも同じだけ**足すことで、
+       錨が変わっても「最短ルートを進んでいれば緑」という色の意味が連続する。
+       錨がスタートのまま（未記録・1周目）のときは lead=0 で従来と完全に一致する。 */
+    var leadTiles = (this._dFromSpawn && this._dFromSpawn[this.anchor.row * this._W + this.anchor.col] >= 0)
+      ? this._dFromSpawn[this.anchor.row * this._W + this.anchor.col] : 0;
+    var lead = leadTiles * T;
+    var usedEff = lead + this.used;
+    /* 遠回り率の基準最短（契約 P4.11 項目2 追記 ＋ P4.14 の錨移動）:
+       鍵未取得＝スタート→錨の最短＋錨→現在地の最短
+       鍵取得後＝スタート→鍵の最短＋鍵→現在地の最短（従来の鍵経由ルールのまま）
+       （鍵に寄った分・復帰地点まで進んだ分を遠回りに数えない） */
+    var fromAnchor = this._dFromAnchor ? this._dFromAnchor[idx] : -1;
+    var bestTiles = (fromAnchor >= 0) ? (leadTiles + fromAnchor)
+      : (this._dFromSpawn ? this._dFromSpawn[idx] : -1);
     if (goal === 'exit' && this._dToKey && this._keyStandCell && this._dFromSpawn) {
       var kIdx = this._keyStandCell.row * this._W + this._keyStandCell.col;
       var sk = this._dFromSpawn[kIdx], kh = this._dToKey[idx];
       if (sk >= 0 && kh >= 0) bestTiles = sk + kh;
     }
     var best = (bestTiles >= 0) ? bestTiles * T : 0;
-    var ratio = (best > 1e-6) ? (this.used / best) : 1;
+    var ratio = (best > 1e-6) ? (usedEff / best) : 1;
     /* P4.12: 色は遠回り率だけで決まる（余裕不足の赤＝lowSlack は失効。常に false）。
        P4.13: 「結び目に外れている＝loose」状態も失効（常時接続のため）。 */
     var state;
@@ -267,6 +284,7 @@
     return {
       state: state, goal: goal, slack: slack, used: this.used, L: this.L,
       need: need, needTiles: needTiles, best: best, bestTiles: bestTiles,
+      lead: lead, leadTiles: leadTiles, usedEff: usedEff,
       ratio: ratio, lowSlack: false
     };
   };
@@ -415,6 +433,28 @@
     this._pastRibbons.push(rb);
   };
 
+  /** P4.14 項目1: 錨（＝新しい周の起点）を移す。距離場と張力キャッシュを捨てて焼き直させる */
+  Rope.prototype._setAnchor = function (col, row) {
+    if (this.anchor && this.anchor.col === col && this.anchor.row === row) return false;
+    this.anchor = { col: col, row: row };
+    this._dFromAnchor = null;
+    this._dAnchorKey = null;
+    this._tension = null; this._tenCell = null; this._tenT = 0;
+    return true;
+  };
+
+  /** P4.14: 復帰地点（＝最も奥の記録済みセーブポイント。未記録ならスタート）。
+   *  progress が無い単体テスト環境ではスタートにフォールバックする。 */
+  Rope.prototype._respawnCell = function () {
+    var pr = this.game.progress;
+    if (pr && pr.respawnPoint) {
+      var rp = pr.respawnPoint();
+      if (rp && this.map && rawWalkable(this.map, rp.col, rp.row)) return rp;
+    }
+    var sp = (this.map.meta || {}).spawn || { col: 1, row: 1 };
+    return { col: sp.col, row: sp.row, id: null, isSpawn: true };
+  };
+
   /**
    * 捕獲の瞬間に呼ばれる（enemy_ai.js Stealth.capture() の呼び出し口はそのまま）。
    * 【P4.13 全面改訂】旧「ロープ端が床に落ちて結び目になる」は失効。代わりに
@@ -428,6 +468,10 @@
       this._freezeLap(finished, color);
     }
     this.lapIndex++;
+    /* P4.14 項目1: 復帰後の新しい周は**復帰地点を錨**にして始まる（過去の周はそのまま残る）。
+       復帰地点は progress が持つ「最も奥の記録済みセーブポイント」＝未記録ならスタート。 */
+    var rp = this._respawnCell();
+    this._setAnchor(rp.col, rp.row);
     this.stack = [{ col: this.anchor.col, row: this.anchor.row }];
     this._index = Object.create(null);
     this._index[this.anchor.col + ',' + this.anchor.row] = 0;
@@ -453,6 +497,9 @@
   /** 3回目の捕獲＝エリアリセット。契約 §4「P4.13」項目2: 軌跡を全消去して1周目の色から
    *  始める（旧「地図の踏破だけ消える／ロープの軌跡は残す」は失効。ロープ側は全消去に統一）。 */
   Rope.prototype.onAreaReset = function () {
+    /* P4.14: 3回目の捕獲＝セーブポイントの記録も全消去される。錨はスタートへ戻す */
+    var sp = (this.map.meta || {}).spawn || { col: 1, row: 1 };
+    this._setAnchor(sp.col, sp.row);
     this.stack = [{ col: this.anchor.col, row: this.anchor.row }];
     this._index = Object.create(null);
     this._index[this.anchor.col + ',' + this.anchor.row] = 0;
@@ -491,6 +538,9 @@
       return out;
     }
     this.stack = unpack(d.stack);
+    /* P4.14: 現在の周の先頭マスがその周の錨（＝セーブから復帰した地点）。
+       旧セーブ（錨＝スタート）でもそのまま正しく復元される。 */
+    if (this.stack.length) this._setAnchor(this.stack[0].col, this.stack[0].row);
     this._index = Object.create(null);
     for (var i = 0; i < this.stack.length; i++) this._index[this.stack[i].col + ',' + this.stack[i].row] = i;
     this.used = +d.used || 0;

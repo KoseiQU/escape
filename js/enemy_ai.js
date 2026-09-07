@@ -1361,10 +1361,14 @@
     this.clearGrace();
   };
 
-  /** 復帰直後の猶予を張る（スタート地点まわりを空ける） */
+  /** 復帰直後の猶予を張る（復帰地点まわりを空ける）。
+   *  P4.14 項目1: 中心は**スタートではなく復帰地点**（＝最も奥の記録済みセーブポイント）。
+   *  未記録ならスタートに一致する。 */
   AIManager.prototype.beginGrace = function () {
     var meta = this.game.map.meta || {};
-    var sp = meta.spawn || { col: 1, row: 1 };
+    var pr = this.game.progress;
+    var sp = (pr && pr.respawnPoint) ? pr.respawnPoint() : null;
+    if (!sp) sp = meta.spawn || { col: 1, row: 1 };
     var c = this.game.map.cellCenter(sp.col, sp.row);
     this.graceX = c.x; this.graceZ = c.z;
     this.graceT = ENEMY_TUNING.respawnGraceDur;
@@ -1895,10 +1899,14 @@
     J.phase = 'wake';
   };
 
-  /** P4.8: スタート地点へ戻す（進行状態＝鍵・地図の踏破・読んだメモは保持） */
+  /** P4.8: 復帰地点へ戻す（進行状態＝鍵・地図の踏破・読んだメモは保持）。
+   *  P4.14 項目1: 戻り先は**復帰地点**＝記録済みセーブポイントのうち最も奥のもの。
+   *  1つも記録していなければ従来どおりスタート地点（progress.respawnPoint() が担保）。 */
   Stealth.prototype._toStart = function () {
     var map = this.map, meta = map.meta || {}, p = this.game.player;
-    var sp = meta.spawn || { col: 1, row: 1, yawDeg: 0 };
+    var pr = this.game.progress;
+    var sp = (pr && pr.respawnPoint) ? pr.respawnPoint() : null;
+    if (!sp) sp = meta.spawn || { col: 1, row: 1, yawDeg: 0 };
     var J = this.jail;
     J.col = sp.col; J.row = sp.row; J.dir = null;
     var c = map.cellCenter(sp.col, sp.row);

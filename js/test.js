@@ -1732,20 +1732,403 @@
     g.reset();
   }
 
-  function testCheckpointAutoSave(t, g) {
+  /* ================================================================
+   * P4.14 項目1: セーブポイント（契約 §4「P4.14 再プレイ差し戻し」項目1）
+   *
+   * 【失効】旧 testCheckpointAutoSave（マスを踏むと自動でチェックポイント記録＋効果音）。
+   * 自動チェックポイントは契約ごと失効したので、その検査は「踏んでも記録されない」の
+   * 検査（testP414AutoCheckpointRetired）へ置き換えてある。
+   * ============================================================== */
+
+  /** 記録端末の正面に立つ（端末＝壁面。yawDeg は progress が持つ「端末を向く角度」） */
+  function standAtTerminal(g, sp) {
+    var c = g.map.cellCenter(sp.col, sp.row);
+    g.player.x = c.x; g.player.z = c.z;
+    g.player.y = g.map.floorYAt(c.x, c.z);
+    g.player.yaw = (sp.yawDeg || 0) * Math.PI / 180;
+    g.player.pitch = 0;
+    g.player.crouching = false;
+  }
+  /** id からセーブポイントの定義を引く */
+  function savePointOf(g, id) {
+    var list = g.progress.savePoints || [];
+    for (var i = 0; i < list.length; i++) if (list[i].id === id) return list[i];
+    return null;
+  }
+  /** 実UI経路で記録する（「調べる」＝progress.onInteract）。処理されたら true */
+  function recordAt(g, sp) {
+    standAtTerminal(g, sp);
+    return g.progress.onInteract();
+  }
+
+  /** データ: 端末は壁付きで、進行順（スタートからの経路距離）が一意に決まる */
+  function testP414SavePointData(t, g) {
+    g.reset();
+    var meta = g.map.meta, TILE = ESCAPE.TILE, map = g.map;
+    var cps = meta.checkpoints || [];
+    if (!t.ok(cps.length === 6, 'P4.14 データ: セーブポイントは6か所（旧チェックポイント転用）',
+      cps.length)) { g.reset(); return; }
+    var FV = { n: [0, -1], s: [0, 1], e: [1, 0], w: [-1, 0] };
+    var bad = [];
+    for (var i = 0; i < cps.length; i++) {
+      var cp = cps[i];
+      if (map.tileAt(cp.col, cp.row) !== TILE.CHECKPOINT) bad.push(cp.id + ' タイル');
+      if (!cp.dir || !FV[cp.dir]) { bad.push(cp.id + ' dirなし'); continue; }
+      var v = FV[cp.dir];
+      if (!map.isSolid(cp.col + v[0], cp.row + v[1])) bad.push(cp.id + ' 壁なし');
+    }
+    t.ok(bad.length === 0, 'P4.14 データ: 全端末が歩行可能マス＋dir の先が壁（壁付けできる）',
+      bad.join(' / ') || '6/6');
+
+    var list = g.progress.savePoints;
+    t.ok(list.length === 6, 'P4.14 データ: progress が6本のセーブポイントを持つ', list.length);
+    var inc = true, zones = {}, dup = 0;
+    for (var j = 1; j < list.length; j++) if (list[j].order <= list[j - 1].order) inc = false;
+    for (var k = 0; k < list.length; k++) {
+      if (zones[list[k].zone]) dup++;
+      zones[list[k].zone] = true;
+    }
+    t.ok(inc, 'P4.14 データ: 進行順（スタートからの経路距離）が一意に定まる（同着なし）',
+      list.map(function (e) { return e.zone + ':' + e.order; }).join(' '));
+    t.ok(dup === 0, 'P4.14 データ: 区画A〜Fに1本ずつ行き渡っている', Object.keys(zones).sort().join(''));
+    var deepest = list[list.length - 1];
+    t.ok(deepest.zone === 'E', 'P4.14 データ: 最も奥は区画E（鍵と出口のある最北の帯）', deepest.zone);
+    var nearest = list[0];
+    t.ok(nearest.zone === 'A', 'P4.14 データ: 最も手前は区画A（スタートの帯）', nearest.zone);
+    g.reset();
+  }
+
+  /** 案内: 2マス以内で `セーブポイント —— 壁の端末を調べて記録しろ`／30秒に1回／記録済みは出ない */
+  function testP414SavePointHint(t, g) {
     g.reset();
     localStorage.removeItem(SAVE_KEY);
-    var cps = g.map.meta.checkpoints || [];
-    if (!t.ok(cps.length >= 1, 'チェックポイントが配置されている')) return;
-    var cp = cps[0];
-    place(g, cp.col, cp.row, 0);
+    var pr = g.progress, C = ESCAPE.PROGRESS_SAVE_CONST;
+    var sp = pr.savePoints[0];
+    var el = document.getElementById('trap-hint');
+    t.near(C.SAVE_HINT_COOLDOWN, 30.0, 1e-9, 'P4.14 案内: 同じ端末の間隔は30秒', C.SAVE_HINT_COOLDOWN);
+    t.ok(C.SAVE_NEAR_CELLS === 2, 'P4.14 案内: 発動距離は2マス以内', C.SAVE_NEAR_CELLS);
+
+    /* 3マス離れた地点では出ない */
+    var far = null, cells = g.map.walkableCells();
+    for (var i = 0; i < cells.length; i++) {
+      var d = Math.max(Math.abs(cells[i].col - sp.col), Math.abs(cells[i].row - sp.row));
+      if (d === 3) { far = cells[i]; break; }
+    }
+    if (far) {
+      place(g, far.col, far.row, 0);
+      sim(g, 2);
+      t.ok(pr.saveHintText() === '', 'P4.14 案内: 3マス離れていれば出ない', pr.saveHintText());
+    }
+    /* 2マス以内へ入ると出る（正文どおり） */
+    place(g, sp.col, sp.row, 0);
     sim(g, 2);
-    t.ok(g.progress.checkpoint === cp.id, 'チェックポイント通過で自動記録される', g.progress.checkpoint);
-    var raw = null;
-    try { raw = localStorage.getItem(SAVE_KEY); } catch (e) { /* noop */ }
-    t.ok(!!raw, 'チェックポイント通過でlocalStorageへ自動保存される');
+    t.ok(pr.saveHintText() === ESCAPE.PROGRESS_SAVE_HINT,
+      'P4.14 案内: 2マス以内で正文が出る', pr.saveHintText());
+    t.ok(ESCAPE.PROGRESS_SAVE_HINT === 'セーブポイント —— 壁の端末を調べて記録しろ',
+      'P4.14 正文: 案内の文言が docs/notes.md と一字一句一致する', ESCAPE.PROGRESS_SAVE_HINT);
+    t.ok(!!el && el.textContent === ESCAPE.PROGRESS_SAVE_HINT && el.classList.contains('show'),
+      'P4.14 案内: TRAP_HINT と同じ表示経路（#trap-hint）に出る',
+      el ? (el.textContent + ' show=' + el.classList.contains('show')) : 'DOMなし');
+    t.ok(pr.savePointsSeen[sp.id] === true, 'P4.14 地図: 2マス以内に入ると「発見」される');
+
+    /* 表示が切れた後、30秒経つまでは再度出ない */
+    var firstAt = pr._saveHintAt[sp.id];
+    sim(g, Math.ceil((C.SAVE_HINT_DUR + 0.2) / ESCAPE.FIXED_DT));
+    t.ok(pr.saveHintText() === '', 'P4.14 案内: 数秒で消える', pr.saveHintText());
+    sim(g, Math.ceil(10 / ESCAPE.FIXED_DT));
+    t.ok(pr.saveHintText() === '', 'P4.14 案内: 10秒後もまだ出ない（30秒に1回まで）', pr.saveHintText());
+    var again = simUntil(g, function () { return pr.saveHintText() !== ''; },
+      Math.ceil(40 / ESCAPE.FIXED_DT));
+    t.ok(again >= 0, 'P4.14 案内: 30秒を越えると同じ端末で再び出る',
+      (again >= 0) ? ((again * ESCAPE.FIXED_DT).toFixed(1) + 's 後に再表示') : '出なかった');
+    t.ok(pr._saveHintAt[sp.id] - firstAt >= C.SAVE_HINT_COOLDOWN - 1e-6,
+      'P4.14 案内: 前回の表示からちょうど30秒以上あけて出る',
+      (pr._saveHintAt[sp.id] - firstAt).toFixed(2) + 's');
+    t.ok(pr.saveHintText() === ESCAPE.PROGRESS_SAVE_HINT,
+      'P4.14 案内: 再表示の文言も正文のまま', pr.saveHintText());
+
+    /* 記録済みでは出ない */
+    recordAt(g, sp);
+    place(g, sp.col, sp.row, 0);
+    sim(g, Math.ceil(35 / ESCAPE.FIXED_DT));
+    t.ok(pr.saveHintText() === '', 'P4.14 案内: 記録済みの端末では出ない', pr.saveHintText());
+    g.reset();
+    localStorage.removeItem(SAVE_KEY);
+  }
+
+  /** 記録: 「調べる」で記録＋正文の応答／記録済みは `記録済み`／セーブに永続する */
+  function testP414SavePointRecord(t, g) {
+    g.reset();
+    localStorage.removeItem(SAVE_KEY);
+    var pr = g.progress, U = ESCAPE.PROGRESS_UI_TEXT;
+    t.ok(U.savePoint === '端末に記録する', 'P4.14 正文: プロンプトは `端末に記録する`', U.savePoint);
+    t.ok(U.savedNow === '記録した —— ここから再開できる',
+      'P4.14 正文: 記録の応答は `記録した —— ここから再開できる`', U.savedNow);
+    t.ok(U.savedAlready === '記録済み', 'P4.14 正文: 記録済みの応答は `記録済み`', U.savedAlready);
+
+    var sp = pr.savePoints[2];
+    standAtTerminal(g, sp);
+    sim(g, 2);
+    var prompt = document.getElementById('prompt');
+    t.ok(!!prompt && prompt.textContent === U.savePoint,
+      'P4.14 記録: 端末を向くとプロンプトが出る', prompt ? prompt.textContent : 'DOMなし');
+
+    t.ok(pr.onInteract() === true, 'P4.14 記録: 「調べる」が端末を処理する');
+    t.ok(pr.saved[sp.id] === true, 'P4.14 記録: 記録集合に入る');
+    t.ok(pr._flashMsg === U.savedNow, 'P4.14 記録: 応答が正文', pr._flashMsg);
+    t.ok(pr.checkpoint === sp.id, 'P4.14 記録: 復帰地点がその端末になる', pr.checkpoint);
+
+    /* 記録済みの端末を再度調べると `記録済み` */
+    t.ok(recordAt(g, sp) === true, 'P4.14 記録: 記録済みでも「調べる」は処理される');
+    t.ok(pr._flashMsg === U.savedAlready, 'P4.14 記録: 2回目の応答は `記録済み`', pr._flashMsg);
+
+    /* セーブ→ロードで永続する */
+    var raw = localStorage.getItem(SAVE_KEY);
+    if (!t.ok(!!raw, 'P4.14 永続: 記録した瞬間にセーブされる')) { g.reset(); return; }
     var data = JSON.parse(raw);
-    t.ok(data.checkpoint === cp.id, 'セーブデータのチェックポイントが一致する', data.checkpoint);
+    t.ok((data.savePoints || []).indexOf(sp.id) >= 0,
+      'P4.14 永続: セーブデータに記録済み端末が入る', JSON.stringify(data.savePoints));
+    t.ok(data.checkpoint === sp.id, 'P4.14 永続: 復帰地点も保存される', data.checkpoint);
+    pr.reset(); g.rope.reset(); g.minimap.reset();
+    t.ok(pr.checkpoint === null && Object.keys(pr.saved).length === 0,
+      'P4.14 永続: reset() 直後は未記録（前提）');
+    t.ok(pr.load() === true, 'P4.14 永続: セーブから復元できる');
+    t.ok(pr.saved[sp.id] === true, 'P4.14 永続: 記録が復元される');
+    t.ok(pr.checkpoint === sp.id, 'P4.14 永続: 復帰地点が復元される', pr.checkpoint);
+    t.ok(g.player.col() === sp.col && g.player.row() === sp.row,
+      'P4.14 永続: ロード時は復帰地点に配置される（旧「チェックポイントへ配置」は失効）',
+      g.player.col() + ',' + g.player.row());
+
+    /* 旧セーブ（checkpoint 文字列だけ）でも壊れない */
+    pr.reset(); g.rope.reset(); g.minimap.reset();
+    localStorage.setItem(SAVE_KEY, JSON.stringify({
+      v: 3, mapId: g.mapId, checkpoint: sp.id,
+      gimmick: { key: false, doorOpen: false }, notesRead: [], signsRead: [], cleared: false
+    }));
+    var threw = false, ok = false;
+    try { ok = pr.load(); } catch (e) { threw = true; }
+    t.ok(!threw && ok === true, 'P4.14 旧セーブ互換: checkpoint 文字列だけでも load() が通る');
+    t.ok(pr.saved[sp.id] === true && pr.checkpoint === sp.id,
+      'P4.14 旧セーブ互換: 旧 checkpoint は「記録済み端末1本」として読まれる', pr.checkpoint);
+    g.reset();
+    localStorage.removeItem(SAVE_KEY);
+  }
+
+  /** 優先順: 手前の端末を後から記録しても、復帰地点は奥のまま */
+  function testP414DeepestWins(t, g) {
+    g.reset();
+    localStorage.removeItem(SAVE_KEY);
+    var pr = g.progress, list = pr.savePoints;
+    var shallow = list[1], deep = list[4];
+    t.ok(deep.order > shallow.order, 'P4.14 優先順: 検証用に手前と奥の端末が取れる',
+      shallow.zone + '(' + shallow.order + ') < ' + deep.zone + '(' + deep.order + ')');
+    t.ok(pr.respawnPoint().isSpawn === true,
+      'P4.14 優先順: 未記録なら復帰地点はスタート', JSON.stringify(pr.respawnPoint()));
+    recordAt(g, deep);
+    t.ok(pr.checkpoint === deep.id, 'P4.14 優先順: 奥を記録すると復帰地点はそこ', pr.checkpoint);
+    recordAt(g, shallow);
+    t.ok(pr.saved[shallow.id] === true, 'P4.14 優先順: 手前も記録自体はされる');
+    t.ok(pr.checkpoint === deep.id,
+      'P4.14 優先順: 手前を**後から**記録しても復帰地点は奥のまま', pr.checkpoint);
+    var rp = pr.respawnPoint();
+    t.ok(rp.col === deep.col && rp.row === deep.row && rp.isSpawn === false,
+      'P4.14 優先順: respawnPoint() が奥の端末を返す', rp.col + ',' + rp.row);
+    g.reset();
+    localStorage.removeItem(SAVE_KEY);
+  }
+
+  /** 捕獲→復帰地点で目覚める／ロープの錨が移る／過去の周は残る／猶予の中心も復帰地点 */
+  function testP414CaptureRespawn(t, g) {
+    g.reset();
+    localStorage.removeItem(SAVE_KEY);
+    var pr = g.progress, rope = g.rope, st = g.stealth;
+    var deep = pr.savePoints[4];
+    recordAt(g, deep);
+    /* 記録した端末から少し歩いて現在の周を伸ばす */
+    var route = routeTo(g, deep.col, deep.row, deep.col, deep.row);
+    if (route === null) { /* 同一マス。何もしない */ }
+    var cells = g.map.walkableCells(), tgt = null;
+    for (var i = 0; i < cells.length; i++) {
+      if (Math.hypot(cells[i].col - deep.col, cells[i].row - deep.row) > 4 &&
+          Math.hypot(cells[i].col - deep.col, cells[i].row - deep.row) < 7) { tgt = cells[i]; break; }
+    }
+    var path = tgt ? routeTo(g, g.player.col(), g.player.row(), tgt.col, tgt.row) : null;
+    if (path && path.length) walkCells(g, path);
+    var lapsBefore = rope.laps.length, stackBefore = rope.stack.length;
+    t.ok(stackBefore > 1, 'P4.14 復帰: 検証用に現在の周を伸ばせた', stackBefore);
+
+    t.ok(st.capture(g.ais.list[0]) === true, 'P4.14 復帰: 捕獲が始まる');
+    t.ok(rope.laps.length === lapsBefore + 1, 'P4.14 復帰: 捕まった周は軌跡として残る',
+      rope.laps.length);
+    t.ok(rope.anchor.col === deep.col && rope.anchor.row === deep.row,
+      'P4.14 復帰: 新しい周の錨が復帰地点へ移る',
+      rope.anchor.col + ',' + rope.anchor.row + ' / ' + deep.col + ',' + deep.row);
+    t.ok(rope.stack.length === 1 && rope.stack[0].col === deep.col && rope.stack[0].row === deep.row,
+      'P4.14 復帰: 新しい周は復帰地点だけの状態で始まる');
+
+    var done = simUntil(g, function () { return st.jail.phase === 'none'; },
+      Math.ceil(g.cinematic.totalDur('jail') / ESCAPE.FIXED_DT) + 600);
+    t.ok(done >= 0, 'P4.14 復帰: 演出が終わる', st.jail.phase);
+    t.ok(g.player.col() === deep.col && g.player.row() === deep.row,
+      'P4.14 復帰: 復帰地点で目覚める（スタートではない）',
+      g.player.col() + ',' + g.player.row());
+    var gr = g.ais.graceInfo ? g.ais.graceInfo() : null;
+    if (gr) {
+      var c = g.map.cellCenter(deep.col, deep.row);
+      t.near(Math.hypot(gr.x - c.x, gr.z - c.z), 0, 1e-6,
+        'P4.14 復帰: 復帰猶予の中心が復帰地点になる', gr.x.toFixed(1) + ',' + gr.z.toFixed(1));
+    }
+    t.ok(rope.laps.length === lapsBefore + 1, 'P4.14 復帰: 過去の周は復帰後も残っている',
+      rope.laps.length);
+    g.reset();
+    localStorage.removeItem(SAVE_KEY);
+  }
+
+  /** 方向色の連続性: 錨が移っても「最短ルートを進んでいれば緑」の意味が変わらない */
+  function testP414TensionContinuity(t, g) {
+    g.reset();
+    localStorage.removeItem(SAVE_KEY);
+    var pr = g.progress, rope = g.rope, map = g.map, meta = map.meta;
+    var deep = pr.savePoints[4];
+    rope._buildDistMaps();
+    var W = map.width;
+    var dSpawn = rope._distMap(meta.spawn.col, meta.spawn.row);
+    var dAnchor = rope._distMap(deep.col, deep.row);
+    var lead = dSpawn[deep.row * W + deep.col];
+    t.ok(lead > 20, 'P4.14 連続性: 検証用に錨がスタートから十分離れている', lead);
+
+    /* 錨から数マス離れた地点で、両方の錨のもとで「最短で来た」状態を作り比べる */
+    var target = null, cells = map.walkableCells();
+    for (var i = 0; i < cells.length; i++) {
+      var e = cells[i], da = dAnchor[e.row * W + e.col];
+      if (da >= 5 && da <= 9) { target = e; break; }
+    }
+    if (!t.ok(!!target, 'P4.14 連続性: 検証用の到達地点が取れる')) { g.reset(); return; }
+
+    /* ケース1: 錨＝スタート／使用長＝スタートからの最短 */
+    rope._setAnchor(meta.spawn.col, meta.spawn.row);
+    rope.stack = [{ col: target.col, row: target.row }];
+    rope._index = Object.create(null); rope._index[target.col + ',' + target.row] = 0;
+    rope.used = dSpawn[target.row * W + target.col] * map.tileSize;
+    rope._tension = null;
+    var a = rope.computeTension();
+
+    /* ケース2: 錨＝復帰地点／使用長＝錨からの最短 */
+    rope._setAnchor(deep.col, deep.row);
+    rope.stack = [{ col: target.col, row: target.row }];
+    rope._index = Object.create(null); rope._index[target.col + ',' + target.row] = 0;
+    rope.used = dAnchor[target.row * W + target.col] * map.tileSize;
+    rope._tension = null;
+    var b = rope.computeTension();
+
+    t.near(a.ratio, 1.0, 1e-6, 'P4.14 連続性: 錨＝スタートで最短どおりなら率は1.00', a.ratio);
+    t.near(b.ratio, 1.0, 1e-6, 'P4.14 連続性: 錨＝復帰地点でも最短どおりなら率は1.00', b.ratio);
+    t.near(b.ratio, a.ratio, 1e-6, 'P4.14 連続性: 錨を変えても同じ位置で同じ tension 値',
+      a.ratio.toFixed(6) + ' / ' + b.ratio.toFixed(6));
+    t.ok(a.state === b.state && a.state === 'green',
+      'P4.14 連続性: 錨を変えても同じ位置で同じ色（緑のまま）', a.state + ' / ' + b.state);
+    t.near(b.leadTiles, lead, 1e-9, 'P4.14 連続性: 基準にスタート→錨の最短が足されている', b.leadTiles);
+    t.near(a.leadTiles, 0, 1e-9, 'P4.14 連続性: 錨がスタートなら lead は0（従来と完全一致）');
+
+    /* 錨に立った瞬間（使用長0）も緑（赤で目覚めない） */
+    rope.stack = [{ col: deep.col, row: deep.row }];
+    rope._index = Object.create(null); rope._index[deep.col + ',' + deep.row] = 0;
+    rope.used = 0; rope._tension = null;
+    t.ok(rope.computeTension().state === 'green',
+      'P4.14 連続性: 復帰した瞬間（錨の上・使用長0）は緑', rope.computeTension().state);
+
+    /* 遠回りすれば錨が移っていても黄/赤になる（判定が死んでいない） */
+    var best = rope.computeTension().best;
+    rope.stack = [{ col: target.col, row: target.row }];
+    rope._index = Object.create(null); rope._index[target.col + ',' + target.row] = 0;
+    rope.used = (dAnchor[target.row * W + target.col] * map.tileSize) * 1.0 +
+      (b.best * 0.60);
+    rope._tension = null;
+    var c2 = rope.computeTension();
+    t.ok(c2.ratio > ESCAPE.ROPE_TUNING.yellowRatio && c2.state === 'red',
+      'P4.14 連続性: 錨が移っていても大きく遠回りすれば赤になる',
+      c2.state + ' ratio=' + c2.ratio.toFixed(3) + ' best=' + best.toFixed(0));
+    g.reset();
+    localStorage.removeItem(SAVE_KEY);
+  }
+
+  /** 3回目の捕獲＝エリアリセットで記録を全消去し、復帰地点がスタートへ戻る */
+  function testP414AreaResetWipesSaves(t, g) {
+    g.reset();
+    localStorage.removeItem(SAVE_KEY);
+    var pr = g.progress, rope = g.rope, meta = g.map.meta;
+    recordAt(g, pr.savePoints[3]);
+    recordAt(g, pr.savePoints[5]);
+    t.ok(Object.keys(pr.saved).length === 2 && pr.checkpoint === pr.savePoints[5].id,
+      'P4.14 リセット: 検証用に2本記録できた', pr.checkpoint);
+    rope._setAnchor(pr.savePoints[5].col, pr.savePoints[5].row);
+    g.stealth.areaReset();
+    t.ok(Object.keys(pr.saved).length === 0, 'P4.14 リセット: 記録が全消去される',
+      Object.keys(pr.saved).length);
+    t.ok(pr.savePointsSeenCount === 0, 'P4.14 リセット: 地図の「発見済み」も消える',
+      pr.savePointsSeenCount);
+    t.ok(pr.checkpoint === null && pr.respawnPoint().isSpawn === true,
+      'P4.14 リセット: 復帰地点がスタートへ戻る', pr.checkpoint);
+    t.ok(rope.anchor.col === meta.spawn.col && rope.anchor.row === meta.spawn.row,
+      'P4.14 リセット: ロープの錨もスタートへ戻る', rope.anchor.col + ',' + rope.anchor.row);
+    g.reset();
+    localStorage.removeItem(SAVE_KEY);
+  }
+
+  /** 地図: 発見した端末だけが出る／復帰地点が縁取られる／星が目標に追従する */
+  function testP414MapStarAndTerminals(t, g) {
+    g.reset();
+    localStorage.removeItem(SAVE_KEY);
+    var pr = g.progress, mm = g.minimap, meta = g.map.meta;
+    var goal0 = mm.goalCell();
+    t.ok(!!goal0 && goal0.col === meta.keySafe.col && goal0.row === meta.keySafe.row &&
+      goal0.kind === 'key',
+      'P4.14 星: 鍵未取得なら目標は所長室の金庫', JSON.stringify(goal0));
+    pr.gimmick.key = true;
+    var goal1 = mm.goalCell();
+    t.ok(!!goal1 && goal1.col === meta.exitPad.col && goal1.row === meta.exitPad.row &&
+      goal1.kind === 'exit',
+      'P4.14 星: 鍵取得後は目標が北の出口へ移る', JSON.stringify(goal1));
+    pr.gimmick.key = false;
+
+    var v = mm.view();
+    t.ok(mm.goalStarSize(v) >= 6, 'P4.14 星: ミニマップでも読める大きさ', mm.goalStarSize(v).toFixed(1));
+    /* 未踏破でも描かれる（踏破マスに依存しない） */
+    t.ok(mm.isExplored(goal0.col, goal0.row) === false,
+      'P4.14 星: 目標地点は未踏破のまま（前提）');
+    var drew = false;
+    try { mm.draw(); drew = true; } catch (e) { drew = false; }
+    t.ok(drew, 'P4.14 星: 未踏破でも描画が通る（常時表示）');
+
+    /* 端末は「発見したもの」だけ */
+    t.ok(pr.savePointsSeenCount === 0, 'P4.14 地図: 初期は端末を1つも発見していない');
+    var sp = pr.savePoints[0];
+    place(g, sp.col, sp.row, 0);
+    sim(g, 2);
+    t.ok(pr.savePointsSeen[sp.id] === true && pr.savePointsSeenCount === 1,
+      'P4.14 地図: 2マス以内に入った端末だけが発見済みになる', pr.savePointsSeenCount);
+    recordAt(g, sp);
+    t.ok(pr.checkpoint === sp.id, 'P4.14 地図: 記録した端末が現在の復帰地点（明るく縁取る対象）',
+      pr.checkpoint);
+    g.reset();
+    localStorage.removeItem(SAVE_KEY);
+  }
+
+  /** 【失効】自動チェックポイント: マスを踏んでも記録されない */
+  function testP414AutoCheckpointRetired(t, g) {
+    g.reset();
+    localStorage.removeItem(SAVE_KEY);
+    var pr = g.progress, sp = pr.savePoints[2];
+    place(g, sp.col, sp.row, 0);
+    sim(g, 6);
+    t.ok(pr.saved[sp.id] !== true,
+      'P4.14 失効: セーブポイントのマスを踏んでも自動記録されない');
+    t.ok(pr.checkpoint === null,
+      'P4.14 失効: 踏んだだけでは復帰地点が動かない', String(pr.checkpoint));
+    t.ok(pr.respawnPoint().isSpawn === true,
+      'P4.14 失効: 復帰地点はスタートのまま（記録しなければ変わらない）');
+    t.ok(typeof pr._checkCheckpoint !== 'function',
+      'P4.14 失効: 自動チェックポイントの処理そのものが消えている');
     g.reset();
     localStorage.removeItem(SAVE_KEY);
   }
@@ -1765,7 +2148,9 @@
     g.minimap.learnZone('C');
     g.progress.notesRead.a1_n5 = true;
     g.progress.signsRead.rs_C = true;
-    g.progress.checkpoint = cp.id;
+    /* P4.14: 復帰地点は「記録済みセーブポイントのうち最も奥」から引かれる */
+    g.progress.saved[cp.id] = true;
+    g.progress._syncRespawn();
     g.progress.save();
 
     var raw = localStorage.getItem(SAVE_KEY);
@@ -1800,9 +2185,9 @@
     t.ok(g.rope.stack.length === ropeCells, 'load(): ロープの軌跡が復元される',
       g.rope.stack.length + ' / ' + ropeCells);
     t.near(g.rope.used, ropeUsed, 1e-9, 'load(): 繰り出し量が復元される');
-    t.ok(g.progress.checkpoint === cp.id, 'load(): チェックポイントが復元される');
+    t.ok(g.progress.checkpoint === cp.id, 'load(): 復帰地点（セーブポイント）が復元される');
     t.ok(g.player.col() === cp.col && g.player.row() === cp.row,
-      'load(): プレイヤーがチェックポイント位置へ復元される', g.player.col() + ',' + g.player.row());
+      'load(): プレイヤーが復帰地点へ復元される', g.player.col() + ',' + g.player.row());
 
     g.reset();
     localStorage.removeItem(SAVE_KEY);
@@ -1812,7 +2197,8 @@
   function testEraseAllData(t, g) {
     g.reset();
     g.progress.gimmick.key = true;
-    g.progress.checkpoint = g.map.meta.checkpoints[0].id;
+    g.progress.saved[g.map.meta.checkpoints[0].id] = true;
+    g.progress._syncRespawn();
     g.progress.save();
     t.ok(!!localStorage.getItem(SAVE_KEY), 'セーブデータがある（前提）');
     g.progress.eraseAllData();
@@ -2117,8 +2503,13 @@
     var note = (g.map.meta.notes || [])[0];
     delta('noteOpen', function () { interactAt(g, note.col, note.row); }, 'メモを開く');
     delta('noteClose', function () { g.progress.onCloseTap(); }, 'メモを閉じる');
-    var cp = (g.map.meta.checkpoints || [])[0];
-    delta('checkpoint', function () { place(g, cp.col, cp.row, 0); sim(g, 2); }, 'チェックポイント通過');
+    /* P4.14: 効果音 checkpoint は「壁の記録端末に記録した瞬間」に鳴る
+       （旧「チェックポイントのマスを踏んだ瞬間」は自動チェックポイントごと失効） */
+    var cp = g.progress.savePoints[0];
+    delta('checkpoint', function () {
+      standAtTerminal(g, cp);
+      g.progress.onInteract();
+    }, 'セーブポイントに記録する');
 
     t.ok(au.errors === before, '音響: フックの一連で例外ゼロ', au.errors + ' (before ' + before + ')');
     g.reset();
@@ -4181,7 +4572,11 @@
       testBoardStall, testCaptureLimit, testChaseGiveUp, testInterruptSafety, testEnemyDebugCoexist,
       /* P4/P4.8: 調べるUI統合・メモ・チェックポイント/セーブ */
       testMemoNotes, testMemoCloseGestures, testModalInterruptSafety,
-      testCheckpointAutoSave, testSaveLoadRestore, testEraseAllData,
+      testSaveLoadRestore, testEraseAllData,
+      /* P4.14: セーブポイント（奥優先の復帰地点・軌跡の錨移動）＋地図にゴールの星 */
+      testP414SavePointData, testP414SavePointHint, testP414SavePointRecord,
+      testP414DeepestWins, testP414CaptureRespawn, testP414TensionContinuity,
+      testP414AreaResetWipesSaves, testP414MapStarAndTerminals, testP414AutoCheckpointRetired,
       /* P4.5: 音響＋恐怖演出 */
       testAudioContract, testAudioRender, testAudioSpatial, testAudioHooks, testAudioLocked, testAudioVoiceCap,
       testAudioSettings, testAudioDirector, testAudioAmbience, testFearFx, testPatrolPause,
@@ -4268,7 +4663,9 @@
       t.ok(Object.keys(pr.signsRead).length === 0, '復帰: 読んだ銘板が消えている');
       t.ok(pr.objective() === ESCAPE.PROGRESS_OBJECTIVE.findKey,
         '復帰: 目的表示が開始時の正文に戻る', pr.objective());
-      t.ok(pr.checkpoint === null, '復帰: チェックポイントが未設定');
+      t.ok(pr.checkpoint === null, '復帰: 復帰地点が未設定（セーブポイント未記録）');
+      t.ok(Object.keys(pr.saved).length === 0 && pr.savePointsSeenCount === 0,
+        '復帰: セーブポイントの記録・発見が残っていない（P4.14）');
       t.ok(pr.modal === null, '復帰: モーダルが閉じている');
       t.ok(!pr.cleared, '復帰: クリア扱いが解除');
       t.ok(pr.dom.memoOverlay.classList.contains('show') === false &&
@@ -4283,6 +4680,8 @@
     if (g.rope) {
       t.near(g.rope.used, 0, 1e-9, '復帰: ロープの繰り出しがゼロ', g.rope.used);
       t.ok(g.rope.stack.length === 1, '復帰: ロープが錨まで巻き取られている', g.rope.stack.length);
+      t.ok(g.rope.anchor.col === g.map.meta.spawn.col && g.rope.anchor.row === g.map.meta.spawn.row,
+        '復帰: 錨がスタートへ戻っている（P4.14）', g.rope.anchor.col + ',' + g.rope.anchor.row);
       t.ok(g.rope.isAttached() && g.rope.knots.length === 0 && g.rope.laps.length === 0 && g.rope.lapIndex === 0,
         '復帰: 過去の周の軌跡が残っていない（P4.13）');
       t.ok(g.rope.taut === undefined && g.rope.blocks === 0,

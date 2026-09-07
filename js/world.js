@@ -321,6 +321,7 @@
     this.disposables = [];
     this.flickers = [];
     this.sensorLamps = [];                  /* P4.13: 点滅する表示灯（InstancedMesh 1体） */
+    this.saveLamps = [];                    /* P4.14: 記録端末の緑ランプ（InstancedMesh 1体） */
     this.stats = { triangles: 0, drawGroups: 0, fixtures: 0, buildMs: 0 };
     this._build();
   }
@@ -1637,12 +1638,12 @@
       else quad(function () { return B.water; }, n.col, n.row,
         bh.x * 2 - 0.04, 0.012, [1.15, 1.15, 1.2], bh.z * 2 - 0.04);
     }
+    /* P4.14 項目1: セーブポイント＝**壁面の記録端末**。
+       【失効】旧「床のハッチ（自動チェックポイントの目印）＋近くの壁の緑の非常灯」は、
+       自動チェックポイントごと失効した（契約 §4「P4.14 再プレイ差し戻し」項目1）。 */
     var cps = meta.checkpoints || [];
-    for (var j = 0; j < cps.length; j++) {
-      quad(function () { return B.hatch; }, cps[j].col, cps[j].row, 1.6, 0.014, [0.85, 0.85, 0.85]);
-      /* 非常灯（緑）を近くの壁に */
-      this._wallLamp(B, cps[j].col, cps[j].row, [0.35, 1.0, 0.5], shader);
-    }
+    for (var j = 0; j < cps.length; j++) this._saveTerminal(B, cps[j], shader);
+    this._buildSaveLamps();
     if (meta.exitPad) {
       quad(function () { return B.hatch; }, meta.exitPad.col, meta.exitPad.row, 1.86, 0.014, [0.95, 0.95, 0.95]);
     }
@@ -1705,6 +1706,86 @@
       (along === 'z') ? 0.05 : 0.34, 0.13, (along === 'z') ? 0.34 : 0.05, 2,
       function () { return rgb; });
     setYBias(0);
+  };
+
+  /**
+   * P4.14 項目1: セーブポイント＝**壁面の記録端末**（契約 §4「P4.14 再プレイ差し戻し」項目1）。
+   * cp = { col, row, dir, id }。col,row は端末の前に立つ歩行可能マス、dir はそこから見た壁の向き
+   * （データは js/maps/area1.js の meta.checkpoints が唯一の真実。記録の判定＝js/progress.js も
+   *  同じ dir を読むので、造形と「調べる」の向きが食い違わない）。
+   *
+   * 見分けの契約:
+   *   区画銘板 … 1.02m角の大きな金属額縁＋明るい銘板面（高さ1.66m）
+   *   センサー … 小さな筐体＋**赤**の表示灯＋通路を横切る赤いビーム（高さ1.12m）
+   *   記録端末 … 縦長の暗い筐体＋**小さな画面**（自発光の青白）＋**緑**のランプ＋操作卓（高さ1.35m）
+   * 壁からの突出は最大 0.15m（契約の 0.16m 以内）。緑のランプは点光源を使わず、
+   * _buildSaveLamps() の InstancedMesh（センサー表示灯と同じ方式）で自発光させる。
+   */
+  World.prototype._saveTerminal = function (B, cp, shader) {
+    var map = this.map, T = map.tileSize;
+    if (this._bset) this._bset(cp.col, cp.row);
+    var n = (cp.dir && FACE_VEC[cp.dir]) ? FACE_VEC[cp.dir] : this._wallDirOf(cp.col, cp.row);
+    if (!n) return;
+    var m = [-n[0], 0, -n[2]];                       /* 面の外向き法線（部屋の側を向く） */
+    var key = cp.col + ',' + cp.row;
+    setYBias(map.cellFloorY(cp.col, cp.row));
+    var cx = cp.col * T + T / 2, cz = cp.row * T + T / 2;
+    var wx = cx + n[0] * (T * 0.5), wz = cz + n[2] * (T * 0.5);   /* 壁面 */
+    var along = (n[0] !== 0) ? 'z' : 'x';
+    var sh = shader(key, [0.88, 0.90, 0.94]);
+    var shD = shader(key, [0.52, 0.56, 0.60]);
+    /* 背板（縦長の暗い筐体）。突出 0.06m */
+    B.dark.box(wx + m[0] * 0.03, 1.42, wz + m[2] * 0.03,
+      (along === 'z') ? 0.06 : 0.62, 0.86, (along === 'z') ? 0.62 : 0.06, 1.1, shD);
+    /* 画面の枠（金属）。突出 0.09m */
+    B.metal.box(wx + m[0] * 0.06, 1.56, wz + m[2] * 0.06,
+      (along === 'z') ? 0.12 : 0.50, 0.40, (along === 'z') ? 0.50 : 0.12, 1.3, sh);
+    /* 画面そのもの（自発光の青白＝暗所でも「端末」と分かる）。突出 0.125m */
+    facePanel(B.screen, wx + m[0] * 0.125, 1.56, wz + m[2] * 0.125, m, 0.42, 0.32,
+      flat([0.46, 0.62, 0.78]));
+    /* 操作卓（小さな棚。キー面）。突出 0.14m（＝中心0.07＋厚み0.14の半分） */
+    B.metal.box(wx + m[0] * 0.07, 1.24, wz + m[2] * 0.07,
+      (along === 'z') ? 0.14 : 0.46, 0.07, (along === 'z') ? 0.46 : 0.14, 1.5, sh);
+    /* 緑のランプの台座（暗い縁取り。**ランプより浅く**して埋めない）。突出 0.08m */
+    B.dark.box(wx + m[0] * 0.04, 1.86, wz + m[2] * 0.04,
+      (along === 'z') ? 0.08 : 0.26, 0.22, (along === 'z') ? 0.26 : 0.08, 1.4, shD);
+    /* 焼き込みの緑（InstancedMesh が無い環境でも緑の点が残る保険）。突出 0.145m */
+    B.lamp.box(wx + m[0] * 0.115, 1.86, wz + m[2] * 0.115,
+      (along === 'z') ? 0.06 : 0.10, 0.10, (along === 'z') ? 0.10 : 0.06, 3,
+      function () { return [0.22, 0.78, 0.36]; });
+    /* 配線ダクト（壁を伝って天井へ）。突出 0.07m */
+    B.dark.tube([wx + m[0] * 0.025, 1.98, wz + m[2] * 0.025],
+      [wx + m[0] * 0.025, 2.72, wz + m[2] * 0.025], 0.045, 5, shD);
+    /* 自発光の緑ランプ（点光源なし・InstancedMesh 1体にまとめる）。
+       焼き込みの緑より僅かに大きくして必ず手前に出す＝Zファイトしない。突出 0.15m */
+    this.saveLamps.push({
+      id: cp.id,
+      x: wx + m[0] * 0.118, y: map.cellFloorY(cp.col, cp.row) + 1.86, z: wz + m[2] * 0.118,
+      sx: (along === 'z') ? 0.07 : 0.115, sz: (along === 'z') ? 0.115 : 0.07
+    });
+    setYBias(0);
+  };
+
+  /** P4.14: 記録端末の緑ランプを InstancedMesh 1体にまとめる（ドローコール+1のみ）。
+   *  暗所でも場所が分かる自発光。周囲は照らさない（点光源なし）。点滅はしない
+   *  （点滅する赤＝センサー、点かない緑＝記録端末、で見分けがつく）。 */
+  World.prototype._buildSaveLamps = function () {
+    var L = this.saveLamps;
+    if (!L.length || typeof THREE.InstancedMesh !== 'function') return;
+    var geo = this._track(new THREE.BoxGeometry(1, 0.115, 1));
+    var mat = this._track(new THREE.MeshBasicMaterial({ color: 0xffffff, fog: true }));
+    var mesh = new THREE.InstancedMesh(geo, mat, L.length);
+    var m4 = new THREE.Matrix4(), c = new THREE.Color();
+    for (var i = 0; i < L.length; i++) {
+      m4.makeScale(L[i].sx, 1, L[i].sz);
+      m4.setPosition(L[i].x, L[i].y, L[i].z);
+      mesh.setMatrixAt(i, m4);
+      mesh.setColorAt(i, c.setRGB(0.30, 1.0, 0.45));
+    }
+    mesh.instanceMatrix.needsUpdate = true;
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    this._saveMesh = mesh;
+    this.group.add(mesh);
   };
 
   World.prototype._sensor = function (B, col, row, shader) {
