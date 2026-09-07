@@ -4262,8 +4262,11 @@
     }
     t.ok(litOk > 30 && litNg === 0,
       'P4.11 項目4: 開示マスの画素が実座標どおり明るい', litOk + '明 / ' + litNg + '暗 ' + sample.join(' '));
-    /* 未踏破の歩行可能マス（経路から遠いもの）は背景色のまま */
+    /* 未踏破の歩行可能マス（経路から遠いもの）は背景色のまま。
+       P4.14 のゴールの星（面内に寄せて描く）が重なるマスは除外する */
     var darkOk = 0, darkNg = 0, dsample = [];
+    var starQ = mm.goalStarPx ? mm.goalStarPx(v, px, px) : null;
+    var starR = mm.goalStarSize ? (mm.goalStarSize(v) + v.s) : 0;
     for (var r4 = 1; r4 < map.height - 1 && darkOk + darkNg < 200; r4++) {
       for (var c4 = 1; c4 < map.width - 1; c4++) {
         if (!rawWalk(map, c4, r4) || mm.isExplored(c4, r4)) continue;
@@ -4274,6 +4277,7 @@
         }
         if (near) continue;
         var q4 = mm.cellToPx(c4, r4, v);
+        if (starQ && Math.hypot(q4.x - starQ.x, q4.y - starQ.y) < starR) continue;
         var l4 = lumAt(q4.x, q4.y);
         if (l4 <= bgLum + 6) darkOk++;
         else { darkNg++; if (dsample.length < 6) dsample.push(c4 + ',' + r4 + '=' + l4.toFixed(0)); }

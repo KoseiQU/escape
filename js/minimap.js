@@ -380,10 +380,23 @@
     return Math.max(6, v.s * 1.5);
   };
 
+  /** 星の中心画素。端のマス（所長室の金庫は西端）で星が描画面から欠けないよう面内に収める（メイン監査で追加） */
+  Minimap.prototype.goalStarPx = function (v, cw, ch) {
+    var g = this.goalCell();
+    if (!g) return null;
+    var q = this.cellToPx(g.col, g.row, v), R = this.goalStarSize(v);
+    if (cw === undefined) cw = Infinity;
+    if (ch === undefined) ch = Infinity;
+    q.x = Math.min(Math.max(q.x, R + 1), cw - R - 1);
+    q.y = Math.min(Math.max(q.y, R + 1), ch - R - 1);
+    return q;
+  };
+
   Minimap.prototype._drawGoalStar = function (ctx, v) {
     var g = this.goalCell();
     if (!g) return;
-    var q = this.cellToPx(g.col, g.row, v);
+    var cw = ctx.canvas ? ctx.canvas.width : Infinity, ch = ctx.canvas ? ctx.canvas.height : Infinity;
+    var q = this.goalStarPx(v, cw, ch);
     var R = this.goalStarSize(v), r = R * 0.42;
     ctx.beginPath();
     for (var i = 0; i < 10; i++) {
