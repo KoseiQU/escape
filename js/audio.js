@@ -44,6 +44,7 @@
   var OCCLUDE_LP = 0.22;          /* 壁越しのローパス係数 */
   var OCCLUDE_GAIN = 0.50;        /* 壁越しの音量係数 */
   var PAN_WIDTH = 0.85;
+  var AMB_BUS_GAIN = 0.9;         /* 環境音バスの基準ゲイン（ダッキングの基準） */
 
   /* 足音の歩幅(m)。この距離だけ進むごとに1歩 */
   var STRIDE = { walk: 0.92, run: 1.32, crouch: 1.05 };
@@ -132,6 +133,33 @@
     try { node.start(t0); } catch (e) { /* 既に開始済み */ }
     try { node.stop(t0 + dur); } catch (e) { /* stop 非対応 */ }
   }
+
+  /* ---- P4.13 項目3: 追跡中の緊迫層（シェパード式の終わりなき上昇） ---- */
+  var TEN_CYCLE = 6.0;          /* 1オクターブ上がりきる周期(s)。回り込みはここで起きる */
+  var TEN_OCT = 9;              /* 重ねるオクターブ数。釣鐘の裾が両端で完全に0になる幅を取る */
+  var TEN_BASE = 40;            /* 最下段の基音(Hz) */
+  var TEN_STACK = [1, 1.059463, 1.414214];  /* 同度・短2度・三全音＝不協和 */
+  var TEN_C0 = 8.23;            /* 明るさ（釣鐘中心）の開始 log2(Hz) ≒ 300Hz */
+  var TEN_C1 = 9.97;            /* 同・到達点 ≒ 1000Hz */
+  var TEN_RISE = 22.0;          /* 明るさが上がりきるまでの秒数 */
+  var TEN_WIDTH = 0.95;         /* 釣鐘の幅（オクターブ） */
+  var TEN_STEP = 0.05;          /* 包絡の自動化ステップ(s) */
+  var TEN_AMP = 0.075;          /* 1本あたりの振幅 */
+  var TEN_XF = 0.40;               /* チャンクの継ぎ目の等パワー・クロスフェード(s) */
+  var TEN_HOP = TEN_CYCLE * 9;     /* 次のチャンクの開始間隔(s)。周期の整数倍＝模様が揃う */
+  var TEN_CHUNK = TEN_HOP + TEN_XF;/* 1チャンクの長さ(s)。末尾の TEN_XF だけ次と重ねる */
+  var TEN_ARM = 2.0;               /* 切れる何秒前に次を継ぎ足すか */
+  var TEN_REL = 1.7;               /* 追跡解除で抜けきるまで(s)。chaseRelease と同じ尺 */
+  var TEN_MIX = 0.28;              /* 他の層（絶叫・爪音・鼓動）を埋めない混ぜ量 */
+
+  /* ---- P4.13 項目4: 囁き声 ---- */
+  var WH_SYL = 0.19;            /* 1拍の間隔(s) */
+  var WH_ON = 0.132;            /* 1拍が鳴っている長さ(s)。残りは無音の切れ目 */
+  var WH_ATK = 0.042;
+  var WH_AMP = 0.30;
+  var WH_LAG = 0.006;           /* 左右の時間差(s)＝無定位 */
+  var WH_FORMANT = [2200, 3000, 1800, 2600, 3400, 2000, 2800];  /* 1.5〜6kHz の中心 */
+  var WH_REV = [0.041, 0.057, 0.073];   /* 残響の遅延ループ(s) */
 
   /* ================================================================
    * VOICES — 音色定義
@@ -235,23 +263,60 @@
       return 0.34;
     },
 
-    /** 心拍（二拍） */
+    /**
+     * 心拍（二拍）。P4.13 項目3「鼓動の強化」（契約 §4）。
+     *
+     *   第1音「ドッ」… 40〜70Hz を主体にした重い打（低域<120Hz が全体の半分以上）。
+     *   第2音「クン」… 120〜160ms 後に入る、短く軽い打。
+     *   p.near (0..1) … 近さ。1 に寄るほど基音を下げ・減衰を伸ばして
+     *                   「胸に響く厚み」（ローパス寄りの圧）を作る。5m で 1。
+     *
+     * 音量は p.level（heartbeatFor の level。最大 HB_LEVEL_CAP=1.725）で決まる。
+     * 最大でもクリップしない配分にしてある（レンダで peak<0.98 を機械テストが見る）。
+     */
     heartbeat: function (ctx, dest, t0, p) {
       var lv = (p.level === undefined) ? 0.8 : p.level;
-      var pairs = [[0, 1.0, 0.130], [0.155, 0.62, 0.160]];
-      for (var i = 0; i < pairs.length; i++) {
-        var t = t0 + pairs[i][0];
-        var o = osc(ctx, 'sine', 58);
-        o.frequency.setValueAtTime(72, t);
-        o.frequency.exponentialRampToValueAtTime(34, t + pairs[i][2]);
-        chain([o, hit(ctx, t, 0.70 * lv * pairs[i][1], 0.008, pairs[i][2]), dest]);
-        startStop(o, t, pairs[i][2] + 0.06);
-        /* 胸の内側の擦れ */
-        var n = noiseSrc(ctx, 0.35);
-        chain([n, bq(ctx, 'lowpass', 180, 0.9), hit(ctx, t, 0.10 * lv * pairs[i][1], 0.006, 0.07), dest]);
-        startStop(n, t, 0.10);
-      }
-      return 0.40;
+      var near = clamp((p.near === undefined) ? 0 : p.near, 0, 1);
+      var gap = 0.128 + near * 0.026;      /* 第2音までの間（契約: 120〜160ms） */
+      var d1 = 0.155 + near * 0.055;       /* 近いほど長く尾を引く＝胸に残る圧 */
+
+      /* --- 第1音「ドッ」: 40〜70Hz 主体 --- */
+      var f1 = 66 - near * 12;             /* 立ち上がりの高さ 66→54Hz */
+      var fEnd = 42 - near * 4;            /* 沈み込む先 42→38Hz */
+      var o1 = osc(ctx, 'sine', f1);
+      o1.frequency.setValueAtTime(f1, t0);
+      o1.frequency.exponentialRampToValueAtTime(fEnd, t0 + d1);
+      /* 厚みは「重ねた低域」で作る＝上の帯域を足さないので低域比率が下がらない */
+      chain([o1, bq(ctx, 'lowpass', 150 + near * 40, 0.9),
+        hit(ctx, t0, 0.638 * lv, 0.010, d1), dest]);
+      startStop(o1, t0, d1 + 0.08);
+
+      var o1b = osc(ctx, 'sine', f1 * 1.5);
+      o1b.frequency.exponentialRampToValueAtTime(fEnd * 1.5, t0 + d1 * 0.8);
+      chain([o1b, bq(ctx, 'lowpass', 190, 0.8),
+        hit(ctx, t0, (0.188 + near * 0.075) * lv, 0.008, d1 * 0.7), dest]);
+      startStop(o1b, t0, d1 + 0.06);
+
+      /* 胸を叩く打点（超低域のノイズ。ローパスで<120Hz に閉じ込める） */
+      var n1 = noiseSrc(ctx, 0.30);
+      chain([n1, bq(ctx, 'lowpass', 105, 0.7),
+        hit(ctx, t0, (0.213 + near * 0.113) * lv, 0.005, 0.075), dest]);
+      startStop(n1, t0, 0.12);
+
+      /* --- 第2音「クン」: 短く軽い --- */
+      var t2 = t0 + gap;
+      var d2 = 0.085 + near * 0.020;
+      var o2 = osc(ctx, 'sine', 96 - near * 10);
+      o2.frequency.exponentialRampToValueAtTime(58 - near * 6, t2 + d2);
+      chain([o2, hit(ctx, t2, 0.288 * lv, 0.006, d2), dest]);
+      startStop(o2, t2, d2 + 0.05);
+      /* 弁が閉じる短い擦れ（軽さを出すぶん帯域は上） */
+      var n2 = noiseSrc(ctx, 0.55);
+      chain([n2, bq(ctx, 'bandpass', 520, 1.1),
+        hit(ctx, t2, 0.113 * lv, 0.004, 0.045), dest]);
+      startStop(n2, t2, 0.08);
+
+      return gap + d1 + 0.12;
     },
 
     /* ---------------- 環境 ---------------- */
@@ -483,6 +548,245 @@
       chain([n, f, swell(ctx, t0, 0.10 * lv, 0.08, 0.35, dur - 0.4), dest]);
       startStop(n, t0, dur + 0.15);
       return dur + 0.2;
+    },
+
+    /* ================================================================
+     * P4.13 項目3「追跡中の緊迫層」（契約 §4）
+     *
+     *   不協和（短2度・三全音）の持続音が終わりなく上昇し続ける層。
+     *   シェパード/リセ式: 1オクターブずつ離れた OCT 本の正弦波が
+     *   TEN_CYCLE 秒で 1オクターブ上がり、周期の終わりで最上段が最下段へ回る。
+     *   {f, 2f, 4f, …} は回り込みで自分自身へ写るので**継ぎ目が無い**
+     *   （＝チャンクを TEN_CYCLE の整数倍で継ぎ足せば境目が聞こえない）。
+     *   これを 1／短2度／三全音 の3スタック重ねて不協和にする。
+     *
+     *   さらに「明るさ」（対数周波数上の釣鐘の中心）を TEN_RISE 秒かけて
+     *   押し上げる＝追跡が長引くほど張り詰める。8秒レンダでスペクトル重心が
+     *   1秒刻みで単調上昇することを機械テストが数値で見る。
+     *
+     *   p.dur   … 長さ(s)。TEN_CYCLE の整数倍へ丸める（継ぎ目対策）
+     *   p.t1    … 開始時点での経過秒（再武装時に明るさの傾きを継ぐ）
+     *   p.level … 音量
+     * ============================================================== */
+    tension: function (ctx, dest, t0, p) {
+      var lv = (p.level === undefined) ? 1 : p.level;
+      var cycles = Math.max(1, Math.ceil((((p.dur === undefined) ? TEN_CYCLE * 2 : p.dur) / TEN_CYCLE) - 1e-6));
+      var span = cycles * TEN_CYCLE;
+      var elapsed = (p.t1 === undefined) ? 0 : p.t1;
+      var rise = (p.rise === undefined) ? TEN_RISE : p.rise;
+      var steps = Math.ceil(span / TEN_STEP);
+
+      /* 明るさ（釣鐘の中心）を対数周波数で返す */
+      function centerAt(tau) {
+        var k = clamp((elapsed + tau) / rise, 0, 1);
+        return TEN_C0 + (TEN_C1 - TEN_C0) * k;      /* オクターブ番号（log2 Hz） */
+      }
+      /* 時刻 tau における「下から数えたオクターブ位置」。
+         1周期で1段上がり、最上段まで行くと最下段へ回る（回り込みは釣鐘の裾＝無音） */
+      function slotAt(k, tau) {
+        var c = Math.floor(tau / TEN_CYCLE + 1e-9);
+        var u = (tau - c * TEN_CYCLE) / TEN_CYCLE;
+        return ((k + c) % TEN_OCT) + u;
+      }
+
+      var i, s2, k2;
+      for (s2 = 0; s2 < TEN_STACK.length; s2++) {
+        var base = Math.log(TEN_BASE * TEN_STACK[s2]) / Math.LN2;
+        for (k2 = 0; k2 < TEN_OCT; k2++) {
+          /* 先に包絡を計算して、この区間で一度も鳴らない本は作らない（無駄な自動化を省く） */
+          var vals = new Array(steps + 1), maxv = 0;
+          for (i = 0; i <= steps; i++) {
+            var tau = Math.min(i * TEN_STEP, span);
+            var x = (base + slotAt(k2, tau) - centerAt(tau)) / TEN_WIDTH;
+            var v = TEN_AMP * lv * Math.exp(-x * x);
+            if (v < 1e-5) v = 0;
+            vals[i] = v;
+            if (v > maxv) maxv = v;
+          }
+          if (maxv <= 0) continue;
+
+          var o = osc(ctx, 'sine', Math.pow(2, base + (k2 % TEN_OCT)));
+          /* 周波数: 1周期で ×2。最上段からの回り込みだけ跳ぶ（そこは無音） */
+          for (var c2 = 0; c2 < cycles; c2++) {
+            var tc = t0 + c2 * TEN_CYCLE;
+            var f0 = Math.pow(2, base + ((k2 + c2) % TEN_OCT));
+            o.frequency.setValueAtTime(f0, tc);
+            o.frequency.exponentialRampToValueAtTime(f0 * 2, tc + TEN_CYCLE);
+          }
+          var g = ctx.createGain();
+          g.gain.setValueAtTime(vals[0], t0);
+          for (i = 1; i <= steps; i++) {
+            /* 無音が続く区間は点を打たない（0→0 の直線は書かなくても同じ） */
+            if (vals[i] === 0 && vals[i - 1] === 0) continue;
+            g.gain.linearRampToValueAtTime(vals[i], t0 + Math.min(i * TEN_STEP, span));
+          }
+          chain([o, g, dest]);
+          startStop(o, t0, span);
+        }
+      }
+
+      /* 上がっていく空気（釣鐘の中心に追随するバンドパス）。重心の上昇を支える。
+         音量は一定にしておく＝チャンクを繋いだ時に段差にならない */
+      var n = noiseSrc(ctx, 0.9);
+      var bp = bq(ctx, 'bandpass', Math.pow(2, centerAt(0) + 0.35), 1.4);
+      for (var j = 0; j <= steps; j++) {
+        var ta = Math.min(j * TEN_STEP, span);
+        var fc = Math.pow(2, centerAt(ta) + 0.35);
+        if (j === 0) bp.frequency.setValueAtTime(fc, t0);
+        else bp.frequency.linearRampToValueAtTime(fc, t0 + ta);
+      }
+      chain([n, bp, gainOf(ctx, 0.052 * lv), dest]);
+      startStop(n, t0, span);
+      return span;
+    },
+
+    /** 追跡中の自分の荒い呼吸（吸って吐く1組。喉の鳴りを混ぜる） */
+    raggedBreath: function (ctx, dest, t0, p) {
+      var lv = (p.level === undefined) ? 1 : p.level;
+      var r = (p.r === undefined) ? 0.5 : p.r;
+      /* 吸う（詰まった短い吸気） */
+      var n1 = noiseSrc(ctx, 0.85 + r * 0.25);
+      var f1 = bq(ctx, 'bandpass', 900 + r * 260, 0.85);
+      f1.frequency.exponentialRampToValueAtTime(1500, t0 + 0.20);
+      chain([n1, f1, swell(ctx, t0, 0.341 * lv, 0.045, 0.055, 0.16), dest]);
+      startStop(n1, t0, 0.32);
+      /* 喉の震え（呼吸に芯を持たせる） */
+      var o = osc(ctx, 'triangle', 138 + r * 22);
+      o.frequency.exponentialRampToValueAtTime(112, t0 + 0.22);
+      /* 包絡の最初の点は必ず音源の start と同時刻に置く。後ろにずらすと、
+         その隙間だけ gain が既定値 1 のまま通り抜けて頭に破裂音が出る */
+      chain([o, bq(ctx, 'lowpass', 620, 0.8), hit(ctx, t0, 0.062 * lv, 0.030, 0.17), dest]);
+      startStop(o, t0, 0.26);
+      /* 吐く（長めに崩れる呼気） */
+      var t2 = t0 + 0.27;
+      var n2 = noiseSrc(ctx, 0.55 + r * 0.2);
+      var f2 = bq(ctx, 'bandpass', 620, 0.7);
+      f2.frequency.exponentialRampToValueAtTime(340, t2 + 0.34);
+      chain([n2, f2, swell(ctx, t2, 0.297 * lv, 0.05, 0.09, 0.24), dest]);
+      startStop(n2, t2, 0.42);
+      return 0.72;
+    },
+
+    /** 金属の擦過スティンガー（追跡中に2〜4秒間隔で不規則に刺す） */
+    metalScrape: function (ctx, dest, t0, p) {
+      var lv = (p.level === undefined) ? 1 : p.level;
+      var r = (p.r === undefined) ? 0.5 : p.r;
+      var dur = 0.42 + r * 0.30;
+      /* 擦れの本体（帯域を上へ引きずる） */
+      var n = noiseSrc(ctx, 1.15 + r * 0.5);
+      var f = bq(ctx, 'bandpass', 1700 + r * 900, 3.2);
+      f.frequency.exponentialRampToValueAtTime(3400 + r * 1800, t0 + dur);
+      chain([n, f, swell(ctx, t0, 0.315 * lv, 0.030, dur * 0.35, dur * 0.55), dest]);
+      startStop(n, t0, dur + 0.15);
+      /* 金属の鳴き（不協和な2本） */
+      var fs = [2300 + r * 700, (2300 + r * 700) * 1.414];
+      for (var i = 0; i < fs.length; i++) {
+        var o = osc(ctx, 'sine', fs[i]);
+        o.frequency.linearRampToValueAtTime(fs[i] * (1.06 + r * 0.05), t0 + dur);
+        /* 包絡の起点は音源の start と同時刻（頭の破裂音を出さない） */
+        chain([o, hit(ctx, t0, (0.144 / (i + 1)) * lv, 0.022, dur * 0.8), dest]);
+        startStop(o, t0, dur + 0.12);
+      }
+      /* 下に残る軋み */
+      var n2 = noiseSrc(ctx, 0.4);
+      chain([n2, bq(ctx, 'bandpass', 320, 2.0), swell(ctx, t0, 0.114 * lv, 0.04, 0.10, dur), dest]);
+      startStop(n2, t0, dur + 0.2);
+      return dur + 0.25;
+    },
+
+    /* ================================================================
+     * P4.13 項目4「音を鳴らすと声が聞こえる」（契約 §4）
+     *
+     *   帯域整形ノイズ（1.5〜6kHz の中心＋弱い低域の息）を、セリフの拍数に
+     *   合わせた振幅包絡で区切る＝言葉は聞き取れないが「囁いている」と分かる。
+     *   無定位: 左右で数ms ずらし・僅かにデチューンして像を結ばせない。
+     *   残響は長め（生成した遅延ループ。音声ファイルは使わない＝$0）。
+     *   小さく始まって近づく: 拍ごとに山を大きく、帯域も開いていく。
+     *
+     *   p.beats … 拍数（みーつけた=5／そこにいるのね=7／聞こえたよ=5）
+     *   p.dry   … true で残響なし（機械テストが山の数を数えるため）
+     * ============================================================== */
+    whisper: function (ctx, dest, t0, p) {
+      var lv = (p.level === undefined) ? 1 : p.level;
+      var beats = Math.max(1, Math.round(p.beats || 5));
+      var r = (p.r === undefined) ? 0.5 : p.r;
+      var span = beats * WH_SYL;
+
+      /* 出口（残響へ送る手前） */
+      var out = gainOf(ctx, 1);
+      if (p.dry) {
+        out.connect(dest);
+      } else {
+        var dry = gainOf(ctx, 0.62);
+        out.connect(dry); dry.connect(dest);
+        /* 生成した遅延ループの残響（長め） */
+        var send = gainOf(ctx, 0.85);
+        out.connect(send);
+        var wet = gainOf(ctx, 0.50);
+        for (var d = 0; d < WH_REV.length; d++) {
+          var dl = ctx.createDelay(0.5);
+          dl.delayTime.value = WH_REV[d];
+          var lp = bq(ctx, 'lowpass', 2600, 0.8);
+          var fb = gainOf(ctx, 0.70);
+          send.connect(dl); dl.connect(lp); lp.connect(fb); fb.connect(dl);
+          lp.connect(wet);
+        }
+        wet.connect(dest);
+      }
+
+      /* 左右2経路（時間差＋デチューン＝無定位） */
+      for (var side = 0; side < 2; side++) {
+        var sgn = side ? 1 : -1;
+        var tail = out;
+        if (ctx.createStereoPanner) {
+          var pan = ctx.createStereoPanner();
+          pan.pan.value = sgn * 0.88;
+          pan.connect(out);
+          tail = pan;
+        }
+        var lag = side ? WH_LAG : 0;             /* 片側だけ数ms 遅らせる */
+        var det = 1 + sgn * 0.018;               /* 僅かなデチューン */
+
+        /* 主帯域（1.5〜6kHz。拍ごとに中心を変える＝子音の色） */
+        var n = noiseSrc(ctx, 0.95 * det);
+        var bp = bq(ctx, 'bandpass', WH_FORMANT[0] * det, 0.85);
+        var hp = bq(ctx, 'highpass', 1400, 0.7);
+        var g = ctx.createGain();
+        g.gain.setValueAtTime(0.0006, t0);
+        /* 息の擦れ（上の帯域。歯擦音の代わり） */
+        var n2 = noiseSrc(ctx, 1.3 * det);
+        var bp2 = bq(ctx, 'bandpass', 4900 * det, 1.5);
+        var g2 = ctx.createGain();
+        g2.gain.setValueAtTime(0.0006, t0);
+
+        for (var i = 0; i < beats; i++) {
+          var ts = t0 + lag + i * WH_SYL;
+          /* 小さく始まって近づく＝拍ごとに山が大きくなる */
+          var grow = 0.52 + 0.48 * (beats === 1 ? 1 : i / (beats - 1));
+          var pk = WH_AMP * lv * grow;
+          bp.frequency.setValueAtTime(WH_FORMANT[i % WH_FORMANT.length] * det, ts);
+          bp2.frequency.setValueAtTime((4300 + (i % 3) * 700) * det, ts);
+          g.gain.setValueAtTime(0.0006, ts);
+          g.gain.linearRampToValueAtTime(pk, ts + WH_ATK);
+          g.gain.linearRampToValueAtTime(pk * 0.72, ts + WH_ON * 0.72);
+          g.gain.linearRampToValueAtTime(0.0006, ts + WH_ON);
+          g2.gain.setValueAtTime(0.0006, ts);
+          g2.gain.linearRampToValueAtTime(pk * 0.42, ts + WH_ATK * 0.7);
+          g2.gain.linearRampToValueAtTime(0.0006, ts + WH_ON * 0.80);
+        }
+        chain([n, hp, bp, g, tail]);
+        startStop(n, t0, span + lag + 0.1);
+        chain([n2, bp2, g2, tail]);
+        startStop(n2, t0, span + lag + 0.1);
+      }
+
+      /* 弱い低域の息（耳のすぐ後ろの気配） */
+      var nb = noiseSrc(ctx, 0.4 + r * 0.15);
+      chain([nb, bq(ctx, 'lowpass', 320, 0.7),
+        swell(ctx, t0, 0.055 * lv, 0.16, span * 0.55, 0.42), out]);
+      startStop(nb, t0, span + 0.5);
+
+      return span + (p.dry ? 0.2 : 1.6);
     },
 
     /** 捕獲（耳元の音） */
@@ -973,6 +1277,46 @@
   };
 
   /* ================================================================
+   * P4.13 項目3: 緊迫層のチャンク予約（実機も機械テストもここを通る）
+   *
+   *   VOICES.tension は「TEN_CYCLE の整数倍」で模様が一巡する。次のチャンクを
+   *   ちょうど TEN_HOP（周期の整数倍）ずらして始めれば、両者は同じ模様の同じ位相に
+   *   乗る。ただし発振器の位相までは揃わないので、重なりの TEN_XF 秒を
+   *   等パワーでクロスフェードして段差（プチッ）を出さない。
+   * ============================================================== */
+  function fadeCurve(param, t0, dur, up) {
+    var N = 8;
+    param.setValueAtTime(up ? 0 : 1, t0);
+    for (var i = 1; i <= N; i++) {
+      var x = i / N;
+      /* 等パワー: sin/cos なら無相関な2信号を足しても音量が凹まない */
+      var v = up ? Math.sin(x * Math.PI / 2) : Math.cos(x * Math.PI / 2);
+      param.linearRampToValueAtTime(v, t0 + dur * x);
+    }
+  }
+
+  /**
+   * 緊迫層を1チャンク予約する。
+   *   start   … 鳴り始める時刻（ctx の時間軸）
+   *   elapsed … 追跡開始からの経過秒（明るさの傾きを継ぐ）
+   *   first   … 先頭のチャンクか（頭のクロスフェードを省く）
+   *   hop     … 次のチャンクまでの間隔(s)。既定 TEN_HOP（TEN_CYCLE の整数倍であること）
+   * 返り値: { next, elapsed, end }
+   */
+  function scheduleTensionChunk(ctx, out, start, elapsed, first, hop) {
+    var h = hop || TEN_HOP;
+    var span = h + TEN_XF;
+    var g = ctx.createGain();
+    g.gain.value = first ? 1 : 0;
+    if (first) g.gain.setValueAtTime(1, start);
+    else fadeCurve(g.gain, start, TEN_XF, true);
+    fadeCurve(g.gain, start + h, TEN_XF, false);
+    g.connect(out);
+    VOICES.tension(ctx, g, start, { dur: span, level: 1, t1: elapsed });
+    return { next: start + h, elapsed: elapsed + h, end: start + span };
+  }
+
+  /* ================================================================
    * P4.12 項目5「鼓動音は敵との距離で強まる」（契約 §4「P4.12 再プレイ差し戻し」）
    *
    *   追跡中に限らず、最も近い個体との距離が HB_START(20m) 以内で鳴り始め、
@@ -985,11 +1329,15 @@
   var HB_START = 20.0;          /* 鳴り始める距離(m) */
   var HB_FULL = 5.0;            /* 最大になる距離(m) */
   var HB_BPM_MIN = 62, HB_BPM_MAX = 158;
-  var HB_LEVEL_MIN = 0.10, HB_LEVEL_MAX = 1.00;
+  /* P4.13 項目3「最大レベルを上げる（現行 HB_LEVEL_CAP の1.5倍を上限目安・クリップ禁止）」
+     に合わせて 1.00→1.50 / 1.15→1.725 へ。音色側は最大でも peak<0.98 に収まる配分。 */
+  var HB_LEVEL_MIN = 0.10, HB_LEVEL_MAX = 1.50;
   var HB_CURVE = 1.30;          /* 近づくほど急に強まる（遠くは微弱に留める） */
   var HB_CHASE_BPM = 14;        /* 追跡中の上乗せ(bpm) */
   var HB_CHASE_LEVEL = 1.16;    /* 同・音量の倍率 */
-  var HB_LEVEL_CAP = 1.15;      /* 心拍の波形が歪まない上限 */
+  var HB_LEVEL_CAP = 1.725;     /* 心拍の波形が歪まない上限（旧 1.15 の1.5倍） */
+  var HB_DUCK_DIST = 5.0;       /* この距離以内で環境音をわずかにダッキング */
+  var HB_DUCK_AMOUNT = 0.28;    /* 同・絞る割合（わずか） */
 
   function heartbeatFor(dist, chase) {
     var d = (typeof dist === 'number' && isFinite(dist)) ? Math.max(0, dist) : Infinity;
@@ -998,7 +1346,8 @@
     var bpm = HB_BPM_MIN + (HB_BPM_MAX - HB_BPM_MIN) * s;
     var level = HB_LEVEL_MIN + (HB_LEVEL_MAX - HB_LEVEL_MIN) * s;
     if (chase) { bpm += HB_CHASE_BPM; level = Math.min(HB_LEVEL_CAP, level * HB_CHASE_LEVEL); }
-    return { on: !!chase || d <= HB_START, bpm: bpm, level: level, u: u, dist: d };
+    /* near は「胸に響く厚み」の度合い（5m で 1）。音色側 heartbeat の p.near に渡す */
+    return { on: !!chase || d <= HB_START, bpm: bpm, level: level, u: u, near: s, dist: d };
   }
 
   /* ================================================================
@@ -1017,7 +1366,130 @@
     });
   }
 
-  function metricsOf(buf) {
+  /* ---------------- スペクトル解析（P4.13 項目3の数値判定用） ----------------
+   * 低域比率（<120Hz）とスペクトル重心を出すために、その場で使い捨ての
+   * 実数FFT（基数2・反復版）を持つ。外部ライブラリは足さない（$0構成）。
+   * ---------------------------------------------------------------- */
+
+  /** 実数列 → パワースペクトル（長さ N/2）。src[from..from+len) に Hann 窓 */
+  function powerSpectrum(src, from, len, N) {
+    var re = new Float64Array(N), im = new Float64Array(N), i, j;
+    var m = Math.min(len, N, src.length - from);
+    for (i = 0; i < m; i++) {
+      var w = 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / Math.max(1, m - 1));
+      re[i] = src[from + i] * w;
+    }
+    /* ビット反転並べ替え */
+    for (i = 1, j = 0; i < N; i++) {
+      var bit = N >> 1;
+      for (; j & bit; bit >>= 1) j ^= bit;
+      j ^= bit;
+      if (i < j) {
+        var tr = re[i]; re[i] = re[j]; re[j] = tr;
+        var ti = im[i]; im[i] = im[j]; im[j] = ti;
+      }
+    }
+    for (var len2 = 2; len2 <= N; len2 <<= 1) {
+      var ang = -2 * Math.PI / len2;
+      var wr = Math.cos(ang), wi = Math.sin(ang);
+      for (i = 0; i < N; i += len2) {
+        var cr = 1, ci = 0;
+        for (var k = 0; k < len2 / 2; k++) {
+          var ur = re[i + k], ui = im[i + k];
+          var vr = re[i + k + len2 / 2] * cr - im[i + k + len2 / 2] * ci;
+          var vi = re[i + k + len2 / 2] * ci + im[i + k + len2 / 2] * cr;
+          re[i + k] = ur + vr; im[i + k] = ui + vi;
+          re[i + k + len2 / 2] = ur - vr; im[i + k + len2 / 2] = ui - vi;
+          var nr = cr * wr - ci * wi;
+          ci = cr * wi + ci * wr; cr = nr;
+        }
+      }
+    }
+    var out = new Float64Array(N >> 1);
+    for (i = 0; i < out.length; i++) out[i] = re[i] * re[i] + im[i] * im[i];
+    return out;
+  }
+
+  /** [t0,t1) 区間の「fc 未満のエネルギー / 全エネルギー」 */
+  function lowRatioIn(d, sr, t0, t1, fc, N) {
+    var from = Math.max(0, Math.floor(t0 * sr));
+    var len = Math.max(1, Math.floor((t1 - t0) * sr));
+    var n = N || 8192;
+    var P = powerSpectrum(d, from, len, n);
+    var df = sr / n, low = 0, all = 0;
+    for (var i = 1; i < P.length; i++) {
+      all += P[i];
+      if (i * df < fc) low += P[i];
+    }
+    return all > 0 ? low / all : 0;
+  }
+
+  /** 1秒（hop 秒）刻みのスペクトル重心(Hz)の列 */
+  function centroidSeries(d, sr, hop, N) {
+    var n = N || 8192;
+    var win = Math.max(1, Math.floor(hop * sr));
+    var out = [];
+    for (var s = 0; s + win <= d.length; s += win) {
+      var acc = null, blocks = 0;
+      for (var b = s; b + n <= s + win; b += n >> 1) {
+        var P = powerSpectrum(d, b, n, n);
+        if (!acc) acc = P;
+        else for (var i = 0; i < acc.length; i++) acc[i] += P[i];
+        blocks++;
+      }
+      if (!blocks) { acc = powerSpectrum(d, s, win, n); }
+      var df = sr / n, num = 0, den = 0;
+      for (var k = 1; k < acc.length; k++) { num += k * df * acc[k]; den += acc[k]; }
+      out.push(den > 0 ? num / den : 0);
+    }
+    return out;
+  }
+
+  /** 振幅包絡の山の数（拍数の判定用）。窓RMS→しきい値超えの極大を数える */
+  function envelopePeaks(d, sr, thr, minGap) {
+    var hop = Math.max(1, Math.round(sr * 0.005));
+    var win = Math.max(1, Math.round(sr * 0.020));
+    var env = [];
+    for (var i = 0; i + win <= d.length; i += hop) {
+      var s = 0;
+      for (var k = 0; k < win; k++) { var v = d[i + k]; s += v * v; }
+      env.push(Math.sqrt(s / win));
+    }
+    var max = 0, j;
+    for (j = 0; j < env.length; j++) if (env[j] > max) max = env[j];
+    if (max <= 0) return { count: 0, times: [] };
+    var lim = max * (thr === undefined ? 0.30 : thr);
+    var gap = Math.max(1, Math.round((minGap === undefined ? 0.06 : minGap) * sr / hop));
+    var times = [], last = -1e9;
+    for (j = 1; j < env.length - 1; j++) {
+      if (env[j] < lim) continue;
+      if (env[j] < env[j - 1] || env[j] < env[j + 1]) continue;
+      if (j - last < gap) continue;
+      last = j;
+      times.push(j * hop / sr);
+    }
+    return { count: times.length, times: times };
+  }
+
+  /** [at-half, at+half) の中で隣り合う標本の差が最大いくらか（波形の段差） */
+  function maxStepIn(d, sr, at, half) {
+    var a0 = Math.max(1, Math.floor((at - half) * sr));
+    var a1 = Math.min(d.length, Math.ceil((at + half) * sr));
+    var mx = 0;
+    for (var i = a0; i < a1; i++) {
+      var dv = Math.abs(d[i] - d[i - 1]);
+      if (dv > mx) mx = dv;
+    }
+    return mx;
+  }
+
+  /**
+   * レンダ結果の数値化。spec を渡すと追加の解析を載せる:
+   *   spec.low       = { t0, t1, fc } … その区間の低域エネルギー比率 → m.lowRatio
+   *   spec.centroid  = { hop }        … hop 秒刻みのスペクトル重心列 → m.centroids
+   *   spec.peaks     = { thr, gap }   … 振幅包絡の山の数           → m.peaks
+   */
+  function metricsOf(buf, spec) {
     var d = buf.getChannelData(0);
     var n = d.length, sum = 0, peak = 0, nz = 0, onset = -1;
     for (var i = 0; i < n; i++) {
@@ -1026,7 +1498,7 @@
       if (a > peak) peak = a;
       if (a > 0.002) { nz++; if (onset < 0) onset = i; }
     }
-    return {
+    var m = {
       rms: Math.sqrt(sum / n),
       peak: peak,
       duration: buf.duration,
@@ -1035,13 +1507,32 @@
       onset: onset < 0 ? -1 : onset / buf.sampleRate,
       clipped: peak > 1.0
     };
+    if (spec) {
+      try {
+        if (spec.low) m.lowRatio = lowRatioIn(d, buf.sampleRate, spec.low.t0, spec.low.t1, spec.low.fc);
+        if (spec.centroid) m.centroids = centroidSeries(d, buf.sampleRate, spec.centroid.hop || 1.0);
+        if (spec.peaks) {
+          var pk = envelopePeaks(d, buf.sampleRate, spec.peaks.thr, spec.peaks.gap);
+          m.peaks = pk.count; m.peakTimes = pk.times;
+        }
+        if (spec.step) {
+          /* 指定した窓の中の「隣り合う標本の最大差」＝波形の段差。
+             継ぎ目の窓と、何も起きていない基準窓を比べる＝プチッと鳴っていないことの証拠 */
+          m.stepAt = maxStepIn(d, buf.sampleRate, spec.step.at, spec.step.half);
+          if (spec.stepRef) {
+            m.stepRef = maxStepIn(d, buf.sampleRate, spec.stepRef.at, spec.stepRef.half);
+          }
+        }
+      } catch (e) { m.analysisError = String(e && e.message || e); }
+    }
+    return m;
   }
 
   /**
    * 1音を OfflineAudioContext で描画して RMS/peak を返す。
    * 実出力は一切行わない（＝出力デバイス無しの検証環境でも数値判定できる）。
    */
-  function renderVoice(name, params, seconds, sampleRate) {
+  function renderVoice(name, params, seconds, sampleRate, spec) {
     var C = offlineCtor();
     if (!C) return global.Promise.reject(new Error('OfflineAudioContext 非対応'));
     var v = VOICES[name];
@@ -1055,7 +1546,30 @@
     dest.connect(ctx.destination);
     try { v(ctx, dest, 0.02, params || {}); }
     catch (e2) { return global.Promise.reject(e2); }
-    return startRendering(ctx).then(metricsOf);
+    return startRendering(ctx).then(function (b) { return metricsOf(b, spec); });
+  }
+
+  /**
+   * 任意のグラフ（複数の音を並べる等）を OfflineAudioContext で描画する。
+   * build(ctx, dest, t0) に組み立てを任せる。継ぎ目の検査などに使う。
+   */
+  function renderBuild(build, seconds, sampleRate, spec) {
+    var C = offlineCtor();
+    if (!C) return global.Promise.reject(new Error('OfflineAudioContext 非対応'));
+    var sr = sampleRate || 44100, sec = seconds || 1.2, ctx;
+    try { ctx = new C(1, Math.ceil(sr * sec), sr); }
+    catch (e) { return global.Promise.reject(e); }
+    var dest = gainOf(ctx, 1);
+    dest.connect(ctx.destination);
+    try { build(ctx, dest, 0.02); }
+    catch (e2) { return global.Promise.reject(e2); }
+    return startRendering(ctx).then(function (b) { return metricsOf(b, spec); });
+  }
+
+  /** 距離から心拍のレンダ引数を作る（level と near を実プレイと同じ組で渡す） */
+  function hbParams(dist, chase) {
+    var h = heartbeatFor(dist, !!chase);
+    return { level: h.level, near: h.near };
   }
 
   /* 機械テストで数値判定する主要音（契約 §4: 足音3種・発見スティング・心拍・レバー・警報） */
@@ -1070,9 +1584,34 @@
     { key: 'sting',       name: 'sting', params: {}, sec: 1.4 },
     { key: 'heartbeat',   name: 'heartbeat', params: {}, sec: 0.8 },
     /* P4.12 項目5: 距離連動の鼓動（5m/12m/20m の音量差を数値で見る） */
-    { key: 'hb_d20',      name: 'heartbeat', params: { level: heartbeatFor(20, false).level }, sec: 0.8 },
-    { key: 'hb_d12',      name: 'heartbeat', params: { level: heartbeatFor(12, false).level }, sec: 0.8 },
-    { key: 'hb_d5',       name: 'heartbeat', params: { level: heartbeatFor(5, false).level }, sec: 0.8 },
+    { key: 'hb_d20',      name: 'heartbeat', params: hbParams(20), sec: 0.8 },
+    { key: 'hb_d12',      name: 'heartbeat', params: hbParams(12), sec: 0.8 },
+    { key: 'hb_d5',       name: 'heartbeat', params: hbParams(5), sec: 0.8,
+      spec: { low: { t0: 0.0, t1: 0.135, fc: 120 }, peaks: { thr: 0.22, gap: 0.06 } } },
+    /* P4.13 項目3: 追跡中・5m（音量の上限＝クリップしないことを見る） */
+    { key: 'hb_max',      name: 'heartbeat', params: hbParams(5, true), sec: 0.9,
+      spec: { low: { t0: 0.0, t1: 0.135, fc: 120 } } },
+    /* P4.13 項目3: 緊迫層（8秒で重心が1秒刻みに単調上昇するか） */
+    { key: 'tension8',    name: 'tension', params: { dur: 8, level: 1 }, sec: 8.0,
+      spec: { centroid: { hop: 1.0 } } },
+    /* P4.13 項目3: 実機と同じ「チャンクの継ぎ足し」を再現し、継ぎ目に段差が無いことを見る */
+    { key: 'tension_seam', sec: 12.0,
+      build: function (ctx, dest, t0) {
+        /* 実機と同じ scheduleTensionChunk を、レンダに収まる短い hop で2つ繋ぐ */
+        var r = scheduleTensionChunk(ctx, dest, t0, 0, true, TEN_CYCLE);
+        scheduleTensionChunk(ctx, dest, r.next, r.elapsed, false, TEN_CYCLE);
+      },
+      spec: { centroid: { hop: 1.0 },
+              step: { at: 0.02 + TEN_CYCLE + TEN_XF * 0.5, half: TEN_XF * 0.5 + 0.02 },
+              stepRef: { at: 0.02 + TEN_CYCLE * 0.5, half: TEN_XF * 0.5 + 0.02 } } },
+    { key: 'ragged',      name: 'raggedBreath', params: { r: 0.5 }, sec: 1.0 },
+    { key: 'scrape',      name: 'metalScrape', params: { r: 0.5 }, sec: 1.2 },
+    /* P4.13 項目4: 囁き声（拍数に応じた山の数と、残響込みの厚み） */
+    { key: 'wh_dry5',     name: 'whisper', params: { beats: 5, dry: true }, sec: 1.4,
+      spec: { peaks: { thr: 0.30, gap: 0.09 }, low: { t0: 0.0, t1: 1.1, fc: 1200 } } },
+    { key: 'wh_dry7',     name: 'whisper', params: { beats: 7, dry: true }, sec: 1.8,
+      spec: { peaks: { thr: 0.30, gap: 0.09 } } },
+    { key: 'wh_wet5',     name: 'whisper', params: { beats: 5 }, sec: 3.0 },
     { key: 'lever',       name: 'lever', params: {}, sec: 3.4 },
     { key: 'alarm',       name: 'alarm', params: {}, sec: 2.4 },
     { key: 'scream',      name: 'scream', params: {}, sec: 1.4 },
@@ -1111,7 +1650,10 @@
     var chainP = global.Promise.resolve();
     PREWARM.forEach(function (job) {
       chainP = chainP.then(function () {
-        return renderVoice(job.name, job.params, job.sec).then(function (m) {
+        var r = job.build
+          ? renderBuild(job.build, job.sec, 0, job.spec)
+          : renderVoice(job.name, job.params, job.sec, 0, job.spec);
+        return r.then(function (m) {
           renderCache[job.key] = m;
         }, function (err) {
           prewarmError = String(err && err.message || err);
@@ -1235,7 +1777,7 @@
     comp.connect(ctx.destination);
 
     this.bus = {
-      amb: gainOf(ctx, 0.9),
+      amb: gainOf(ctx, AMB_BUS_GAIN),
       sfx: gainOf(ctx, 1.0),
       enemy: gainOf(ctx, 1.0),
       self: gainOf(ctx, 1.0)   /* 空間化しない自分の音（足音・呼吸・心拍） */
@@ -1614,6 +2156,15 @@
     this.dripT = 4.0;
     this.metalT = 12.0;
     this.duckT = 0;
+    /* P4.13 項目3: 追跡中の緊迫層と、至近距離の環境音ダッキング */
+    this.chaseNow = false;
+    this.tensionOn = false;
+    this.tensionLevel = 0;
+    this.tensionT = 0;
+    this.breathT = 0;
+    this.scrapeT = 2.6;
+    this.ambDuck = 0;
+    this._killTension();
     this._buzzLevel = 0;
     this._buzzPrev = 1;
     this.ambTarget = 0;
@@ -1638,6 +2189,10 @@
     this.panic();
     this._resetState();
     this._applyFxDom(true);
+    /* 声・字幕も製品初期状態へ（契約 §6「実行後は初期状態へ完全復帰」） */
+    if (ESCAPE.voice && ESCAPE.voice.reset) {
+      try { ESCAPE.voice.reset(); } catch (e) { this.errors++; }
+    }
   };
 
   /** 連続音を即座に止める（演出の中断・リセット・非表示時） */
@@ -1645,6 +2200,20 @@
     if (this.amb) { this.amb.out.gain.value = 0; }
     if (this.buzz) { this.buzz.out.gain.value = 0; }
     if (this.breath) { this.breath.out.gain.value = 0; }
+    this._killTension();
+    if (this.bus && this.bus.amb) this.bus.amb.gain.value = AMB_BUS_GAIN;
+    this.ambDuck = 0;
+  };
+
+  /** 緊迫層のノードを即座に落とす（追跡解除・リセット・非表示時） */
+  Engine.prototype._killTension = function () {
+    var t = this._ten;
+    this._ten = null;
+    this.tensionLevel = 0;
+    this.tensionOn = false;
+    if (!t) return;
+    try { t.out.gain.cancelScheduledValues(0); t.out.gain.value = 0; } catch (e) { /* 停止済み */ }
+    try { t.out.disconnect(); } catch (e2) { /* 既に外れている */ }
   };
 
   Engine.prototype.attach = function (game) {
@@ -1752,7 +2321,12 @@
     this._stepFootsteps(dt, quiet || locker, col, row);
     this._stepBreath(dt, inBlack);
     this._stepEnemy(dt, quiet);
+    this._stepTension(dt, quiet);
     this._stepFx(dt, quiet, jail);
+    /* P4.13 項目4: 声＋字幕（js/voice.js）。音の予約はこの Engine 経由で行う */
+    if (ESCAPE.voice && ESCAPE.voice.step) {
+      try { ESCAPE.voice.step(dt); } catch (e) { this.errors++; }
+    }
   };
 
   /* 環境ドローン（区画別・漆黒区画で絞る） */
@@ -1766,6 +2340,12 @@
     if (inBlack) scale *= 0.16;                 /* 漆黒区画: 環境音を絞って呼吸だけにする */
     if (quiet) scale *= 0.35;
     if (this.duckT > 0) scale *= 0.25;
+    /* P4.13 項目3: 至近距離のダッキング。バス全体（環境の単発音も含む）を少し下げる */
+    this.ambDuck = lerp(this.ambDuck, this._duckTarget || 0, 1 - Math.exp(-4.0 * dt));
+    if (this.ambDuck < 1e-4) this.ambDuck = 0;
+    if (this.bus && this.bus.amb) {
+      this.bus.amb.gain.value = AMB_BUS_GAIN * (1 - HB_DUCK_AMOUNT * this.ambDuck);
+    }
     /* 「鳴らすべき音量」は出力可否と分けて持つ（未解錠・テスト中でも判定を検証できる） */
     this.ambRegion = rid;
     this.ambTarget = t.g * scale;
@@ -1953,7 +2533,15 @@
       }
       if (i === 0) { this.dragAcc = st.dragAcc; this.moanT = st.moanT; this.jointT = st.jointT; }
     }
-    if (quiet || nd === Infinity) { this.hbT = 0; this.hbDist = Infinity; return; }
+    /* P4.13 項目3: 追跡中かどうかは緊迫層の駆動に使う（個体を問わず1体でも追跡中なら鳴らす） */
+    var anyChase = false;
+    for (var ci = 0; ci < list.length; ci++) {
+      if (list[ci] && list[ci].state === 'chase' && list[ci].enemy) anyChase = true;
+    }
+    this.chaseNow = !quiet && anyChase;
+    if (quiet || nd === Infinity) { this.hbT = 0; this.hbDist = Infinity; this._duckTarget = 0; return; }
+    /* P4.13 項目3: 5m以内は環境音バスをわずかにダッキング（鼓動に場所を空ける） */
+    this._duckTarget = clamp((HB_DUCK_DIST + 1 - nd) / 2.0, 0, 1);
 
     /* 心拍（契約 P4.12 項目5「敵との距離で強まる」）。
        追跡中に限らず HB_START(20m) 以内で鳴り始め、近いほど速く・大きい。
@@ -1969,11 +2557,77 @@
       if (this.hbT >= period) {
         this.hbT -= period;
         if (this.hbT > period) this.hbT = 0;    /* 大きな dt で溜まりすぎない */
-        this.play('heartbeat', { level: hb.level, bus: 'self', priority: nearChase ? 1 : 0 });
+        this.play('heartbeat', { level: hb.level, near: hb.near, bus: 'self', priority: nearChase ? 1 : 0 });
       }
     } else {
       this.hbT = 0;
     }
+  };
+
+  /* ================================================================
+   * P4.13 項目3「追跡中は緊迫層を常時鳴らす」（契約 §4）
+   *
+   *   終わりなく上昇する不協和の持続音（VOICES.tension）＋自分の荒い呼吸＋
+   *   2〜4秒間隔で不規則に入る金属の擦過スティンガー。
+   *   追跡が解けるまで緩めない＝レベルは追跡中ずっと 1 に張り付く。
+   *   解除時は既存の chaseRelease（event('lose')）で抜く分だけ減衰させる。
+   *
+   *   持続音は TEN_CYCLE の整数倍のチャンクで作り、切れる前に同じ位相から
+   *   継ぎ足す（シェパードの回り込みが自己写像なので継ぎ目が聞こえない）。
+   * ============================================================== */
+  Engine.prototype._stepTension = function (dt, quiet) {
+    var on = !!this.chaseNow && !quiet;
+    this.tensionOn = on;
+    /* 追跡中は緩めない（立ち上がりだけ滑らかに）。
+       解除後は chaseRelease（1.7秒）と同じ尺で直線的に抜く＝余韻が残り続けない */
+    if (on) {
+      this.tensionLevel = lerp(this.tensionLevel, 1, 1 - Math.exp(-1.5 * dt));
+    } else {
+      this.tensionLevel = Math.max(0, this.tensionLevel - dt / TEN_REL);
+    }
+    this.tensionT = on ? this.tensionT + dt : 0;
+
+    if (on) {
+      /* 自分の荒い呼吸（走っていなくても追跡中は上がった息のまま） */
+      this.breathT -= dt;
+      if (this.breathT <= 0) {
+        this.breathT = 1.05 + this._rand() * 0.45;
+        this.play('raggedBreath', { bus: 'self', gain: 0.62, r: this._rand() });
+      }
+      /* 金属の擦過（2〜4秒の不規則な間隔・無定位） */
+      this.scrapeT -= dt;
+      if (this.scrapeT <= 0) {
+        this.scrapeT = 2.0 + this._rand() * 2.0;
+        this.play('metalScrape', { bus: 'sfx', gain: 0.52, r: this._rand() });
+      }
+    } else {
+      this.breathT = 0;
+      this.scrapeT = 2.6;
+    }
+
+    var ctx = this.ctxLive();
+    if (!ctx) { if (this._ten) this._killTension(); return; }
+    if (this.tensionLevel <= 0 && !on) { if (this._ten) this._killTension(); return; }
+
+    /* 持続音のチャンクを用意・継ぎ足す（切れる TEN_ARM 秒前に次を重ねる） */
+    if (on && !this._ten) {
+      var out = gainOf(ctx, 0);
+      out.connect(this.bus.self);
+      this._ten = { out: out, next: -1, elapsed: 0 };
+    }
+    var T = this._ten;
+    if (!T) return;
+    if (on && ctx.currentTime >= T.next - TEN_ARM) {
+      var first = (T.next < 0);
+      var start = first ? (ctx.currentTime + 0.02) : T.next;
+      try {
+        var r = scheduleTensionChunk(ctx, T.out, start, T.elapsed, first);
+        T.next = r.next;
+        T.elapsed = r.elapsed;
+      } catch (e) { this.errors++; }
+    }
+    T.out.gain.value = TEN_MIX * this.tensionLevel;
+    if (!on && this.tensionLevel <= 0) this._killTension();
   };
 
   /* 恐怖演出（DOMオーバーレイ＋カメラ揺れ。ポストプロセス不要） */
@@ -2095,6 +2749,7 @@
     MAX_VOICES: MAX_VOICES,
     STORE_KEY: STORE_KEY,
     render: renderVoice,
+    renderBuild: renderBuild,
     metricsOf: metricsOf,
     attenuationFor: attenuationFor,
     lowpassFor: lowpassFor,
@@ -2106,6 +2761,14 @@
     HB_START: HB_START, HB_FULL: HB_FULL,
     HB_BPM_MIN: HB_BPM_MIN, HB_BPM_MAX: HB_BPM_MAX,
     HB_LEVEL_MIN: HB_LEVEL_MIN, HB_LEVEL_MAX: HB_LEVEL_MAX, HB_LEVEL_CAP: HB_LEVEL_CAP,
+    /* P4.13 項目3: 緊迫層・ダッキング（機械テストが直接見る） */
+    TEN_CYCLE: TEN_CYCLE, TEN_CHUNK: TEN_CHUNK, TEN_MIX: TEN_MIX, TEN_RISE: TEN_RISE,
+    TEN_XF: TEN_XF, TEN_HOP: TEN_HOP, TEN_OCT: TEN_OCT,
+    scheduleTensionChunk: scheduleTensionChunk,
+    HB_DUCK_DIST: HB_DUCK_DIST, HB_DUCK_AMOUNT: HB_DUCK_AMOUNT, AMB_BUS_GAIN: AMB_BUS_GAIN,
+    envelopePeaks: envelopePeaks,
+    centroidSeries: centroidSeries,
+    lowRatioIn: lowRatioIn,
     SHRIEK_MAX_DIST: SHRIEK_MAX_DIST,
     SHRIEK_ATTEN_FLOOR: SHRIEK_ATTEN_FLOOR,
     ATTEN_MAX: ATTEN_MAX,
@@ -2186,6 +2849,162 @@
   } else {
     install();
   }
+
+  /* ================================================================
+   * P4.13 項目3 機械テスト（契約 §4「鼓動と追跡音の強化」／§6）
+   *   test.js はメイン/レーンBの領域なので、他モジュールと同じ流儀で
+   *   ESCAPE.__extraSuites へ積む。署名は test.js の suites と同じ (t, g)。
+   * ============================================================== */
+  ESCAPE.__extraSuites = ESCAPE.__extraSuites || [];
+
+  /** 鼓動の音色と数値（二拍・低域主体・音量上限・クリップ禁止） */
+  function testP413Heartbeat(t, g) {
+    var A = ESCAPE.Audio, c = A.cache;
+    t.near(A.HB_LEVEL_CAP, 1.15 * 1.5, 1e-9,
+      'P4.13 項目3: 鼓動の上限が旧上限の1.5倍（契約）', A.HB_LEVEL_CAP);
+    t.ok(A.heartbeatFor(5, false).near >= 1 - 1e-9,
+      'P4.13 項目3: 5mで「胸に響く厚み」が最大', A.heartbeatFor(5, false).near.toFixed(3));
+    t.ok(A.heartbeatFor(20, false).near <= 1e-9,
+      'P4.13 項目3: 20mでは厚みなし（微弱な鼓動）');
+    t.ok(A.heartbeatFor(5, true).level <= A.HB_LEVEL_CAP + 1e-9,
+      'P4.13 項目3: 追跡中の至近でも上限で頭打ち', A.heartbeatFor(5, true).level.toFixed(3));
+
+    if (!t.ok(!!(c.hb_d5 && c.hb_d20 && c.hb_max), 'P4.13 項目3: 鼓動のレンダが揃っている',
+      A.prewarmError() || '')) return;
+    t.ok(c.hb_d5.rms >= c.hb_d20.rms * 3,
+      'P4.13 項目3: 5mのRMSが20mの3倍以上（契約）',
+      c.hb_d5.rms.toFixed(5) + ' vs ' + (c.hb_d20.rms * 3).toFixed(5));
+    t.ok(c.hb_d5.lowRatio >= 0.5,
+      'P4.13 項目3: 第1音は低域(<120Hz)が全体の50%以上（契約）',
+      (c.hb_d5.lowRatio * 100).toFixed(1) + '%');
+    t.ok(c.hb_max.lowRatio >= 0.5,
+      'P4.13 項目3: 最大音量でも第1音は低域主体', (c.hb_max.lowRatio * 100).toFixed(1) + '%');
+    t.ok(c.hb_max.peak < 0.98 && !c.hb_max.clipped,
+      'P4.13 項目3: 最大音量でもクリップしない（peak<0.98）', c.hb_max.peak.toFixed(4));
+    t.ok(c.hb_d5.peaks === 2,
+      'P4.13 項目3: 鼓動は二拍（ドッ→クン）', c.hb_d5.peaks + '拍 ' +
+      (c.hb_d5.peakTimes || []).map(function (v) { return v.toFixed(3); }).join('/'));
+    if (c.hb_d5.peakTimes && c.hb_d5.peakTimes.length === 2) {
+      var gap = c.hb_d5.peakTimes[1] - c.hb_d5.peakTimes[0];
+      t.ok(gap >= 0.115 && gap <= 0.170,
+        'P4.13 項目3: 第2音は120〜160ms後（契約）', (gap * 1000).toFixed(0) + 'ms');
+    }
+  }
+
+  /** 緊迫層（終わりなき上昇・呼吸・金属の擦過）の数値 */
+  function testP413Tension(t, g) {
+    var A = ESCAPE.Audio, c = A.cache;
+    if (!t.ok(!!(c.tension8 && c.ragged && c.scrape), 'P4.13 項目3: 緊迫層のレンダが揃っている',
+      A.prewarmError() || '')) return;
+    var cs = c.tension8.centroids || [];
+    t.ok(cs.length >= 8, 'P4.13 項目3: 緊迫層を8秒ぶん解析している', cs.length + '区間');
+    var mono = true, worst = 0;
+    for (var i = 1; i < cs.length; i++) {
+      if (!(cs[i] > cs[i - 1])) mono = false;
+      var up = cs[i] / Math.max(1, cs[i - 1]);
+      if (worst === 0 || up < worst) worst = up;
+    }
+    t.ok(mono, 'P4.13 項目3: スペクトル重心が1秒刻みで単調上昇（終わりなく上がる層）',
+      cs.map(function (v) { return v.toFixed(0); }).join('→'));
+    t.ok(cs.length > 1 && cs[cs.length - 1] > cs[0] * 1.15,
+      'P4.13 項目3: 8秒で重心がはっきり上がる',
+      (cs.length ? (cs[cs.length - 1] / Math.max(1, cs[0])).toFixed(2) : '—') + '倍');
+    t.ok(c.tension8.peak < 0.98 && !c.tension8.clipped,
+      'P4.13 項目3: 緊迫層がクリップしない（peak<0.98）', c.tension8.peak.toFixed(4));
+    t.ok(c.tension8.rms > 0.02, 'P4.13 項目3: 緊迫層が実体のある音量で鳴る', c.tension8.rms.toFixed(4));
+    t.ok(c.tension8.activeRatio > 0.95,
+      'P4.13 項目3: 緊迫層は途切れず持続する', c.tension8.activeRatio.toFixed(3));
+    t.ok(c.ragged.peak < 0.98 && !c.ragged.clipped && c.ragged.rms > 0.008,
+      'P4.13 項目3: 荒い呼吸が鳴りクリップしない',
+      'rms=' + c.ragged.rms.toFixed(4) + ' peak=' + c.ragged.peak.toFixed(4));
+    t.ok(c.scrape.peak < 0.98 && !c.scrape.clipped && c.scrape.rms > 0.008,
+      'P4.13 項目3: 金属の擦過が鳴りクリップしない',
+      'rms=' + c.scrape.rms.toFixed(4) + ' peak=' + c.scrape.peak.toFixed(4));
+    /* 継ぎ目: シェパードの回り込みが自己写像なので、チャンクを継ぎ足しても段差が出ない */
+    var sm = c.tension_seam;
+    if (t.ok(!!sm, 'P4.13 項目3: 継ぎ足し（2チャンク）のレンダがある')) {
+      t.ok(sm.stepAt !== undefined && sm.stepRef > 0 && sm.stepAt <= sm.stepRef * 1.6,
+        'P4.13 項目3: チャンクの継ぎ目に段差が出ない（ループ継ぎ目を聞かせない）',
+        '継ぎ目=' + (sm.stepAt || 0).toFixed(5) + ' / 平常時=' + (sm.stepRef || 0).toFixed(5));
+      var cs2 = sm.centroids || [];
+      var mono2 = cs2.length >= 10;
+      for (var q = 1; q < cs2.length; q++) if (!(cs2[q] > cs2[q - 1])) mono2 = false;
+      t.ok(mono2, 'P4.13 項目3: 継ぎ足した先でも重心は上がり続ける（終わりがない）',
+        cs2.map(function (v) { return v.toFixed(0); }).join('→'));
+      t.ok(sm.peak < 0.98 && !sm.clipped,
+        'P4.13 項目3: 継ぎ足してもクリップしない', (sm.peak || 0).toFixed(4));
+    }
+
+    /* バランス: 緊迫層は実際の混ぜ量（TEN_MIX）で他の層を埋めない */
+    if (c.shriek && c.enemyClaw && c.hb_d5) {
+      var mix = c.tension8.rms * A.TEN_MIX;
+      t.ok(mix < c.shriek.rms, 'P4.13 項目3: 緊迫層が絶叫を埋めない',
+        mix.toFixed(4) + ' < ' + c.shriek.rms.toFixed(4));
+      t.ok(mix < c.hb_d5.rms, 'P4.13 項目3: 緊迫層が至近の鼓動を埋めない',
+        mix.toFixed(4) + ' < ' + c.hb_d5.rms.toFixed(4));
+      t.ok(mix < c.enemyClaw.rms * 1.6, 'P4.13 項目3: 緊迫層が敵の爪音を埋めない',
+        mix.toFixed(4) + ' vs ' + c.enemyClaw.rms.toFixed(4));
+    }
+  }
+
+  /** 実プレイ: 追跡中は緊迫層が鳴り続け、解除で抜ける。5m以内で環境音がダッキングする */
+  function testP413TensionInPlay(t, g) {
+    g.reset();
+    var au = ESCAPE.audio;
+    if (!t.ok(!!au, 'P4.13 項目3: 音響エンジンがある')) return;
+    var was = au.testMode;
+    au.testMode = true;
+    var ai = g.ai, other = (g.ais && g.ais.list[1]) || null;
+    if (other) other.manual = true;
+    ai.manual = true;                   /* 状態機械を止めて追跡状態だけを作る */
+    ai.state = 'chase';
+    var b0 = au.fired.raggedBreath || 0, s0 = au.fired.metalScrape || 0;
+    for (var i = 0; i < 360; i++) { ai.state = 'chase'; g.stepFrame(ESCAPE.FIXED_DT); }
+    t.ok(au.chaseNow === true, 'P4.13 項目3: 追跡中を検出している');
+    t.ok(au.tensionOn === true && au.tensionLevel > 0.9,
+      'P4.13 項目3: 追跡中は緊迫層が緩まない', au.tensionLevel.toFixed(3));
+    t.ok((au.fired.raggedBreath || 0) - b0 >= 3,
+      'P4.13 項目3: 追跡中は荒い呼吸が繰り返し鳴る', ((au.fired.raggedBreath || 0) - b0) + '回');
+    var scr = (au.fired.metalScrape || 0) - s0;
+    t.ok(scr >= 1 && scr <= 4,
+      'P4.13 項目3: 金属の擦過が2〜4秒間隔で入る（6秒で1〜4回）', scr + '回');
+    /* 追跡解除 → 緊迫層が抜ける */
+    ai.state = 'patrol';
+    for (var j = 0; j < 240; j++) { ai.state = 'patrol'; g.stepFrame(ESCAPE.FIXED_DT); }
+    t.ok(au.tensionOn === false && au.tensionLevel === 0,
+      'P4.13 項目3: 追跡が解けると緊迫層が抜ける', au.tensionLevel.toFixed(4));
+
+    /* 5m以内で環境音バスがわずかにダッキングする */
+    var cells = g.map.walkableCells(), e = ai.enemy, spot = null;
+    for (var k = 0; k < cells.length && !spot; k++) {
+      var cc = g.map.cellCenter(cells[k].col, cells[k].row);
+      var d = Math.hypot(cc.x - e.x, cc.z - e.z);
+      if (d >= 3.0 && d <= 4.5) spot = cc;
+    }
+    if (t.ok(!!spot, 'P4.13 項目3: 敵から3〜4.5mの立ち位置がある')) {
+      for (var m = 0; m < 90; m++) {
+        g.player.x = spot.x; g.player.z = spot.z;
+        g.stepFrame(ESCAPE.FIXED_DT);
+      }
+      t.ok(au.ambDuck > 0.5, 'P4.13 項目3: 5m以内で環境音がダッキングする', au.ambDuck.toFixed(3));
+      t.ok(au.ambDuck <= 1.0 + 1e-9 && A_DUCK_OK(au),
+        'P4.13 項目3: ダッキングはわずか（環境音バスは基準の7割以上を保つ）',
+        au.bus ? (au.bus.amb.gain.value / 0.9).toFixed(3) : '未解錠');
+    }
+    ai.manual = false;
+    if (other) other.manual = false;
+    au.testMode = was;
+    g.reset();
+    t.ok(au.ambDuck === 0, 'P4.13 項目3: 復帰でダッキングが戻る', au.ambDuck.toFixed(3));
+  }
+
+  /** ダッキング量が「わずか」に収まっているか（未解錠なら判定を通す） */
+  function A_DUCK_OK(au) {
+    if (!au.bus || !au.bus.amb) return true;
+    return au.bus.amb.gain.value >= AMB_BUS_GAIN * 0.70 - 1e-9;
+  }
+
+  ESCAPE.__extraSuites.push(testP413Heartbeat, testP413Tension, testP413TensionInPlay);
 
   /* 検証フック（機械テスト・E2E用） */
   global.__audioDebug = {

@@ -98,6 +98,20 @@
     opacity:0; visibility:hidden; pointer-events:none;
   }
   #trap-hint.show { opacity:1; visibility:visible; }
+  /* --- P4.13 項目4: 音を出した時の「声」の字幕（正文 docs/notes.md「P4.13追加（声・軌跡）」）。
+         下部中央・既存HUDの書体。罠案内（#trap-hint）の1行上に置き、上の層に重ねる
+         ＝両方出ていても両方読める。声の0.3秒後に出て2.5秒で消える（js/voice.js が制御）。 --- */
+  #voice-sub {
+    position:absolute; left:50%; bottom:132px; transform:translateX(-50%); z-index:6;
+    font-size:15px; letter-spacing:.16em; white-space:nowrap;
+    padding:4px 16px; border-radius:2px;
+    color:#e9eef5; background:rgba(6,8,12,.52);
+    border:1px solid rgba(190,205,225,.20);
+    text-shadow:0 0 12px rgba(150,190,255,.45), 0 1px 5px rgba(0,0,0,.95);
+    opacity:0; visibility:hidden; pointer-events:none;
+    transition:opacity .28s ease;
+  }
+  #voice-sub.show { opacity:1; visibility:visible; }
   /* 牢送りの暗転。opacity はゲーム内時刻から毎フレーム書く（CSS遷移に頼らない） */
   #blackout {
     position:fixed; inset:0; z-index:40; background:#000; opacity:0; pointer-events:none;
@@ -242,6 +256,7 @@
     <div id="rope-hud"></div>
     <div id="prompt"></div>
     <div id="trap-hint"></div>
+    <div id="voice-sub"></div>
     <div id="hint">WASD 移動 / Shift 走る / Ctrl しゃがむ / E 調べる / 画面クリックで視点</div>
     <div id="stick-base"><div id="stick-knob"></div></div>
     <!-- P4.8: fog of war ミニマップ。タップで全画面（もう一度タップで閉じる） -->
@@ -317,6 +332,7 @@
   <script src="js/traps.js"></script>
   <script src="js/progress.js"></script>
   <script src="js/audio.js"></script>
+  <script src="js/voice.js"></script>
   <script src="js/test.js"></script>
 </body>
 </html>
