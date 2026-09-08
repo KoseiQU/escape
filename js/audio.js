@@ -134,6 +134,135 @@
     try { node.stop(t0 + dur); } catch (e) { /* stop 非対応 */ }
   }
 
+  /* ================================================================
+   * P4.15「声の差し替え」で足した小物（契約 DESIGN.md「P4.15 声の差し替え」）
+   *   shaper / widen / reverb … 歪み・左右の広がり・生成した残響（音源ファイルは使わない）
+   *   walk / curveTo          … 非周期の揺れ（要件1）と、折れ線でない包絡（要件6）
+   *   voicePair / driftFormants … 二重の声とフォルマントの漂い（要件2）
+   * ============================================================== */
+
+  /** 歪み（声を「人だったもの」に寄せる）。k が大きいほど潰れる */
+  function shaper(ctx, k) {
+    var ws = ctx.createWaveShaper();
+    var n = 1024, c = new Float32Array(n), d = Math.tanh(k);
+    for (var i = 0; i < n; i++) {
+      var x = (i * 2) / (n - 1) - 1;
+      c[i] = Math.tanh(k * x) / d;
+    }
+    ws.curve = c;
+    try { ws.oversample = '4x'; } catch (e) { /* 非対応環境はそのまま */ }
+    return ws;
+  }
+
+  /** 定位。StereoPanner が無い環境では素通しの gain を返す */
+  function panOf(ctx, v) {
+    if (!ctx.createStereoPanner) return gainOf(ctx, 1);
+    var p = ctx.createStereoPanner();
+    p.pan.value = clamp(v, -1, 1);
+    return p;
+  }
+
+  /** ごく短い時間差で左右に開く（頭内定位を避ける）。入力ノードを返す */
+  function widen(ctx, dest, spread, lagMs) {
+    var inp = gainOf(ctx, 1);
+    if (!ctx.createStereoPanner) { inp.connect(dest); return inp; }
+    var a = panOf(ctx, -spread);
+    var b = panOf(ctx, spread);
+    var dl = ctx.createDelay(0.05);
+    dl.delayTime.value = (lagMs === undefined ? 6 : lagMs) / 1000;
+    var bg = gainOf(ctx, 0.82);
+    inp.connect(a); a.connect(dest);
+    inp.connect(dl); dl.connect(bg); bg.connect(b); b.connect(dest);
+    return inp;
+  }
+
+  /** 生成した遅延ループの残響（音源ファイルは使わない＝$0）。送り先のノードを返す */
+  function reverb(ctx, dest, taps, fb, lpHz, wetGain) {
+    var send = gainOf(ctx, 1);
+    var wet = gainOf(ctx, wetGain);
+    for (var i = 0; i < taps.length; i++) {
+      var dl = ctx.createDelay(0.6);
+      dl.delayTime.value = taps[i];
+      var lp = bq(ctx, 'lowpass', lpHz, 0.8);
+      var g = gainOf(ctx, fb);
+      send.connect(dl); dl.connect(lp); lp.connect(g); g.connect(dl);
+      lp.connect(wet);
+    }
+    wet.connect(dest);
+    return send;
+  }
+
+  function smooth01(u) { return u <= 0 ? 0 : (u >= 1 ? 1 : u * u * (3 - 2 * u)); }
+  function centsMul(c) { return Math.pow(2, c / 1200); }
+
+  /**
+   * param に「基準カーブ base(u) × ランダムウォークの揺れ」を書く（要件1）。
+   * 正弦のビブラート／トレモロは使わない＝どの周波数にも山が立たない。
+   * amt は揺れの深さ（比率）、rLo..rHi は揺れの速さ(Hz)の範囲。
+   */
+  function walk(param, rnd, t0, dur, base, amt, rLo, rHi) {
+    var t = 0, w = 0, guard = 0;
+    param.setValueAtTime(Math.max(base(0), 1e-3), t0);
+    while (t < dur - 1e-4 && guard++ < 600) {
+      var rate = rLo + rnd() * (rHi - rLo);
+      var dt = Math.min(0.35 / rate, dur - t);
+      if (dt < 1e-4) break;
+      t += dt;
+      /* 前の値を半分だけ引き継ぐ＝周期を持たないが暴れもしない */
+      w = w * 0.45 + (rnd() * 2 - 1) * amt;
+      param.exponentialRampToValueAtTime(Math.max(base(t / dur) * (1 + w), 1e-3), t0 + t);
+    }
+  }
+
+  /** 折れ線にしない包絡（要件6）。fn(u) を n 段の指数ランプで描く */
+  function curveTo(param, t0, dur, fn, steps) {
+    var n = steps || 40, i;
+    param.setValueAtTime(Math.max(fn(0), 1e-4), t0);
+    for (i = 1; i <= n; i++) {
+      param.exponentialRampToValueAtTime(Math.max(fn(i / n), 1e-4), t0 + dur * (i / n));
+    }
+  }
+
+  /**
+   * 主声＋副声（±cent 離調・lag 遅れ）＝要件2「声を1本で鳴らさない」。
+   * baseFn(u) は 0..1 の位置から基音(Hz)を返す。戻り値は歪ませた波形の出口。
+   */
+  function voicePair(ctx, t0, dur, baseFn, wob, wLo, wHi, cent, lag, subG, drive, shape, seed) {
+    var sum = gainOf(ctx, 1);
+    var o1 = osc(ctx, 'sawtooth', baseFn(0));
+    walk(o1.frequency, lcg(seed || 1), t0, dur, baseFn, wob, wLo, wHi);
+    o1.connect(sum);
+    startStop(o1, t0, dur + 0.05);
+
+    var m = centsMul(cent);
+    var o2 = osc(ctx, 'sawtooth', baseFn(0) * m);
+    walk(o2.frequency, lcg(((seed + 12345) >>> 0) || 1), t0, dur,
+      function (u) { return baseFn(u) * m; }, wob, wLo, wHi);
+    var dl = ctx.createDelay(0.05);
+    dl.delayTime.value = lag;
+    var sg = gainOf(ctx, subG);
+    o2.connect(dl); dl.connect(sg); sg.connect(sum);
+    startStop(o2, t0, dur + 0.05);
+
+    var d = gainOf(ctx, drive);
+    var ws = shaper(ctx, shape);
+    sum.connect(d); d.connect(ws);
+    return ws;
+  }
+
+  /** フォルマント3本。中心は a->b へ動きつつ非周期に漂う（要件2の後半） */
+  function driftFormants(ctx, src, dst, t0, dur, specs, drift, seed) {
+    for (var i = 0; i < specs.length; i++) {
+      var s = specs[i];
+      var b = bq(ctx, 'bandpass', s.a, s.q);
+      walk(b.frequency, lcg(((seed + i * 7919) >>> 0) || 1), t0, dur, (function (sp) {
+        return function (u) { return sp.a + (sp.b - sp.a) * smooth01(Math.min(u / 0.62, 1)); };
+      }(s)), drift, 0.6, 2.0);
+      var g = gainOf(ctx, s.g);
+      src.connect(b); b.connect(g); g.connect(dst);
+    }
+  }
+
   /* ---- P4.13 項目3: 追跡中の緊迫層（シェパード式の終わりなき上昇） ---- */
   var TEN_CYCLE = 6.0;          /* 1オクターブ上がりきる周期(s)。回り込みはここで起きる */
   var TEN_OCT = 9;              /* 重ねるオクターブ数。釣鐘の裾が両端で完全に0になる幅を取る */
@@ -152,14 +281,12 @@
   var TEN_REL = 1.7;               /* 追跡解除で抜けきるまで(s)。chaseRelease と同じ尺 */
   var TEN_MIX = 0.28;              /* 他の層（絶叫・爪音・鼓動）を埋めない混ぜ量 */
 
-  /* ---- P4.13 項目4: 囁き声 ---- */
-  var WH_SYL = 0.19;            /* 1拍の間隔(s) */
-  var WH_ON = 0.132;            /* 1拍が鳴っている長さ(s)。残りは無音の切れ目 */
-  var WH_ATK = 0.042;
-  var WH_AMP = 0.30;
-  var WH_LAG = 0.006;           /* 左右の時間差(s)＝無定位 */
-  var WH_FORMANT = [2200, 3000, 1800, 2600, 3400, 2000, 2800];  /* 1.5〜6kHz の中心 */
-  var WH_REV = [0.041, 0.057, 0.073];   /* 残響の遅延ループ(s) */
+  /* ---- P4.15 項目: すすり泣き→絶叫（P4.13 項目4の「囁き」は失効） ---- */
+  var SOB_ONSET = 1.20;         /* すすり泣き→絶叫に変わる時刻(s)。字幕はここに合わせる（契約） */
+  var SOB_SCR = 1.16;           /* 絶叫の長さ(s) */
+  var SOB_WET = 0.24;           /* 残響量（05b の 0.28 から製品用に薄く） */
+  var SOB_G = 0.85;             /* すすり泣きの音量（コンプ後も静→爆を残すため下げる） */
+  var SOB_TRIM = 0.963;         /* レンダのピークを 0.885 に載せる較正値（実測 0.919 から） */
 
   /* ================================================================
    * VOICES — 音色定義
@@ -694,99 +821,193 @@
       return dur + 0.25;
     },
 
-    /* ================================================================
-     * P4.13 項目4「音を鳴らすと声が聞こえる」（契約 §4）
+    /* ------------------------------------------------------------
+     * 案5改（P4.15）: すすり泣き → 絶叫
      *
-     *   帯域整形ノイズ（1.5〜6kHz の中心＋弱い低域の息）を、セリフの拍数に
-     *   合わせた振幅包絡で区切る＝言葉は聞き取れないが「囁いている」と分かる。
-     *   無定位: 左右で数ms ずらし・僅かにデチューンして像を結ばせない。
-     *   残響は長め（生成した遅延ループ。音声ファイルは使わない＝$0）。
-     *   小さく始まって近づく: 拍ごとに山を大きく、帯域も開いていく。
+     * 契約 DESIGN.md「P4.15 声の差し替え」の6要件をそのまま構造にしてある。
+     *   1 非周期の揺れ … 基音・フォルマントの揺れはすべて walk（ランダムウォーク）。
+     *                    正弦のビブラート／トレモロは1つも使わない。
+     *   2 二重の声     … 主声＋（±cent 離調・lag 遅れ）の副声。フォルマントの
+     *                    中心も時間とともに漂う。
+     *   3 息とざらつき … 声の振幅で変調した帯域ノイズ（喉の擦れ）＋絶叫の頭で
+     *                    声帯が割れる短い倍音の乱れ。すすり泣きには不規則な吸気。
+     *   4 毎回違う     … 乱数は p.seed だけが決める。種が変われば波形が変わる。
+     *   5 空間         … 初期反射＋長いテールの残響を通す。絶叫はわずかに近づく。
+     *   6 曲線の包絡   … 音量・ピッチは curveTo / walk の曲線。折れ線を作らない。
      *
-     *   p.beats … 拍数（みーつけた=5／そこにいるのね=7／聞こえたよ=5）
-     *   p.dry   … true で残響なし（機械テストが山の数を数えるため）
-     * ============================================================== */
-    whisper: function (ctx, dest, t0, p) {
+     * 妥協点（契約で許諾済み）: 冒頭のしゃくり上げは「静→爆」を守るため小さく、
+     * 全体ピークの30%以下に収めてある（P4.15 では立ち上がり30ms要件を課さない）。
+     *
+     * 製品版（audit/voice-samples の 05b からの変更点）:
+     *   ・残響量 0.28 -> SOB_WET(0.24)。ゲーム側に環境ドローンが常時鳴っているぶん薄くする。
+     *   ・すすり泣き 1.0 -> SOB_G(0.85)。master の DynamicsCompressor（-18dB/5:1）が絶叫だけを
+     *     押し込むので、静側を下げて「静→爆」の差をコンプ後にも残す。
+     *   ・PK に SOB_TRIM を掛けてレンダのピークを 0.885（契約 0.85〜0.92）へ較正。
+     *   ・毎回の再生で p.seed が変わる（js/voice.js が渡す）＝同じ音が二度と完全一致しない。
+     *
+     * p: level, seed, onset(絶叫の開始=既定 SOB_ONSET), scream(絶叫の長さ),
+     *    wob/wobLo/wobHi(揺れ), cents/lag/subG(副声), grit(息とざらつき),
+     *    wet(残響量), sobG(すすり泣きの音量)
+     * ---------------------------------------------------------- */
+    sobScream: function (ctx, dest, t0, p) {
       var lv = (p.level === undefined) ? 1 : p.level;
-      var beats = Math.max(1, Math.round(p.beats || 5));
-      var r = (p.r === undefined) ? 0.5 : p.r;
-      var span = beats * WH_SYL;
+      var seed = (p.seed === undefined) ? 20260908 : ((p.seed >>> 0) || 1);
+      var SOB = (p.onset === undefined) ? SOB_ONSET : p.onset;   /* ここから絶叫（字幕もここ） */
+      var SCR = (p.scream === undefined) ? SOB_SCR : p.scream;
+      var wob = (p.wob === undefined) ? 0.025 : p.wob;
+      var wLo = (p.wobLo === undefined) ? 3.0 : p.wobLo;
+      var wHi = (p.wobHi === undefined) ? 7.0 : p.wobHi;
+      var cent = (p.cents === undefined) ? 6.5 : p.cents;
+      var lag = (p.lag === undefined) ? 0.013 : p.lag;
+      var subG = (p.subG === undefined) ? 0.50 : p.subG;
+      var grit = (p.grit === undefined) ? 1.0 : p.grit;
+      var wet = (p.wet === undefined) ? SOB_WET : p.wet;
+      var sobG = (p.sobG === undefined) ? SOB_G : p.sobG;
+      var PK = 0.62 * lv * SOB_TRIM;      /* 内部の基準振幅（SOB_TRIM がレンダのピーク較正） */
+      var rnd = lcg(seed);
+      var i;
 
-      /* 出口（残響へ送る手前） */
-      var out = gainOf(ctx, 1);
-      if (p.dry) {
-        out.connect(dest);
-      } else {
-        var dry = gainOf(ctx, 0.62);
-        out.connect(dry); dry.connect(dest);
-        /* 生成した遅延ループの残響（長め） */
-        var send = gainOf(ctx, 0.85);
-        out.connect(send);
-        var wet = gainOf(ctx, 0.50);
-        for (var d = 0; d < WH_REV.length; d++) {
-          var dl = ctx.createDelay(0.5);
-          dl.delayTime.value = WH_REV[d];
-          var lp = bq(ctx, 'lowpass', 2600, 0.8);
-          var fb = gainOf(ctx, 0.70);
-          send.connect(dl); dl.connect(lp); lp.connect(fb); fb.connect(dl);
-          lp.connect(wet);
+      /* ---- 出口: 乾き＋残響（施設の初期反射＋長めのテール） ---- */
+      var out = widen(ctx, dest, 0.34, 9);
+      var dry = gainOf(ctx, 0.90); dry.connect(out);
+      var early = reverb(ctx, dest, [0.0131, 0.0197, 0.0289], 0.30, 3400, wet * 0.55);
+      var tail = reverb(ctx, dest, [0.0713, 0.0931, 0.1277], 0.62, 1900, wet);
+
+      /* =========================================================
+       * すすり泣き（t0 .. t0+SOB）
+       *   遠く・こもって・小さい。ここが「静」。
+       * ======================================================= */
+      var sobBus = gainOf(ctx, sobG);
+      sobBus.connect(dry);
+      var sobSend = gainOf(ctx, 0.85);
+      sobBus.connect(sobSend); sobSend.connect(early); sobSend.connect(tail);
+      var sobLP = bq(ctx, 'lowpass', 2200, 0.7);   /* 少し遠い＝高域が落ちている */
+      sobLP.connect(sobBus);
+
+      /* 冒頭の小さなしゃくり上げ（ピークの30%以下） */
+      var gt = t0 + 0.015 + rnd() * 0.02;
+      var gn = noiseSrc(ctx, 0.85 + rnd() * 0.2);
+      chain([gn, bq(ctx, 'bandpass', 820 + rnd() * 260, 1.0),
+        hit(ctx, gt, 0.085 * PK, 0.018, 0.11), sobLP]);
+      startStop(gn, gt, 0.16);
+
+      /* しゃくり本体（4〜5回・間隔は不規則） */
+      var sobMix = gainOf(ctx, 1);
+      sobMix.connect(sobLP);
+      var breath = gainOf(ctx, 0.0001);
+      var bn = noiseSrc(ctx, 0.45 + rnd() * 0.2);
+      chain([bn, bq(ctx, 'lowpass', 760, 0.8), breath, sobLP]);
+      startStop(bn, t0, SOB + 0.10);
+
+      var ts = t0 + 0.20 + rnd() * 0.04;
+      var sobN = 0, sobSpans = [];
+      while (ts < t0 + SOB - 0.20 && sobN < 6) {
+        var len = 0.19 + rnd() * 0.07;
+        var f0 = 196 + rnd() * 54;
+        var amp = PK * 0.115 * (0.72 + 0.28 * ((ts - t0) / SOB));   /* 少しずつ近づく */
+        var sVoice = (function (ts2, len2, f02) {
+          return voicePair(ctx, ts2, len2 + 0.05, function (u) {
+            return f02 * (1 - 0.17 * smooth01(u));                  /* 尻下がりの泣き */
+          }, wob * 1.25, wLo, wHi, cent, lag, subG, 1.25, 1.7,
+          (seed + sobN * 7717) >>> 0);
+        }(ts, len, f0));
+        /* 鼻にかかった母音（低い F1・鼻腔の反共振） */
+        var ntc = bq(ctx, 'notch', 640 + rnd() * 120, 2.0);
+        sVoice.connect(ntc);
+        var sg = gainOf(ctx, 0.0001);
+        driftFormants(ctx, ntc, sg, ts, len + 0.05, [
+          { a: 300 + rnd() * 40, b: 268, q: 4.0, g: 1.00 },
+          { a: 1020 + rnd() * 80, b: 1120, q: 5.0, g: 0.42 },
+          { a: 2450, b: 2350, q: 6.0, g: 0.10 }
+        ], 0.02 + wob * 0.6, (seed + sobN * 131) >>> 0);
+        sg.connect(sobMix);
+        curveTo(sg.gain, ts, len, (function (a) {
+          return function (u) {
+            return a * (smooth01(Math.min(u / 0.22, 1)) * Math.pow(0.02, Math.max(0, u - 0.35) / 0.65) + 0.004);
+          };
+        }(amp)), 28);
+        /* 息（声の振幅で変調した低域ノイズ） */
+        curveTo(breath.gain, ts, len + 0.03, (function (a) {
+          return function (u) {
+            return a * 0.55 * grit * (smooth01(Math.min(u / 0.30, 1)) * (1 - smooth01(Math.max(0, u - 0.45) / 0.55)) + 0.006);
+          };
+        }(amp)), 20);
+        /* 不規則な吸気（しゃくり上げ）。半分くらいの確率で挟む */
+        if (rnd() < 0.62) {
+          var it = ts + len + 0.02 + rnd() * 0.05;
+          var inn = noiseSrc(ctx, 1.0 + rnd() * 0.5);
+          var ibp = bq(ctx, 'bandpass', 1150 + rnd() * 700, 1.4);
+          chain([inn, ibp, hit(ctx, it, PK * 0.055 * grit, 0.012, 0.055 + rnd() * 0.05), sobLP]);
+          startStop(inn, it, 0.14);
         }
-        wet.connect(dest);
+        sobSpans.push([ts, ts + len]);
+        ts += len + 0.055 + rnd() * 0.11;
+        sobN++;
       }
 
-      /* 左右2経路（時間差＋デチューン＝無定位） */
-      for (var side = 0; side < 2; side++) {
-        var sgn = side ? 1 : -1;
-        var tail = out;
-        if (ctx.createStereoPanner) {
-          var pan = ctx.createStereoPanner();
-          pan.pan.value = sgn * 0.88;
-          pan.connect(out);
-          tail = pan;
-        }
-        var lag = side ? WH_LAG : 0;             /* 片側だけ数ms 遅らせる */
-        var det = 1 + sgn * 0.018;               /* 僅かなデチューン */
+      /* =========================================================
+       * 絶叫（t0+SOB .. t0+SOB+SCR）
+       *   ここが「爆」。近づきながら裏返る。
+       * ======================================================= */
+      var st = t0 + SOB;
+      /* 遠近: 乾いた音が増え、残響が減る＝近づいてくる */
+      var scrNear = gainOf(ctx, 1);
+      curveTo(scrNear.gain, st, SCR, function (u) { return 0.80 + 0.20 * smooth01(Math.min(u / 0.45, 1)); }, 24);
+      scrNear.connect(dry);
+      var scrSend = gainOf(ctx, 1);
+      curveTo(scrSend.gain, st, SCR, function (u) { return 0.95 - 0.42 * smooth01(u); }, 20);
+      scrSend.connect(early); scrSend.connect(tail);
+      var scrOpen = bq(ctx, 'lowpass', 3800, 0.7);   /* 近づくと開く */
+      curveTo(scrOpen.frequency, st, SCR, function (u) { return 3800 + 6200 * smooth01(Math.min(u / 0.40, 1)); }, 20);
+      scrOpen.connect(scrNear); scrOpen.connect(scrSend);
 
-        /* 主帯域（1.5〜6kHz。拍ごとに中心を変える＝子音の色） */
-        var n = noiseSrc(ctx, 0.95 * det);
-        var bp = bq(ctx, 'bandpass', WH_FORMANT[0] * det, 0.85);
-        var hp = bq(ctx, 'highpass', 1400, 0.7);
-        var g = ctx.createGain();
-        g.gain.setValueAtTime(0.0006, t0);
-        /* 息の擦れ（上の帯域。歯擦音の代わり） */
-        var n2 = noiseSrc(ctx, 1.3 * det);
-        var bp2 = bq(ctx, 'bandpass', 4900 * det, 1.5);
-        var g2 = ctx.createGain();
-        g2.gain.setValueAtTime(0.0006, t0);
+      /* 基音: 560 -> 1400 へ跳ね上がり、山を保ってから落ちる（S字） */
+      function scrF0(u) {
+        var f = 560 + 840 * (1 - Math.pow(1 - smooth01(Math.min(u / 0.24, 1)), 1.6));
+        if (u > 0.46) f -= 700 * smooth01((u - 0.46) / 0.54);
+        return f;
+      }
+      var sv = voicePair(ctx, st, SCR + 0.06, scrF0, wob, wLo, wHi, cent, lag, subG, 2.3, 3.3,
+        (seed * 2654435761) >>> 0);
+      var scrEnv = gainOf(ctx, 0.0001);
+      /* 母音 a -> i（中心は漂う） */
+      driftFormants(ctx, sv, scrEnv, st, SCR, [
+        { a: 820, b: 340, q: 5.2, g: 1.00 },
+        { a: 1240, b: 2420, q: 5.8, g: 0.78 },
+        { a: 2880, b: 3120, q: 6.6, g: 0.30 }
+      ], 0.02 + wob * 0.6, (seed + 4242) >>> 0);
+      var raw = gainOf(ctx, 0.18); sv.connect(raw); raw.connect(scrEnv);   /* 潰れた芯 */
+      scrEnv.connect(scrOpen);
 
-        for (var i = 0; i < beats; i++) {
-          var ts = t0 + lag + i * WH_SYL;
-          /* 小さく始まって近づく＝拍ごとに山が大きくなる */
-          var grow = 0.52 + 0.48 * (beats === 1 ? 1 : i / (beats - 1));
-          var pk = WH_AMP * lv * grow;
-          bp.frequency.setValueAtTime(WH_FORMANT[i % WH_FORMANT.length] * det, ts);
-          bp2.frequency.setValueAtTime((4300 + (i % 3) * 700) * det, ts);
-          g.gain.setValueAtTime(0.0006, ts);
-          g.gain.linearRampToValueAtTime(pk, ts + WH_ATK);
-          g.gain.linearRampToValueAtTime(pk * 0.72, ts + WH_ON * 0.72);
-          g.gain.linearRampToValueAtTime(0.0006, ts + WH_ON);
-          g2.gain.setValueAtTime(0.0006, ts);
-          g2.gain.linearRampToValueAtTime(pk * 0.42, ts + WH_ATK * 0.7);
-          g2.gain.linearRampToValueAtTime(0.0006, ts + WH_ON * 0.80);
-        }
-        chain([n, hp, bp, g, tail]);
-        startStop(n, t0, span + lag + 0.1);
-        chain([n2, bp2, g2, tail]);
-        startStop(n2, t0, span + lag + 0.1);
+      function scrAmp(u) {
+        var a = smooth01(Math.min(u / 0.055, 1));                 /* S字の立ち上がり */
+        var body = (u < 0.50) ? 1 : Math.pow(0.03, (u - 0.50) / 0.50);
+        return PK * (a * body + 0.002);
+      }
+      curveTo(scrEnv.gain, st, SCR, scrAmp, 56);
+
+      /* 喉の擦れ（声の振幅で変調した帯域ノイズ） */
+      var tn = noiseSrc(ctx, 1.0);
+      var tbp = bq(ctx, 'bandpass', 2600, 0.9);
+      curveTo(tbp.frequency, st, SCR, function (u) { return 2600 - 1400 * smooth01(u); }, 16);
+      var tg = gainOf(ctx, 0.0001);
+      curveTo(tg.gain, st, SCR, function (u) { return scrAmp(u) * 0.34 * grit; }, 40);
+      chain([tn, tbp, tg, scrOpen]);
+      startStop(tn, st, SCR + 0.08);
+
+      /* 声帯が割れる粗さ（頭 0.15 秒に短い倍音の乱れを不規則に置く） */
+      var nb = 3 + Math.round(grit * 2);
+      for (i = 0; i < nb; i++) {
+        var bt = st + 0.004 + rnd() * 0.145;
+        var bf = 620 + rnd() * 1600;
+        var bo = osc(ctx, 'sawtooth', bf);
+        bo.frequency.exponentialRampToValueAtTime(bf * (0.52 + rnd() * 0.55), bt + 0.06);
+        chain([bo, shaper(ctx, 3.0),
+          hit(ctx, bt, PK * 0.20 * grit, 0.004, 0.030 + rnd() * 0.045), scrOpen]);
+        startStop(bo, bt, 0.13);
       }
 
-      /* 弱い低域の息（耳のすぐ後ろの気配） */
-      var nb = noiseSrc(ctx, 0.4 + r * 0.15);
-      chain([nb, bq(ctx, 'lowpass', 320, 0.7),
-        swell(ctx, t0, 0.055 * lv, 0.16, span * 0.55, 0.42), out]);
-      startStop(nb, t0, span + 0.5);
-
-      return span + (p.dry ? 0.2 : 1.6);
+      return SOB + SCR + 1.30;   /* 残響のテールまで含めた実尺 */
     },
 
     /** 捕獲（耳元の音） */
@@ -1483,11 +1704,103 @@
     return mx;
   }
 
+  /* ---------------- P4.15 の数値判定（契約「P4.15 声の差し替え」） ----------------
+   *   絶叫の基音推移が直線でないこと（1秒内に3回以上の向き変化）を、
+   *   自己相関のピッチ追跡で数える。種違い2レンダの相関・区間RMS比もここ。
+   * ---------------------------------------------------------------- */
+
+  /** 自己相関（McLeod 風の正規化）で 1 点の基音(Hz)を測る。取れなければ 0 */
+  function f0At(d, sr, at, win, fmin, fmax) {
+    var n = Math.round(win * sr), s0 = Math.round(at * sr), i, l;
+    if (s0 < 0 || s0 + n + Math.ceil(sr / fmin) >= d.length) return 0;
+    var mean = 0;
+    for (i = 0; i < n; i++) mean += d[s0 + i];
+    mean /= n;
+    var lMin = Math.max(2, Math.floor(sr / fmax)), lMax = Math.ceil(sr / fmin);
+    var e0 = 0, v;
+    for (i = 0; i < n; i++) { v = d[s0 + i] - mean; e0 += v * v; }
+    if (e0 <= 1e-12) return 0;
+    var r = new Float64Array(lMax + 2);
+    for (l = lMin; l <= lMax; l++) {
+      var num = 0, e1 = 0;
+      for (i = 0; i < n; i++) {
+        var a = d[s0 + i] - mean, b = d[s0 + i + l] - mean;
+        num += a * b; e1 += b * b;
+      }
+      r[l] = (e1 > 1e-12) ? num / Math.sqrt(e0 * e1) : 0;
+    }
+    /* 山を拾い、最大の 0.86 倍を超える「最初の」山を採る（オクターブ誤りを避ける） */
+    var best = 0, peaks = [];
+    for (l = lMin + 1; l < lMax; l++) {
+      if (r[l] > r[l - 1] && r[l] >= r[l + 1]) { peaks.push(l); if (r[l] > best) best = r[l]; }
+    }
+    if (best < 0.30) return 0;
+    for (i = 0; i < peaks.length; i++) {
+      l = peaks[i];
+      if (r[l] >= best * 0.86) {
+        var y0 = r[l - 1], y1 = r[l], y2 = r[l + 1];
+        var den = (y0 - 2 * y1 + y2);
+        return sr / (l + (den !== 0 ? 0.5 * (y0 - y2) / den : 0));
+      }
+    }
+    return 0;
+  }
+
+  /** 基音の列（hop 秒刻み） */
+  function f0Series(d, sr, t0, t1, hop, fmin, fmax) {
+    var out = [];
+    for (var t = t0; t + 0.021 < t1; t += hop) out.push(f0At(d, sr, t, 0.021, fmin, fmax));
+    return out;
+  }
+
+  /** 向き（上り/下り）が変わった回数。dead は無視する相対幅（追跡のゆらぎ対策） */
+  function turnsOf(f, dead) {
+    var n = 0, dir = 0, ref = 0, i, v;
+    for (i = 0; i < f.length; i++) {
+      v = f[i];
+      if (!(v > 0)) continue;
+      if (!ref) { ref = v; continue; }
+      if (v > ref) {
+        if (dir < 0) { if (v > ref * (1 + dead)) { n++; dir = 1; ref = v; } }
+        else { dir = 1; ref = v; }
+      } else if (v < ref) {
+        if (dir > 0) { if (v < ref * (1 - dead)) { n++; dir = -1; ref = v; } }
+        else { dir = -1; ref = v; }
+      }
+    }
+    return n;
+  }
+
+  /** [t0,t1) の RMS */
+  function rmsIn(d, sr, t0, t1) {
+    var a = Math.max(0, Math.round(t0 * sr)), b = Math.min(d.length, Math.round(t1 * sr)), s = 0;
+    for (var i = a; i < b; i++) s += d[i] * d[i];
+    return (b > a) ? Math.sqrt(s / (b - a)) : 0;
+  }
+
+  /** [t0,t1) の絶対値の最大 */
+  function peakIn(d, sr, t0, t1) {
+    var a = Math.max(0, Math.round(t0 * sr)), b = Math.min(d.length, Math.round(t1 * sr)), m = 0;
+    for (var i = a; i < b; i++) { var v = d[i] < 0 ? -d[i] : d[i]; if (v > m) m = v; }
+    return m;
+  }
+
+  /** 2つの波形の相関（ラグ0の正規化相互相関） */
+  function corrOf(x, y) {
+    var n = Math.min(x.length, y.length), sxy = 0, sxx = 0, syy = 0, i;
+    for (i = 0; i < n; i++) { sxy += x[i] * y[i]; sxx += x[i] * x[i]; syy += y[i] * y[i]; }
+    return (sxx > 0 && syy > 0) ? sxy / Math.sqrt(sxx * syy) : 0;
+  }
+
   /**
    * レンダ結果の数値化。spec を渡すと追加の解析を載せる:
    *   spec.low       = { t0, t1, fc } … その区間の低域エネルギー比率 → m.lowRatio
    *   spec.centroid  = { hop }        … hop 秒刻みのスペクトル重心列 → m.centroids
    *   spec.peaks     = { thr, gap }   … 振幅包絡の山の数           → m.peaks
+   *   spec.pitch     = { t0,t1,hop,fmin,fmax,dead } … 基音の列と向きの変化回数
+   *                                                  → m.f0 / m.turns / m.f0lo / m.f0hi
+   *   spec.rmsWin    = [{ k, t0, t1 }] … 区間ごとの RMS                → m.rmsWin[k]
+   *   spec.headPeak  = { t0, t1 }      … その区間のピーク（頭の小ささの検査）→ m.headPeak
    */
   function metricsOf(buf, spec) {
     var d = buf.getChannelData(0);
@@ -1515,6 +1828,30 @@
           var pk = envelopePeaks(d, buf.sampleRate, spec.peaks.thr, spec.peaks.gap);
           m.peaks = pk.count; m.peakTimes = pk.times;
         }
+        if (spec.pitch) {
+          var sp = spec.pitch;
+          var f = f0Series(d, buf.sampleRate, sp.t0, sp.t1, sp.hop || 0.02, sp.fmin || 380, sp.fmax || 1750);
+          m.f0 = f;
+          m.turns = turnsOf(f, sp.dead === undefined ? 0.005 : sp.dead);
+          var lo = 0, hi = 0, got = 0;
+          for (var q = 0; q < f.length; q++) {
+            if (!(f[q] > 0)) continue;
+            got++;
+            if (!lo || f[q] < lo) lo = f[q];
+            if (f[q] > hi) hi = f[q];
+          }
+          m.f0lo = lo; m.f0hi = hi; m.f0got = got + '/' + f.length;
+        }
+        if (spec.rmsWin) {
+          m.rmsWin = {};
+          for (var w = 0; w < spec.rmsWin.length; w++) {
+            var rw = spec.rmsWin[w];
+            m.rmsWin[rw.k] = rmsIn(d, buf.sampleRate, rw.t0, rw.t1);
+          }
+        }
+        if (spec.headPeak) {
+          m.headPeak = peakIn(d, buf.sampleRate, spec.headPeak.t0, spec.headPeak.t1);
+        }
         if (spec.step) {
           /* 指定した窓の中の「隣り合う標本の最大差」＝波形の段差。
              継ぎ目の窓と、何も起きていない基準窓を比べる＝プチッと鳴っていないことの証拠 */
@@ -1532,7 +1869,7 @@
    * 1音を OfflineAudioContext で描画して RMS/peak を返す。
    * 実出力は一切行わない（＝出力デバイス無しの検証環境でも数値判定できる）。
    */
-  function renderVoice(name, params, seconds, sampleRate, spec) {
+  function renderVoiceBuffer(name, params, seconds, sampleRate) {
     var C = offlineCtor();
     if (!C) return global.Promise.reject(new Error('OfflineAudioContext 非対応'));
     var v = VOICES[name];
@@ -1546,7 +1883,26 @@
     dest.connect(ctx.destination);
     try { v(ctx, dest, 0.02, params || {}); }
     catch (e2) { return global.Promise.reject(e2); }
-    return startRendering(ctx).then(function (b) { return metricsOf(b, spec); });
+    return startRendering(ctx);
+  }
+
+  function renderVoice(name, params, seconds, sampleRate, spec) {
+    return renderVoiceBuffer(name, params, seconds, sampleRate)
+      .then(function (b) { return metricsOf(b, spec); });
+  }
+
+  /**
+   * 同じ音を種違いで2回レンダして波形の相関を返す（P4.15 要件4「毎回同じ音にしない」）。
+   * 相関が小さいほど「毎回違う」。契約の判定は 0.9 未満。
+   */
+  function renderCorrPair(name, pa, pb, seconds, sampleRate) {
+    return renderVoiceBuffer(name, pa, seconds, sampleRate).then(function (a) {
+      return renderVoiceBuffer(name, pb, seconds, sampleRate).then(function (b) {
+        var m = metricsOf(a, null);
+        m.corr = Math.abs(corrOf(a.getChannelData(0), b.getChannelData(0)));
+        return m;
+      });
+    });
   }
 
   /**
@@ -1606,12 +1962,18 @@
               stepRef: { at: 0.02 + TEN_CYCLE * 0.5, half: TEN_XF * 0.5 + 0.02 } } },
     { key: 'ragged',      name: 'raggedBreath', params: { r: 0.5 }, sec: 1.0 },
     { key: 'scrape',      name: 'metalScrape', params: { r: 0.5 }, sec: 1.2 },
-    /* P4.13 項目4: 囁き声（拍数に応じた山の数と、残響込みの厚み） */
-    { key: 'wh_dry5',     name: 'whisper', params: { beats: 5, dry: true }, sec: 1.4,
-      spec: { peaks: { thr: 0.30, gap: 0.09 }, low: { t0: 0.0, t1: 1.1, fc: 1200 } } },
-    { key: 'wh_dry7',     name: 'whisper', params: { beats: 7, dry: true }, sec: 1.8,
-      spec: { peaks: { thr: 0.30, gap: 0.09 } } },
-    { key: 'wh_wet5',     name: 'whisper', params: { beats: 5 }, sec: 3.0 },
+    /* P4.15: すすり泣き→絶叫（契約の数値判定4点をここで測る） */
+    { key: 'sob',         name: 'sobScream', params: { seed: 20260908 }, sec: 4.4, sr: 48000,
+      spec: {
+        pitch: { t0: 0.02 + SOB_ONSET + 0.03, t1: 0.02 + SOB_ONSET + 1.03,
+                 hop: 0.020, fmin: 380, fmax: 1750, dead: 0.005 },
+        rmsWin: [{ k: 'sob', t0: 0.04, t1: 0.02 + SOB_ONSET - 0.02 },
+                 { k: 'scr', t0: 0.02 + SOB_ONSET, t1: 0.02 + SOB_ONSET + SOB_SCR }],
+        headPeak: { t0: 0.0, t1: 0.02 + SOB_ONSET }
+      } },
+    /* 種違い2レンダ（毎回違う音になっていることの数値） */
+    { key: 'sob_corr',    sec: 3.2, sr: 48000,
+      pair: { name: 'sobScream', a: { seed: 20260908 }, b: { seed: 99887766 } } },
     { key: 'lever',       name: 'lever', params: {}, sec: 3.4 },
     { key: 'alarm',       name: 'alarm', params: {}, sec: 2.4 },
     { key: 'scream',      name: 'scream', params: {}, sec: 1.4 },
@@ -1650,9 +2012,11 @@
     var chainP = global.Promise.resolve();
     PREWARM.forEach(function (job) {
       chainP = chainP.then(function () {
-        var r = job.build
-          ? renderBuild(job.build, job.sec, 0, job.spec)
-          : renderVoice(job.name, job.params, job.sec, 0, job.spec);
+        var r = job.pair
+          ? renderCorrPair(job.pair.name, job.pair.a, job.pair.b, job.sec, job.sr || 0)
+          : (job.build
+            ? renderBuild(job.build, job.sec, job.sr || 0, job.spec)
+            : renderVoice(job.name, job.params, job.sec, job.sr || 0, job.spec));
         return r.then(function (m) {
           renderCache[job.key] = m;
         }, function (err) {
@@ -2761,6 +3125,8 @@
     HB_START: HB_START, HB_FULL: HB_FULL,
     HB_BPM_MIN: HB_BPM_MIN, HB_BPM_MAX: HB_BPM_MAX,
     HB_LEVEL_MIN: HB_LEVEL_MIN, HB_LEVEL_MAX: HB_LEVEL_MAX, HB_LEVEL_CAP: HB_LEVEL_CAP,
+    /* P4.15: すすり泣き→絶叫（字幕の同期と機械テストが直接見る） */
+    SOB_ONSET: SOB_ONSET, SOB_SCR: SOB_SCR, SOB_WET: SOB_WET, SOB_G: SOB_G, SOB_TRIM: SOB_TRIM,
     /* P4.13 項目3: 緊迫層・ダッキング（機械テストが直接見る） */
     TEN_CYCLE: TEN_CYCLE, TEN_CHUNK: TEN_CHUNK, TEN_MIX: TEN_MIX, TEN_RISE: TEN_RISE,
     TEN_XF: TEN_XF, TEN_HOP: TEN_HOP, TEN_OCT: TEN_OCT,

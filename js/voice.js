@@ -1,16 +1,19 @@
 /**
- * js/voice.js — P4.13 項目4「音を鳴らすと『声』が聞こえる（字幕つき）」
+ * js/voice.js — 音を鳴らすと「声」が聞こえる（字幕つき）
  *
- * 契約 DESIGN.md §4「P4.13 再プレイ差し戻し」項目4 ／ 正文 docs/notes.md「P4.13追加（声・軌跡）」。
+ * 契約 DESIGN.md §4「P4.13 再プレイ差し戻し」項目4 ＋「P4.15 声の差し替え」／
+ * 正文 docs/notes.md「P4.13追加（声・軌跡）」「P4.15追加（声）」。
  *
  *   ・トリガー … ESCAPE.noise.emit に乗る音すべて（sensor/trap/step/glass/water…）。
  *                kind は問わない。emitCell も内部で emit を呼ぶので同じ経路に乗る。
  *                enemy_ai.js は触らずに、ここで emit を包んで通知を受ける。
- *   ・声       … WebAudio で合成した囁き（js/audio.js の VOICES.whisper）。
- *                拍数に合わせた振幅包絡・無定位・長めの残響。音声ファイルは使わない（$0）。
+ *   ・声       … P4.15: WebAudio で合成した「すすり泣き→絶叫」（VOICES.sobScream）。
+ *                P4.13 の囁き（whisper）は失効し、音色ごと削除した。音声ファイルは使わない（$0）。
+ *                再生のたびに種（seed）を変える＝同じ音が二度と完全一致しない。
  *   ・出し分け … そのプレイの最初の1回は必ず「みーつけた」。以降はランダムで
  *                直前と同じ文は連続させない。クールダウン25秒。
- *   ・字幕     … #voice-sub。声の開始0.3秒後に出て2.5秒で消える。
+ *   ・字幕     … #voice-sub。P4.15: 絶叫の開始（声の開始から SOB_ONSET 秒後）に出して
+ *                2.5秒で消える。すすり泣きの間は出さない。
  *   ・鳴らさない … 捕獲シネマティック中・ゲームオーバー中・タイトル/未開始・テストモード。
  *
  * 時間はゲーム内の dt を積んだ自前の時計で数える（Engine.step から呼ばれる）。
@@ -23,13 +26,17 @@
 
   /* 正文 docs/notes.md の3本そのまま（追加・改変禁止。字幕は括弧なしで表示） */
   var LINES = ['みーつけた', 'そこにいるのね', '聞こえたよ'];
-  /* 各セリフの拍数（囁きの振幅包絡を刻む数） */
-  var BEATS = [5, 7, 5];
 
   var COOLDOWN = 25.0;      /* 声と声の最短間隔(s)（契約） */
-  var SUB_DELAY = 0.30;     /* 声の開始から字幕が出るまで(s)（契約） */
+  /* P4.15: 字幕は「絶叫の開始」に合わせる＝声の開始から SOB_ONSET 秒後。
+     すすり泣き（それより前）の間は出さない。値は音色側の定数と必ず同じものを使う。 */
+  var SUB_AT = (ESCAPE.Audio && typeof ESCAPE.Audio.SOB_ONSET === 'number')
+    ? ESCAPE.Audio.SOB_ONSET : 1.20;
   var SUB_HOLD = 2.50;      /* 字幕が出ている長さ(s)（契約） */
-  var VOICE_GAIN = 0.95;
+  /* P4.15: master の DynamicsCompressor（-18dB / 5:1）へ深く突っ込むと絶叫だけが
+     潰れて「静→爆」が縮む。0.95 から下げてコンプの効きを浅くしてある
+     （音色側のピークが上がったので、聞こえる大きさは以前より大きい）。 */
+  var VOICE_GAIN = 0.62;
 
   function lcg(seed) {
     var s = seed >>> 0;
@@ -60,6 +67,7 @@
     this.lastLine = '';
     this.blockedBy = '';
     this.subText = '';
+    this.lastSeed = 0;
     this.subShowAt = -1;
     this.subHideAt = -1;
     this.subVisible = false;
@@ -126,17 +134,19 @@
     this.lastLine = LINES[idx];
     this.lastKind = (ev && ev.kind) || '';
 
-    /* 音は必ず Engine 経由（バス・マスター・visibilitychange の一元管理を壊さない） */
+    /* 音は必ず Engine 経由（バス・マスター・visibilitychange の一元管理を壊さない）。
+       seed を毎回変える＝同じ声が二度と完全一致しない（契約 P4.15 要件4）。 */
     var au = ESCAPE.audio;
+    this.lastSeed = ((this._rng() * 4294967296) >>> 0) || 1;
     if (au && au.play) {
-      au.play('whisper', {
-        beats: BEATS[idx], bus: 'self', gain: VOICE_GAIN,
-        priority: 1, r: this._rng()
+      au.play('sobScream', {
+        bus: 'self', gain: VOICE_GAIN, priority: 1,
+        seed: this.lastSeed, r: this._rng()
       });
     }
-    /* 字幕は声の0.3秒後に出て2.5秒で消える */
+    /* 字幕は絶叫の開始に合わせて出し、2.5秒で消える（すすり泣き中は出さない） */
     this.subText = LINES[idx];
-    this.subShowAt = this.t + SUB_DELAY;
+    this.subShowAt = this.t + SUB_AT;
     this.subHideAt = this.subShowAt + SUB_HOLD;
     return this.lastLine;
   };
@@ -189,6 +199,7 @@
       t: this.t, count: this.count, lastLine: this.lastLine, lastKind: this.lastKind || '',
       firstDone: this.firstDone, cooldownLeft: Math.max(0, this.nextAt - this.t),
       subVisible: this.subVisible, subText: this.subText, blockedBy: this.blockedBy,
+      lastSeed: this.lastSeed, subAt: SUB_AT,
       allowInTest: this.allowInTest
     };
   };
@@ -196,7 +207,7 @@
   var voice = new Voice();
   ESCAPE.voice = voice;
   ESCAPE.VOICE_LINES = LINES;
-  ESCAPE.VOICE_BEATS = BEATS;
+  ESCAPE.VOICE_SUB_AT = SUB_AT;
 
   /* ================================================================
    * ESCAPE.noise.emit の包み込み
@@ -244,11 +255,18 @@
     t.ok(LINES.length === 3, 'P4.13 項目4: セリフは3本だけ（追加禁止）', LINES.length);
     t.ok(LINES[0] === 'みーつけた' && LINES[1] === 'そこにいるのね' && LINES[2] === '聞こえたよ',
       'P4.13 項目4: セリフが正文どおり（一字一句）', LINES.join('／'));
-    t.ok(BEATS[0] === 5 && BEATS[1] === 7 && BEATS[2] === 5,
-      'P4.13 項目4: 拍数が 5／7／5', BEATS.join(','));
     t.near(COOLDOWN, 25.0, 1e-9, 'P4.13 項目4: クールダウン25秒（契約）', COOLDOWN);
-    t.near(SUB_DELAY, 0.30, 1e-9, 'P4.13 項目4: 字幕は0.3秒後（契約）', SUB_DELAY);
     t.near(SUB_HOLD, 2.50, 1e-9, 'P4.13 項目4: 字幕は2.5秒で消える（契約）', SUB_HOLD);
+    /* P4.15: 発声は「すすり泣き→絶叫」。囁きは失効＝音色ごと消えている */
+    t.ok(typeof ESCAPE.Audio.VOICES.sobScream === 'function',
+      'P4.15: 発声が sobScream（すすり泣き→絶叫）になっている');
+    t.ok(ESCAPE.Audio.VOICES.whisper === undefined,
+      'P4.15: 失効した囁き（whisper）は残っていない');
+    t.ok(String(Voice.prototype.onNoise).indexOf("'sobScream'") >= 0,
+      'P4.15: 声の再生が sobScream を鳴らしている');
+    t.near(SUB_AT, ESCAPE.Audio.SOB_ONSET, 1e-9,
+      'P4.15: 字幕は絶叫の開始と同じ時刻に出す（音色側の定数と一致）', SUB_AT);
+    t.ok(SUB_AT > 1.0, 'P4.15: すすり泣きの間（1秒以上）は字幕を出さない', SUB_AT + 's');
     var el = document.getElementById('voice-sub');
     if (t.ok(!!el, 'P4.13 項目4: #voice-sub のDOMが結線されている')) {
       var cs = global.getComputedStyle(el);
@@ -276,9 +294,9 @@
 
     /* 1) テストモード中は鳴らない（契約） */
     V.allowInTest = false;
-    var f0 = au.fired.whisper || 0;
+    var f0 = au.fired.sobScream || 0;
     ping('sensor');
-    t.ok((au.fired.whisper || 0) === f0, 'P4.13 項目4: テストモード中は声が鳴らない');
+    t.ok((au.fired.sobScream || 0) === f0, 'P4.13 項目4: テストモード中は声が鳴らない');
     t.ok(V.blockedBy === 'test', 'P4.13 項目4: 抑止の理由がテストモード', V.blockedBy);
 
     /* 以降は「実プレイと同じ経路」を機械テストから踏むための許可を立てる */
@@ -286,19 +304,23 @@
     V.reset();
 
     /* 2) 音イベント → 声＋字幕。最初は必ず「みーつけた」 */
-    var f1 = au.fired.whisper || 0;
+    var f1 = au.fired.sobScream || 0;
     ping('trap');
-    t.ok((au.fired.whisper || 0) === f1 + 1, 'P4.13 項目4: 音イベントで声が鳴る',
-      ((au.fired.whisper || 0) - f1) + '回');
+    t.ok((au.fired.sobScream || 0) === f1 + 1, 'P4.13 項目4: 音イベントで声が鳴る',
+      ((au.fired.sobScream || 0) - f1) + '回');
     t.ok(V.lastLine === 'みーつけた', 'P4.13 項目4: そのプレイの最初は必ず「みーつけた」', V.lastLine);
 
-    /* 3) 字幕は0.3秒後に出る（それより前は出ていない） */
-    simSec(g, 0.22);
+    /* 3) 字幕は「絶叫の開始」に合わせて出る（すすり泣きの間は出ない）＝P4.15 */
+    simSec(g, 0.32);
     t.ok(!V.subVisible && !(el && el.classList.contains('show')),
-      'P4.13 項目4: 0.3秒より前は字幕が出ていない');
-    simSec(g, 0.20);
+      'P4.15: 旧仕様の0.3秒後にはまだ字幕が出ていない');
+    simSec(g, SUB_AT - 0.32 - 0.06);
+    t.ok(!V.subVisible && !(el && el.classList.contains('show')),
+      'P4.15: 絶叫の直前（すすり泣き中）は字幕が出ていない',
+      V.t.toFixed(2) + 's / 絶叫 ' + SUB_AT + 's');
+    simSec(g, 0.10);
     t.ok(V.subVisible && !!el && el.classList.contains('show'),
-      'P4.13 項目4: 声の0.3秒後に字幕が出る');
+      'P4.15: 絶叫の開始に合わせて字幕が出る', V.t.toFixed(2) + 's');
     t.ok(!!el && el.textContent === 'みーつけた',
       'P4.13 項目4: 字幕は括弧なしのセリフそのまま', el ? el.textContent : '—');
     if (el) {
@@ -306,7 +328,7 @@
       t.ok(cs.visibility === 'visible', 'P4.13 項目4: 字幕が実際に可視になっている', cs.visibility);
     }
 
-    /* 4) 2.5秒で消える */
+    /* 4) 絶叫の開始から2.5秒で消える */
     simSec(g, 2.0);
     t.ok(V.subVisible, 'P4.13 項目4: 2.5秒たつまでは字幕が残る');
     simSec(g, 0.7);
@@ -314,48 +336,58 @@
       'P4.13 項目4: 字幕は2.5秒で消える');
 
     /* 5) クールダウン中は不発（25秒） */
-    var f2 = au.fired.whisper || 0;
+    var f2 = au.fired.sobScream || 0;
     ping('step');
-    t.ok((au.fired.whisper || 0) === f2, 'P4.13 項目4: クールダウン中は鳴らない');
+    t.ok((au.fired.sobScream || 0) === f2, 'P4.13 項目4: クールダウン中は鳴らない');
     t.ok(V.blockedBy === 'cooldown', 'P4.13 項目4: 抑止の理由がクールダウン', V.blockedBy);
     simSec(g, 21.0);
     ping('glass');
-    t.ok((au.fired.whisper || 0) === f2, 'P4.13 項目4: 25秒たつまでは鳴らない',
+    t.ok((au.fired.sobScream || 0) === f2, 'P4.13 項目4: 25秒たつまでは鳴らない',
       V.info().cooldownLeft.toFixed(1) + 's残り');
     simSec(g, 1.6);
     ping('water');
-    t.ok((au.fired.whisper || 0) === f2 + 1, 'P4.13 項目4: 25秒たてばまた鳴る');
+    t.ok((au.fired.sobScream || 0) === f2 + 1, 'P4.13 項目4: 25秒たてばまた鳴る');
 
     /* 6) 直前と同じ文を連続させない（kind を問わず全ての音イベントが対象） */
     var kinds = ['sensor', 'trap', 'step', 'glass', 'water', 'gimmick', 'bulkhead', 'safe'];
     var seq = [V.lastLine], dup = 0, fired = 0;
     for (var i = 0; i < kinds.length * 2; i++) {
       V.nextAt = V.t;                       /* クールダウンだけ外す＝経路は実物のまま */
-      var before = au.fired.whisper || 0;
+      var before = au.fired.sobScream || 0;
       ping(kinds[i % kinds.length]);
-      if ((au.fired.whisper || 0) > before) fired++;
+      if ((au.fired.sobScream || 0) > before) fired++;
       if (V.lastLine === seq[seq.length - 1]) dup++;
       seq.push(V.lastLine);
     }
     t.ok(fired === kinds.length * 2, 'P4.13 項目4: kind を問わず全ての音イベントで鳴る',
       fired + '/' + (kinds.length * 2));
     t.ok(dup === 0, 'P4.13 項目4: 直前と同じ文を連続させない', seq.join('→'));
+    /* P4.15 要件4: 再生のたびに種が変わる（同じ音が二度と完全一致しない） */
+    var seeds = {}, sn = 0, sk;
+    for (sk = 0; sk < 12; sk++) {
+      V.nextAt = V.t;
+      ping('trap');
+      if (V.lastSeed) { seeds[V.lastSeed] = 1; sn++; }
+    }
+    t.ok(sn === 12 && Object.keys(seeds).length === 12,
+      'P4.15: 再生のたびに種が変わる（12回すべて別の種）',
+      Object.keys(seeds).length + '/' + sn);
     var seen = {};
     for (var k = 0; k < seq.length; k++) seen[seq[k]] = 1;
     t.ok(Object.keys(seen).length === 3, 'P4.13 項目4: 3本とも出る（偏らない）',
       Object.keys(seen).join('／'));
 
     /* 7) 捕獲シネマティック中・ゲームオーバー中は不発（契約） */
-    var f3 = au.fired.whisper || 0;
+    var f3 = au.fired.sobScream || 0;
     var jailWas = g.stealth.jail.phase;
     g.stealth.jail.phase = 'grab';
     V.nextAt = V.t;
     ping('trap');
-    t.ok((au.fired.whisper || 0) === f3, 'P4.13 項目4: 捕獲中は鳴らない');
+    t.ok((au.fired.sobScream || 0) === f3, 'P4.13 項目4: 捕獲中は鳴らない');
     t.ok(V.blockedBy === 'jail', 'P4.13 項目4: 抑止の理由が捕獲演出', V.blockedBy);
     g.stealth.jail.phase = 'over';
     ping('trap');
-    t.ok((au.fired.whisper || 0) === f3, 'P4.13 項目4: ゲームオーバー中は鳴らない');
+    t.ok((au.fired.sobScream || 0) === f3, 'P4.13 項目4: ゲームオーバー中は鳴らない');
     t.ok(V.blockedBy === 'gameover', 'P4.13 項目4: 抑止の理由がゲームオーバー', V.blockedBy);
     g.stealth.jail.phase = jailWas;
 
@@ -384,43 +416,72 @@
     t.ok(ESCAPE.noise.pending.length === 0, 'P4.13 項目4: 復帰: 音イベントのキューが空');
   }
 
-  /** レンダ（OfflineAudioContext）で囁きの厚みと拍数を数値判定する */
-  function testP413VoiceRender(t, g) {
-    var A = ESCAPE.Audio, c = A.cache;
-    if (!t.ok(!!(c.wh_dry5 && c.wh_dry7 && c.wh_wet5), 'P4.13 項目4: 囁きのレンダが揃っている',
+  /**
+   * レンダ（OfflineAudioContext）で P4.15 の数値判定を行う。
+   * 契約 DESIGN.md「P4.15 声の差し替え」の4点:
+   *   ピーク0.85〜0.92・クリップなし ／ 絶叫の基音推移が直線でない（1秒に3回以上の向き変化）
+   *   ／ 種違い2レンダの波形相関 < 0.9 ／ すすり泣きと絶叫の RMS 比 1:4 以上
+   */
+  function testP415VoiceRender(t, g) {
+    var A = ESCAPE.Audio, c = A.cache, m = c.sob;
+    if (!t.ok(!!(m && c.sob_corr), 'P4.15: すすり泣き→絶叫のレンダが揃っている',
       A.prewarmError() || '')) return;
-    t.ok(c.wh_dry5.peaks === 5, 'P4.13 項目4: 5拍のセリフは包絡の山が5つ',
-      c.wh_dry5.peaks + '山');
-    t.ok(c.wh_dry7.peaks === 7, 'P4.13 項目4: 7拍のセリフは包絡の山が7つ',
-      c.wh_dry7.peaks + '山');
-    t.ok(c.wh_wet5.rms > 0.004 && c.wh_wet5.peak > 0.03,
-      'P4.13 項目4: 囁きが聞こえる音量で鳴る',
-      'rms=' + c.wh_wet5.rms.toFixed(4) + ' peak=' + c.wh_wet5.peak.toFixed(4));
-    t.ok(c.wh_wet5.peak < 0.98 && !c.wh_wet5.clipped,
-      'P4.13 項目4: 囁きがクリップしない', c.wh_wet5.peak.toFixed(4));
-    /* 拍数が多い＝長い（そこにいるのね > みーつけた） */
-    var d5 = c.wh_dry5.activeRatio * c.wh_dry5.duration;
-    var d7 = c.wh_dry7.activeRatio * c.wh_dry7.duration;
-    t.ok(d7 > d5 * 1.2, 'P4.13 項目4: 7拍のセリフは5拍より明らかに長い',
-      d5.toFixed(3) + 's → ' + d7.toFixed(3) + 's');
-    /* 残響が長め（乾いた音より尾を引く） */
-    var wet = c.wh_wet5.activeRatio * c.wh_wet5.duration;
-    t.ok(wet > d5 * 1.5, 'P4.13 項目4: 残響で尾を引く（無響より長く残る）',
-      d5.toFixed(3) + 's → ' + wet.toFixed(3) + 's');
-    /* 囁き＝低域が主体ではない（帯域整形ノイズが1.2kHz より上に寄っている） */
-    t.ok(c.wh_dry5.lowRatio !== undefined && c.wh_dry5.lowRatio < 0.35,
-      'P4.13 項目4: 帯域整形が高い方に寄っている（囁きの帯域）',
-      ((c.wh_dry5.lowRatio || 0) * 100).toFixed(1) + '% が1.2kHz未満');
+
+    t.ok(m.peak >= 0.85 && m.peak <= 0.92,
+      'P4.15: ピークが 0.85〜0.92 に収まる（契約）', m.peak.toFixed(4));
+    t.ok(!m.clipped && m.peak <= 1.0, 'P4.15: クリップしない', m.peak.toFixed(4));
+
+    t.ok(m.turns >= 3,
+      'P4.15: 絶叫の基音が直線でない（1秒に3回以上の向き変化）', m.turns + '回 / 1s');
+    t.ok(m.f0lo > 0 && m.f0hi > m.f0lo * 1.5,
+      'P4.15: 絶叫の基音が跳ね上がって落ちる（追跡できている）',
+      Math.round(m.f0lo) + '〜' + Math.round(m.f0hi) + 'Hz ' + m.f0got);
+
+    var corr = c.sob_corr.corr;
+    t.ok(corr < 0.9, 'P4.15: 種違いの2レンダは同じ波形にならない（相関 < 0.9）',
+      corr.toFixed(4));
+
+    var ratio = m.rmsWin.scr / Math.max(m.rmsWin.sob, 1e-9);
+    t.ok(ratio >= 4, 'P4.15: すすり泣きと絶叫の RMS 比が 1:4 以上（静→爆）',
+      '1:' + ratio.toFixed(1));
+
+    /* 妥協点の明示: 冒頭のしゃくり上げはピークの30%以下（「静→爆」を優先） */
+    t.ok(m.headPeak <= m.peak * 0.30,
+      'P4.15: 冒頭のしゃくり上げはピークの30%以下（静→爆を壊さない）',
+      (m.headPeak / m.peak * 100).toFixed(1) + '%');
+    /* 立ち上がりは絶叫の位置（＝すすり泣きが十分に静か） */
+    t.ok(m.onset >= 0 && m.onset < A.SOB_ONSET,
+      'P4.15: すすり泣きから始まる（無音ではない）', m.onset.toFixed(3) + 's');
+    t.ok(m.duration > A.SOB_ONSET + A.SOB_SCR,
+      'P4.15: 絶叫の終わりまで鳴り切る長さがある',
+      m.duration.toFixed(2) + 's ≧ ' + (A.SOB_ONSET + A.SOB_SCR).toFixed(2) + 's');
   }
 
-  ESCAPE.__extraSuites.push(testP413VoiceContract, testP413VoiceTrigger, testP413VoiceRender);
+  /** 声の音色そのものの結線検査（周期的な揺れを使っていないこと等） */
+  function testP415VoiceShape(t, g) {
+    var src = String(ESCAPE.Audio.VOICES.sobScream);
+    t.ok(src.indexOf('vibrato') < 0 && src.indexOf('createOscillator') < 0,
+      'P4.15 要件1: 声の揺れに固定周波数のLFOを使っていない');
+    t.ok(src.indexOf('walk(') >= 0 || src.indexOf('voicePair(') >= 0,
+      'P4.15 要件1: 揺れはランダムウォーク（walk）で作っている');
+    t.ok(src.indexOf('voicePair(') >= 0 && src.indexOf('driftFormants(') >= 0,
+      'P4.15 要件2: 主声＋副声とフォルマントの漂いが入っている');
+    t.ok(src.indexOf('p.seed') >= 0, 'P4.15 要件4: 種（seed）で音が変わる');
+    t.ok(src.indexOf('reverb(') >= 0, 'P4.15 要件5: 残響を通している');
+    t.ok(src.indexOf('curveTo(') >= 0, 'P4.15 要件6: 包絡は曲線（curveTo）で書いている');
+    t.near(ESCAPE.Audio.SOB_ONSET, 1.20, 1e-9,
+      'P4.15: すすり泣きは約1.2秒（契約）', ESCAPE.Audio.SOB_ONSET);
+  }
+
+  ESCAPE.__extraSuites.push(testP413VoiceContract, testP413VoiceTrigger,
+    testP415VoiceRender, testP415VoiceShape);
 
   /* 検証フック（E2E・手動確認用） */
   global.__voiceDebug = {
     voice: function () { return voice; },
     info: function () { return voice.info(); },
     lines: LINES,
-    beats: BEATS,
+    subAt: SUB_AT,
     ping: function (kind) { return ESCAPE.noise.emit(-900, -900, 0.5, kind || 'debug'); },
     reset: function () { return voice.reset(); }
   };
