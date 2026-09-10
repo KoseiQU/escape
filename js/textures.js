@@ -1755,6 +1755,791 @@
   }
 
   /* ================================================================ */
+  /* P4.16 項目1: スタート部屋の大型掲示板（2.4m x 1.6m の紙面）           */
+  /*   契約 §4「P4.16」項目1 / 正文は docs/notes.md「P4.16追加」。          */
+  /*   木炭風のスケッチは「同じ輪郭を複数回なぞる」＋「面を短い筆で埋める」  */
+  /*   ＋「擦れ（destination-out）」の3層で描く。幾何学的な単線にしない。    */
+  /* ================================================================ */
+  var JPM = '"Hiragino Mincho ProN","Yu Mincho","YuMincho","Noto Serif JP",serif';
+
+  /** 透明な作業用キャンバス（擦れの destination-out を紙面に波及させないため） */
+  function offCanvas(w, h, fn) {
+    var c = makeCanvas(w, h), x = c.getContext('2d');
+    fn(x, w, h);
+    return c;
+  }
+  /** 点列をランダムに揺らす（なぞるたびに線がずれる＝木炭のムラ） */
+  function chJit(pts, rand, amt) {
+    var out = [];
+    for (var i = 0; i < pts.length; i++) {
+      out.push([pts[i][0] + (rand() - 0.5) * amt, pts[i][1] + (rand() - 0.5) * amt]);
+    }
+    return out;
+  }
+  /** 点列を通る滑らかなパス（角のある折れ線にしない） */
+  function chPath(ctx, pts, closed) {
+    ctx.beginPath();
+    ctx.moveTo(pts[0][0], pts[0][1]);
+    for (var i = 1; i < pts.length - 1; i++) {
+      ctx.quadraticCurveTo(pts[i][0], pts[i][1],
+        (pts[i][0] + pts[i + 1][0]) / 2, (pts[i][1] + pts[i + 1][1]) / 2);
+    }
+    ctx.lineTo(pts[pts.length - 1][0], pts[pts.length - 1][1]);
+    if (closed) ctx.closePath();
+  }
+  /** 木炭の線: passes 回なぞる。毎回わずかに太さ・濃さ・位置を変える */
+  function chLine(ctx, pts, rand, o) {
+    o = o || {};
+    var passes = o.passes || 5, css = o.css || 'rgb(22,20,19)';
+    ctx.save();
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.strokeStyle = css;
+    for (var p = 0; p < passes; p++) {
+      ctx.globalAlpha = (o.alpha || 0.26) * (0.40 + rand() * 0.85);
+      ctx.lineWidth = (o.w || 4) * (0.45 + rand() * 1.15);
+      chPath(ctx, chJit(pts, rand, (o.jit || 3.0) * (0.5 + p / passes)), o.closed);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+  /** 3点を通る「先細りの帯」を多角形にする（腕・脚・胴を線ではなく形で描く） */
+  function limbPoly(p0, p1, p2, w0, w1, w2) {
+    var N = 7, L = [], R = [], i;
+    for (i = 0; i <= N; i++) {
+      var t = i / N, it = 1 - t;
+      var x = it * it * p0[0] + 2 * it * t * p1[0] + t * t * p2[0];
+      var y = it * it * p0[1] + 2 * it * t * p1[1] + t * t * p2[1];
+      var dx = 2 * it * (p1[0] - p0[0]) + 2 * t * (p2[0] - p1[0]);
+      var dy = 2 * it * (p1[1] - p0[1]) + 2 * t * (p2[1] - p1[1]);
+      var m = Math.sqrt(dx * dx + dy * dy) || 1;
+      var w = (t < 0.5) ? (w0 + (w1 - w0) * (t * 2)) : (w1 + (w2 - w1) * ((t - 0.5) * 2));
+      L.push([x - dy / m * w, y + dx / m * w]);
+      R.push([x + dy / m * w, y - dx / m * w]);
+    }
+    R.reverse();
+    return L.concat(R);
+  }
+
+  /** 木炭の面: 輪郭で切り抜いて短い筆を重ね、最後に擦れを抜く */
+  function chFill(ctx, pts, rand, o) {
+    o = o || {};
+    var minx = 1e9, miny = 1e9, maxx = -1e9, maxy = -1e9, i;
+    for (i = 0; i < pts.length; i++) {
+      if (pts[i][0] < minx) minx = pts[i][0];
+      if (pts[i][0] > maxx) maxx = pts[i][0];
+      if (pts[i][1] < miny) miny = pts[i][1];
+      if (pts[i][1] > maxy) maxy = pts[i][1];
+    }
+    var css = o.css || 'rgb(20,18,17)';
+    var ang = (o.ang === undefined) ? 1.18 : o.ang;
+    var slen = o.slen || 26;
+    ctx.save();
+    chPath(ctx, chJit(pts, rand, (o.jit || 3.0) * 0.55), true);
+    ctx.clip();
+    ctx.fillStyle = css;
+    ctx.globalAlpha = (o.base === undefined) ? 0.42 : o.base;
+    ctx.fillRect(minx - 2, miny - 2, maxx - minx + 4, maxy - miny + 4);
+    ctx.strokeStyle = css; ctx.lineCap = 'round';
+    var n = o.strokes || 110;
+    for (i = 0; i < n; i++) {
+      var x = minx + rand() * (maxx - minx), y = miny + rand() * (maxy - miny);
+      var a = ang + (rand() - 0.5) * 0.55, l = slen * (0.35 + rand() * 1.1);
+      ctx.globalAlpha = 0.08 + rand() * 0.30;
+      ctx.lineWidth = 2 + rand() * 7;
+      ctx.beginPath(); ctx.moveTo(x, y);
+      ctx.lineTo(x + Math.cos(a) * l, y + Math.sin(a) * l);
+      ctx.stroke();
+    }
+    /* 擦れ（紙の目が出る）。作業用キャンバス上なので紙面は削れない */
+    ctx.globalCompositeOperation = 'destination-out';
+    var m = o.scuffs || 46;
+    for (i = 0; i < m; i++) {
+      var x2 = minx + rand() * (maxx - minx), y2 = miny + rand() * (maxy - miny);
+      var a2 = ang + (rand() - 0.5) * 0.7, l2 = slen * (0.3 + rand() * 1.0);
+      ctx.globalAlpha = 0.05 + rand() * 0.24;
+      ctx.lineWidth = 1 + rand() * 4.5;
+      ctx.beginPath(); ctx.moveTo(x2, y2);
+      ctx.lineTo(x2 + Math.cos(a2) * l2, y2 + Math.sin(a2) * l2);
+      ctx.stroke();
+    }
+    ctx.restore();
+    chLine(ctx, pts, rand, { passes: o.passes || 6, w: o.w || 5,
+      alpha: o.alpha || 0.30, jit: o.jit || 3.0, closed: true, css: css });
+    /* はみ出した筆（木炭は輪郭の外にも線が走る）。切り抜きの外に少しだけ描く */
+    if (o.stray !== 0) {
+      ctx.save();
+      ctx.strokeStyle = css; ctx.lineCap = 'round';
+      var ns = o.stray || 14;
+      for (var q = 0; q < ns; q++) {
+        var k = (rand() * pts.length) | 0;
+        var bx = pts[k][0], by = pts[k][1];
+        var aa = ang + (rand() - 0.5) * 1.0, ll = slen * (0.5 + rand() * 1.2);
+        ctx.globalAlpha = 0.06 + rand() * 0.16;
+        ctx.lineWidth = 1.5 + rand() * 5;
+        ctx.beginPath();
+        ctx.moveTo(bx - Math.cos(aa) * ll * 0.5, by - Math.sin(aa) * ll * 0.5);
+        ctx.lineTo(bx + Math.cos(aa) * ll * 0.6, by + Math.sin(aa) * ll * 0.6);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+  }
+
+  /** 肘・膝で折れる四肢（滑らかな弧にせず、関節で角を作る） */
+  function chLimb2(ctx, rand, a, b, c, w0, w1, w2, o) {
+    function mid(p, q, f) { return [p[0] + (q[0] - p[0]) * f, p[1] + (q[1] - p[1]) * f]; }
+    chFill(ctx, limbPoly(a, mid(a, b, 0.55), b, w0, (w0 + w1) / 2, w1), rand, o);
+    chFill(ctx, limbPoly(b, mid(b, c, 0.45), c, w1, (w1 + w2) / 2, w2), rand, o);
+    /* 関節（角がちぎれて見えないぶんだけ。輪郭線は足さない＝丸い節に見せない） */
+    var jp = [], i;
+    for (i = 0; i < 7; i++) {
+      var an = i / 7 * Math.PI * 2;
+      jp.push([b[0] + Math.cos(an) * w1 * 0.92, b[1] + Math.sin(an) * w1 * 0.92]);
+    }
+    chFill(ctx, jp, rand, { base: o.base, strokes: 14, ang: o.ang, slen: o.slen,
+      alpha: 0.10, passes: 2, w: 2, scuffs: 8, css: o.css, stray: 0 });
+  }
+
+  /** 直立した長髪の人影（顔は影で潰す・輪郭は細かく揺らす） */
+  function chStanding(ctx, rand, cx, top, hgt) {
+    var s = hgt / 300;
+    function P(x, y) { return [cx + x * s, top + y * s]; }
+    function LP(a, b, c, w0, w1, w2) {
+      return limbPoly(P(a[0], a[1]), P(b[0], b[1]), P(c[0], c[1]), w0 * s, w1 * s, w2 * s);
+    }
+    var CH = 'rgb(34,30,28)';
+    /* 髪（後ろの塊。肩を越えて腰まで落ちる。裾は房に割れる） */
+    var hairBack = [P(-28, 4), P(-38, 38), P(-43, 86), P(-44, 132), P(-38, 166),
+      P(-30, 144), P(-25, 174), P(-17, 148), P(-8, 178), P(0, 146),
+      P(8, 176), P(17, 148), P(25, 176), P(32, 146), P(39, 168),
+      P(45, 130), P(44, 84), P(39, 36), P(29, 3), P(0, -8)];
+    chFill(ctx, hairBack, rand, { base: 0.30, strokes: 190, ang: 1.52,
+      slen: 46 * s + 10, w: 5, alpha: 0.24, scuffs: 70, css: CH, stray: 22 });
+    /* 脚（先細りの帯） */
+    chFill(ctx, LP([-13, 186], [-16, 244], [-19, 298], 15, 12, 9), rand,
+      { base: 0.46, strokes: 60, ang: 1.55, slen: 26 * s + 8, css: CH, stray: 8 });
+    chFill(ctx, LP([13, 186], [15, 244], [19, 298], 15, 12, 9), rand,
+      { base: 0.46, strokes: 60, ang: 1.55, slen: 26 * s + 8, css: CH, stray: 8 });
+    /* 胴（撫で肩・痩せて腰がくびれる） */
+    var torso = [P(-31, 78), P(-27, 118), P(-20, 152), P(-25, 188), P(-14, 196),
+      P(0, 199), P(14, 196), P(25, 188), P(20, 152), P(27, 118), P(31, 78),
+      P(16, 68), P(0, 66), P(-16, 68)];
+    chFill(ctx, torso, rand, { base: 0.44, strokes: 130, ang: 1.42,
+      slen: 30 * s + 8, css: CH, stray: 16 });
+    /* 腕（膝下まで届く。肘で外へ張り、手が長い） */
+    chFill(ctx, LP([-31, 82], [-54, 148], [-45, 234], 12, 9, 6), rand,
+      { base: 0.46, strokes: 55, ang: 1.5, slen: 24 * s + 7, css: CH, stray: 8 });
+    chFill(ctx, LP([31, 80], [53, 146], [44, 236], 12, 9, 6), rand,
+      { base: 0.46, strokes: 55, ang: 1.5, slen: 24 * s + 7, css: CH, stray: 8 });
+    /* 手（指の分かれた小さな塊） */
+    var hL = [P(-48, 232), P(-54, 246), P(-50, 258), P(-44, 248), P(-41, 260), P(-38, 242)];
+    var hR = [P(47, 234), P(53, 248), P(49, 260), P(43, 250), P(40, 262), P(37, 244)];
+    chFill(ctx, hL, rand, { base: 0.5, strokes: 26, ang: 1.5, slen: 12 * s + 5, css: CH, stray: 6 });
+    chFill(ctx, hR, rand, { base: 0.5, strokes: 26, ang: 1.5, slen: 12 * s + 5, css: CH, stray: 6 });
+    /* 首・頭 */
+    chFill(ctx, [P(-8, 58), P(-9, 74), P(9, 74), P(8, 58)], rand,
+      { base: 0.5, strokes: 18, ang: 1.5, slen: 10 * s + 4, css: CH, stray: 4 });
+    var head = [P(-21, 22), P(-24, 40), P(-19, 56), P(-8, 64), P(8, 64),
+      P(19, 56), P(24, 40), P(21, 22), P(12, 8), P(0, 5), P(-12, 8)];
+    chFill(ctx, head, rand, { base: 0.42, strokes: 60, ang: 1.4,
+      slen: 16 * s + 5, css: CH, stray: 8 });
+    /* 顔＝影で潰す（目鼻を描かない。中はほぼ黒） */
+    var face = [P(-16, 26), P(-18, 44), P(-12, 58), P(0, 62), P(12, 58),
+      P(18, 44), P(16, 26), P(0, 18)];
+    chFill(ctx, face, rand, { base: 0.86, strokes: 60, ang: 1.3,
+      slen: 12 * s + 4, alpha: 0.40, scuffs: 22, css: 'rgb(20,17,16)', stray: 4 });
+    /* 髪の前髪（顔にかかる房） */
+    for (var i = 0; i < 9; i++) {
+      var x0 = -22 + i * 5.5;
+      chLine(ctx, [P(x0, 8), P(x0 - 2 + rand() * 4, 30 + rand() * 18), P(x0 - 4 + rand() * 8, 52 + rand() * 22)],
+        rand, { passes: 3, w: 3.2 * s + 1.2, alpha: 0.30, jit: 2.0, css: CH });
+    }
+    /* 髪の毛先（房が割れて垂れる） */
+    for (var j = 0; j < 14; j++) {
+      var hx = -50 + rand() * 100;
+      chLine(ctx, [P(hx * 0.7, 60 + rand() * 40), P(hx * 0.9, 120 + rand() * 30), P(hx, 160 + rand() * 32)],
+        rand, { passes: 3, w: 2.6 * s + 1, alpha: 0.24, jit: 2.6, css: CH });
+    }
+    /* 床の影 */
+    var sh = [P(-44, 300), P(0, 293), P(46, 300), P(0, 311)];
+    chFill(ctx, sh, rand, { base: 0.24, strokes: 44, ang: 0.05,
+      slen: 44 * s + 10, alpha: 0.16, w: 3, css: CH, stray: 6 });
+  }
+
+  /** 床に伏せて四つ足で這う影（背が反り、肘と膝が背より高く突き出る反転姿勢） */
+  function chCrawling(ctx, rand, cx, base, wid) {
+    var s = wid / 380;
+    function P(x, y) { return [cx + x * s, base + y * s]; }
+    var CH = 'rgb(34,30,28)';
+    function limb(a, b, c, w0, w1, w2, o) {
+      chLimb2(ctx, rand, P(a[0], a[1]), P(b[0], b[1]), P(c[0], c[1]),
+        w0 * s, w1 * s, w2 * s, o);
+    }
+    var far = { base: 0.30, strokes: 40, ang: 1.35, slen: 22 * s + 6, alpha: 0.20,
+      w: 3.5, css: CH, stray: 5 };
+    var near = { base: 0.46, strokes: 46, ang: 1.35, slen: 22 * s + 6, alpha: 0.26,
+      w: 4, css: CH, stray: 6 };
+    /* 髪（頭から前方の床へ広がって垂れる） */
+    var hair = [P(-96, -52), P(-120, -58), P(-150, -44), P(-174, -22), P(-192, 0),
+      P(-172, 6), P(-146, -6), P(-150, 8), P(-124, -4), P(-122, 8), P(-102, -2), P(-88, -34)];
+    chFill(ctx, hair, rand, { base: 0.26, strokes: 130, ang: 0.16,
+      slen: 44 * s + 10, w: 4, alpha: 0.20, css: CH, stray: 16 });
+    /* 奥側の腕（前方の床へ伸ばす）と脚（膝を高く跳ね上げる） */
+    limb([-64, -54], [-92, -84], [-128, -4], 9, 7, 6, far);
+    limb([80, -48], [98, -112], [116, -2], 11, 8, 7, far);
+    /* 胴＝厚みのある三日月。背が高く反り、胸と腹が床に近い（ここが絵の主役） */
+    var body = [
+      P(-86, -46), P(-62, -70), P(-30, -90), P(8, -96), P(44, -88), P(70, -72), P(84, -54),
+      P(80, -28), P(56, -44), P(24, -54), P(-12, -54), P(-48, -42), P(-78, -26)];
+    chFill(ctx, body, rand, { base: 0.46, strokes: 190, ang: 0.42,
+      slen: 34 * s + 9, css: CH, stray: 22 });
+    /* 背骨と肋（反り返りが読める内側の線） */
+    chLine(ctx, [P(-80, -44), P(-34, -82), P(14, -90), P(64, -68)], rand,
+      { passes: 4, w: 3.2 * s + 1.2, alpha: 0.24, jit: 2.2, css: CH });
+    for (var i = 0; i < 5; i++) {
+      var t = i / 4;
+      chLine(ctx, [P(-58 + t * 112, -34 - t * 20), P(-52 + t * 112, -54 - t * 24), P(-48 + t * 112, -74 - t * 18)],
+        rand, { passes: 2, w: 2.2 * s + 1, alpha: 0.17, jit: 1.8, css: CH });
+    }
+    /* 手前側: 腕は前方の床を掻き、脚は膝が背より高く跳ね上がる（関節が逆に見える） */
+    limb([-82, -44], [-110, -66], [-146, -4], 10, 8, 6, near);
+    limb([62, -60], [46, -134], [22, -2], 13, 9, 7, near);
+    /* 床についた手・足（指が開いている） */
+    function paw(px, py, dir) {
+      var pts = [P(px - 10 * dir, py - 8), P(px - 14 * dir, py + 2), P(px - 2 * dir, py + 9),
+        P(px + 8 * dir, py + 2), P(px + 7 * dir, py - 8)];
+      chFill(ctx, pts, rand, { base: 0.48, strokes: 22, ang: 0.2, slen: 11 * s + 4,
+        alpha: 0.26, w: 3, css: CH, stray: 5 });
+      for (var k = 0; k < 3; k++) {
+        chLine(ctx, [P(px + (k - 1) * 6 * dir, py - 2), P(px + (k - 1) * 7 * dir - 6 * dir, py + 6)],
+          rand, { passes: 2, w: 2.2 * s + 1, alpha: 0.28, jit: 1.4, css: CH });
+      }
+    }
+    paw(-148, -4, 1); paw(-130, -4, 1); paw(22, -2, -1); paw(116, -2, -1);
+    /* 首（胸から前へ伸びる）と頭（床すれすれで後ろへ反り返る） */
+    chFill(ctx, limbPoly(P(-82, -46), P(-92, -40), P(-102, -34), 9 * s, 8 * s, 8 * s), rand,
+      { base: 0.44, strokes: 24, ang: 0.5, slen: 12 * s + 5, alpha: 0.24, w: 3.5, css: CH, stray: 4 });
+    var head = [P(-96, -46), P(-112, -56), P(-132, -50), P(-140, -30),
+      P(-133, -10), P(-113, -3), P(-97, -14), P(-92, -32)];
+    chFill(ctx, head, rand, { base: 0.44, strokes: 62, ang: 0.9,
+      slen: 18 * s + 6, css: CH, stray: 8 });
+    /* 顔＝影で潰す（こちらを向いている） */
+    var face = [P(-106, -48), P(-124, -46), P(-134, -30), P(-127, -14), P(-109, -8), P(-99, -26)];
+    chFill(ctx, face, rand, { base: 0.88, strokes: 44, ang: 0.8,
+      slen: 12 * s + 4, alpha: 0.36, scuffs: 18, css: 'rgb(18,15,15)', stray: 4 });
+    /* 床の影 */
+    var sh = [P(-166, 12), P(-40, 4), P(70, 6), P(126, 14), P(0, 26)];
+    chFill(ctx, sh, rand, { base: 0.22, strokes: 52, ang: 0.04,
+      slen: 50 * s + 12, alpha: 0.15, w: 3, css: CH, stray: 6 });
+  }
+
+  /** 掠れた印刷体の見出し（版が擦り切れた活字） */
+  function chHeadline(ctx, text, cx, cy, px, rand) {
+    var w = Math.ceil(px * text.length * 1.25) + 80, h = Math.ceil(px * 2.0);
+    var off = offCanvas(w, h, function (x) {
+      x.textAlign = 'center'; x.textBaseline = 'middle';
+      x.fillStyle = 'rgb(26,24,22)';
+      x.font = 'bold ' + px + 'px ' + JPM;
+      /* 版ずれの淡いゴースト＋本刷り */
+      x.globalAlpha = 0.22; x.fillText(text, w / 2 + 2.5, h / 2 + 1.5);
+      x.globalAlpha = 1; x.fillText(text, w / 2, h / 2);
+      /* 掠れ: インクの乗らなかった帯と粒を抜く */
+      x.globalCompositeOperation = 'destination-out';
+      var i;
+      for (i = 0; i < 46; i++) {
+        var yy = rand() * h;
+        x.globalAlpha = 0.10 + rand() * 0.55;
+        x.fillRect(rand() * w * 0.4, yy, w * (0.15 + rand() * 0.5), 1 + rand() * 3.5);
+      }
+      for (i = 0; i < 700; i++) {
+        x.globalAlpha = 0.25 + rand() * 0.7;
+        x.beginPath();
+        x.arc(rand() * w, rand() * h, 0.6 + rand() * 2.6, 0, Math.PI * 2);
+        x.fill();
+      }
+    });
+    ctx.drawImage(off, cx - w / 2, cy - h / 2);
+  }
+
+  /** 手書き風の走り書き（1文字ずつ角度・大きさ・濃さを揺らす） */
+  function chScrawl(ctx, text, x, y, px, rand) {
+    ctx.save();
+    ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+    var cx = x;
+    for (var i = 0; i < text.length; i++) {
+      var ch = text.charAt(i);
+      var sc = 0.86 + rand() * 0.30;
+      var rot = (rand() - 0.5) * 0.20;
+      var dy = (rand() - 0.5) * px * 0.22;
+      ctx.save();
+      ctx.translate(cx + px * sc * 0.5, y + dy);
+      ctx.rotate(rot);
+      ctx.globalAlpha = 0.52 + rand() * 0.46;
+      ctx.fillStyle = (rand() < 0.14) ? 'rgb(24,22,24)' : 'rgb(44,40,38)';
+      ctx.font = Math.round(px * sc) + 'px ' + JP;
+      ctx.fillText(ch, -px * sc * 0.5, 0);
+      ctx.restore();
+      cx += px * (0.82 + rand() * 0.16);
+    }
+    ctx.restore();
+    return cx;
+  }
+
+  /** 赤い丸判（にじみ・かすれ） */
+  function chStamp(ctx, lines, cx, cy, r, rot, rand) {
+    var d = Math.ceil(r * 2.6);
+    var off = offCanvas(d, d, function (x) {
+      var c0 = d / 2;
+      x.translate(c0, c0); x.rotate(rot); x.translate(-c0, -c0);
+      x.strokeStyle = 'rgb(150,26,22)'; x.fillStyle = 'rgb(150,26,22)';
+      x.lineWidth = r * 0.13;
+      x.globalAlpha = 0.92;
+      x.beginPath(); x.arc(c0, c0, r * 0.92, 0, Math.PI * 2); x.stroke();
+      x.lineWidth = r * 0.05; x.globalAlpha = 0.6;
+      x.beginPath(); x.arc(c0, c0, r * 0.76, 0, Math.PI * 2); x.stroke();
+      x.textAlign = 'center'; x.textBaseline = 'middle';
+      x.globalAlpha = 0.95;
+      var fp = Math.round(r * 0.52);
+      x.font = 'bold ' + fp + 'px ' + JPM;
+      for (var i = 0; i < lines.length; i++) {
+        x.fillText(lines[i], c0, c0 + (i - (lines.length - 1) / 2) * fp * 1.12);
+      }
+      /* にじみ（外へ淡く広がる）とかすれ（内が抜ける） */
+      x.globalCompositeOperation = 'source-atop';
+      for (var b = 0; b < 60; b++) {
+        x.globalAlpha = 0.05 + rand() * 0.12;
+        x.beginPath();
+        x.arc(c0 + (rand() - 0.5) * r * 1.7, c0 + (rand() - 0.5) * r * 1.7, 2 + rand() * 9, 0, Math.PI * 2);
+        x.fill();
+      }
+      x.globalCompositeOperation = 'destination-out';
+      for (var k = 0; k < 190; k++) {
+        x.globalAlpha = 0.15 + rand() * 0.55;
+        x.beginPath();
+        x.arc(c0 + (rand() - 0.5) * r * 2.0, c0 + (rand() - 0.5) * r * 2.0, 0.8 + rand() * 3.4, 0, Math.PI * 2);
+        x.fill();
+      }
+    });
+    ctx.save();
+    ctx.globalAlpha = 0.86;
+    ctx.drawImage(off, cx - d / 2, cy - d / 2);
+    ctx.restore();
+  }
+
+  function texBigBoard() {
+    var W = 1024, H = 683, c = makeCanvas(W, H), ctx = c.getContext('2d');
+    var rand = rng(41601);
+    var i;
+
+    /* ---- 紙面（褪せた大判の掲示。上ほど日焼け） ---- */
+    var g = ctx.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, '#cdc4ab'); g.addColorStop(0.45, '#c6bda4'); g.addColorStop(1, '#b8ae94');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+    /* 紙の斑・古びた縁 */
+    for (i = 0; i < 90; i++) {
+      blot(ctx, rand() * W, rand() * H, 20 + rand() * 90, 'rgba(150,136,104,0.10)');
+    }
+    ctx.fillStyle = 'rgba(96,84,60,0.20)';
+    ctx.fillRect(0, 0, W, 10); ctx.fillRect(0, H - 12, W, 12);
+    ctx.fillRect(0, 0, 10, H); ctx.fillRect(W - 11, 0, 11, H);
+    grain(ctx, W, H, 13, rand);
+
+    /* ---- ① 見出し ---- */
+    chHeadline(ctx, '封鎖区画 —— 立入禁止', W / 2, 84, 74, rand);
+    ctx.strokeStyle = 'rgba(38,34,30,0.55)'; ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.moveTo(70, 132); ctx.lineTo(W - 70, 132); ctx.stroke();
+    ctx.strokeStyle = 'rgba(38,34,30,0.25)'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(70, 140); ctx.lineTo(W - 70, 140); ctx.stroke();
+
+    /* ---- ② 木炭風のスケッチ2点（作業用キャンバスで描いて合成） ---- */
+    var skA = offCanvas(420, 360, function (x) { chStanding(x, rand, 210, 22, 310); });
+    ctx.save(); ctx.globalAlpha = 0.94; ctx.drawImage(skA, 62, 158); ctx.restore();
+    var skB = offCanvas(460, 360, function (x) { chCrawling(x, rand, 250, 300, 380); });
+    ctx.save(); ctx.globalAlpha = 0.94; ctx.drawImage(skB, 520, 158); ctx.restore();
+    /* 2枚のスケッチを分ける薄い罫（枠で囲うと図が弱くなるので縦罫1本だけ） */
+    ctx.save();
+    ctx.strokeStyle = 'rgba(52,46,42,0.26)'; ctx.lineWidth = 2; ctx.lineCap = 'round';
+    for (i = 0; i < 3; i++) {
+      ctx.globalAlpha = 0.35 + rand() * 0.4;
+      ctx.beginPath();
+      ctx.moveTo(504 + (rand() - 0.5) * 3, 168 + rand() * 6);
+      ctx.lineTo(504 + (rand() - 0.5) * 3, 498 - rand() * 8);
+      ctx.stroke();
+    }
+    ctx.restore();
+    /* 読めない走り書きの注記（文字ではない短い線） */
+    for (i = 0; i < 7; i++) {
+      chLine(ctx, [[96 + i * 2, 486 + i * 3], [140 + rand() * 40, 484 + i * 3], [190 + rand() * 30, 488 + i * 3]],
+        rand, { passes: 2, w: 2, alpha: 0.18, jit: 1.6, css: 'rgb(60,54,48)' });
+    }
+
+    /* ---- ③ 走り書き3行（docs/notes.md「P4.16追加」の正文） ---- */
+    var lines = [
+      '心臓の音を聞け。速くなったら、近い。',
+      '音を立てるな。叫びが聞こえたら、もう走っている。',
+      'ロッカーに入れ。板の陰で息を殺せ。'
+    ];
+    for (i = 0; i < lines.length; i++) chScrawl(ctx, lines[i], 62, 562 + i * 40, 28, rand);
+
+    /* ---- ④ 赤い判 ---- */
+    chStamp(ctx, ['回収', '未了'], 872, 588, 82, -0.19, rand);
+
+    /* ---- ⑤ コーヒー染み・破れ・画鋲 ---- */
+    ctx.save();
+    for (i = 0; i < 3; i++) {
+      var sx = [846, 210, 640][i], sy = [214, 640, 128][i], sr = [64, 40, 30][i];
+      ctx.globalAlpha = 0.20;
+      blot(ctx, sx, sy, sr, 'rgba(104,72,34,0.55)');
+      ctx.globalAlpha = 0.34;
+      ctx.strokeStyle = 'rgba(96,64,28,0.7)'; ctx.lineWidth = 3.5;
+      ctx.beginPath(); ctx.arc(sx, sy, sr * 0.92, 0, Math.PI * 2); ctx.stroke();
+    }
+    ctx.restore();
+    /* 破れ（紙が欠けて下地の暗がりが出る） */
+    ctx.fillStyle = 'rgba(24,22,20,0.85)';
+    ctx.beginPath();
+    ctx.moveTo(W - 8, H - 8); ctx.lineTo(W - 96, H - 8);
+    ctx.lineTo(W - 40, H - 62); ctx.lineTo(W - 8, H - 74);
+    ctx.closePath(); ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(0, 236); ctx.lineTo(26, 258); ctx.lineTo(0, 292);
+    ctx.closePath(); ctx.fill();
+    /* 画鋲（4隅＋中央上） */
+    var pins = [[34, 34], [W - 34, 34], [34, H - 34], [W - 34, H - 34], [W / 2, 26]];
+    for (i = 0; i < pins.length; i++) {
+      var px = pins[i][0], py = pins[i][1];
+      ctx.fillStyle = 'rgba(20,18,16,0.42)';
+      ctx.beginPath(); ctx.arc(px + 2.5, py + 3, 10, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = (i % 2) ? '#8d3a30' : '#3f4a54';
+      ctx.beginPath(); ctx.arc(px, py, 9.5, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = 'rgba(255,255,255,0.42)';
+      ctx.beginPath(); ctx.arc(px - 3, py - 3.5, 3.2, 0, Math.PI * 2); ctx.fill();
+    }
+    speckle(ctx, W, H, 900, rand, 'rgba(88,76,54,0.16)', 2);
+    fineGrit(ctx, 2600, rand, 'rgba(70,60,44,0.10)');
+    return c;
+  }
+
+  /* ================================================================ */
+  /* P4.16 項目2: 血痕の増補（壁の手形・引きずり跡・飛沫）                 */
+  /*   色は乾いた暗赤〜黒に近い赤。濡れ光沢は最小限。                      */
+  /* ================================================================ */
+  /* 乾いた血の色。黒に落とさず「赤み」を残す（2026-09-10 差し戻し①②）。
+     暗い通路でも赤と分かるよう、旧値 rgba(34,6,6) 系より明度・彩度を上げてある。 */
+  var BLOOD_DARK = 'rgba(72,13,10,';   /* 芯（最も濃い） */
+  var BLOOD_MID = 'rgba(104,22,16,';   /* 帯・手形の本体 */
+  var BLOOD_THIN = 'rgba(132,38,28,';  /* 擦れ・にじみの縁 */
+
+  /** にじんだ塊（楕円の放射グラデーション）。縁が立たないので擦り跡の基材に使う */
+  function softBlob(ctx, x, y, rx, ry, rot, col, a) {
+    if (!(rx > 0.1) || !(ry > 0.1)) return;
+    ctx.save();
+    ctx.translate(x, y); ctx.rotate(rot || 0); ctx.scale(1, ry / rx);
+    var g = ctx.createRadialGradient(0, 0, 0, 0, 0, rx);
+    g.addColorStop(0, col + a.toFixed(3) + ')');
+    g.addColorStop(0.5, col + (a * 0.66).toFixed(3) + ')');
+    g.addColorStop(0.82, col + (a * 0.22).toFixed(3) + ')');
+    g.addColorStop(1, col + '0)');
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(0, 0, rx, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+  }
+  /** にじんだ消し（destination-out 用）。角の立った切り欠きを作らない */
+  function softErase(ctx, x, y, rx, ry, rot, a) {
+    ctx.save();
+    ctx.globalCompositeOperation = 'destination-out';
+    softBlob(ctx, x, y, rx, ry, rot, 'rgba(0,0,0,', a);
+    ctx.restore();
+  }
+
+  /* 実寸の基準（2026-09-10 差し戻し①「実物大」）: 手の長さ（手首の付け根〜中指の先）
+     ＝ 0.19m。テクスチャは PPM(px/m) で描き、面の実寸と必ず一致させる。 */
+  var HAND_LEN_M = 0.19;
+
+  /**
+   * 手形を1つ押す。L = 手の長さ(px)。全長は概ね L（指先 -0.65L 〜 手首 +0.34L）。
+   * 手のひら幅は 0.43L ≒ 8.2cm（L=19cm のとき）＝実寸の人の手。
+   */
+  function handPrint(ctx, cx, cy, L, rot, rand, alpha) {
+    ctx.save();
+    ctx.translate(cx, cy); ctx.rotate(rot);
+    var col = BLOOD_DARK;
+    /* --- 手のひら --- */
+    softBlob(ctx, 0, 0.06 * L, 0.235 * L, 0.29 * L, 0, col, alpha);
+    ctx.fillStyle = col + (alpha * 0.92).toFixed(3) + ')';
+    ctx.beginPath();
+    ctx.ellipse(0, 0.06 * L, 0.215 * L, 0.27 * L, 0, 0, Math.PI * 2);
+    ctx.fill();
+    /* 母指球・小指球（手のひらの接地は左右が濃い） */
+    softBlob(ctx, -0.17 * L, 0.14 * L, 0.10 * L, 0.14 * L, 0, col, alpha * 0.9);
+    softBlob(ctx, 0.16 * L, 0.12 * L, 0.09 * L, 0.13 * L, 0, col, alpha * 0.8);
+    /* --- 4本指（付け根 -0.19L から先へ、わずかに細る） --- */
+    var F = [[-0.145, -0.54, 0.048], [-0.045, -0.60, 0.050],
+      [0.055, -0.565, 0.047], [0.145, -0.46, 0.041]];
+    var i;
+    for (i = 0; i < F.length; i++) {
+      var bx = F[i][0] * L * 0.72, by = -0.19 * L;
+      var tx = F[i][0] * L + (rand() - 0.5) * 0.02 * L, ty = F[i][1] * L;
+      var w = F[i][2] * L;
+      ctx.strokeStyle = col + (alpha * 0.95).toFixed(3) + ')';
+      ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+      ctx.lineWidth = w * 2.0;
+      ctx.beginPath();
+      ctx.moveTo(bx, by);
+      ctx.quadraticCurveTo((bx + tx) / 2 + (rand() - 0.5) * 0.03 * L, (by + ty) / 2, tx, ty);
+      ctx.stroke();
+      /* 指先の腹（少し太い） */
+      softBlob(ctx, tx, ty + w * 0.4, w * 1.25, w * 1.5, 0, col, alpha * 0.85);
+    }
+    /* --- 親指（手のひらの横から斜めに） --- */
+    ctx.strokeStyle = col + (alpha * 0.92).toFixed(3) + ')';
+    ctx.lineWidth = 0.058 * L * 2.0;
+    ctx.beginPath();
+    ctx.moveTo(-0.185 * L, 0.13 * L);
+    ctx.quadraticCurveTo(-0.30 * L, 0.03 * L, -0.335 * L, -0.11 * L);
+    ctx.stroke();
+    softBlob(ctx, -0.335 * L, -0.13 * L, 0.075 * L, 0.085 * L, 0, col, alpha * 0.85);
+    /* --- 押しムラ（中心が抜けて縁が濃い＝血が薄く伸びた見え方） --- */
+    for (i = 0; i < 26; i++) {
+      softErase(ctx, (rand() - 0.5) * 0.34 * L, (rand() - 0.4) * 0.42 * L,
+        0.03 * L + rand() * 0.09 * L, 0.03 * L + rand() * 0.08 * L, rand() * 3,
+        0.10 + rand() * 0.38);
+    }
+    /* --- にじみの縁（外へ薄く広がる） --- */
+    for (i = 0; i < 14; i++) {
+      var an = rand() * Math.PI * 2, rr = 0.20 * L + rand() * 0.24 * L;
+      softBlob(ctx, Math.cos(an) * rr * 0.9, Math.sin(an) * rr, 0.05 * L + rand() * 0.06 * L,
+        0.05 * L + rand() * 0.06 * L, 0, BLOOD_THIN, 0.08 + rand() * 0.16);
+    }
+    ctx.restore();
+  }
+
+  /**
+   * 壁の手形と擦り跡（アルファ）。面は 1.50m x 1.125m、中心高さ 1.22m（腰〜肩）。
+   * 1024px / 1.50m ＝ 682.7 px/m。手形は HAND_LEN_M（0.19m）＝130px で押す＝実物大。
+   */
+  function texBloodHand() {
+    var W = 1024, H = 768, c = makeCanvas(W, H), ctx = c.getContext('2d');
+    var rand = rng(70311);
+    ctx.clearRect(0, 0, W, H);
+    var PPM = W / 1.50;                 /* 682.7 px/m */
+    var L = HAND_LEN_M * PPM;           /* 手の長さ 130px ＝ 19cm（実物大） */
+    var i, k;
+
+    /* 手形の位置（実物大の手が2つ。角度と濃さだけ変える） */
+    var HANDS = [{ x: 0.235 * W, y: 0.30 * H, rot: -0.14, a: 0.90 },
+      { x: 0.615 * W, y: 0.41 * H, rot: 0.46, a: 0.78 }];
+
+    /* --- ① 掌が滑り落ちた幅広の擦り（手形の真下から。にじんだ塊だけで描く） --- */
+    for (i = 0; i < HANDS.length; i++) {
+      var hs = HANDS[i], slen = 0.22 * H + rand() * 0.10 * H;
+      for (k = 0; k <= 20; k++) {
+        var st = k / 20;
+        softBlob(ctx, hs.x + Math.sin(st * 2.3 + i) * 0.012 * W + (rand() - 0.5) * 0.012 * W,
+          hs.y + 0.30 * L + st * slen,
+          L * (0.30 - st * 0.10), L * (0.22 - st * 0.06), 0,
+          BLOOD_MID, (0.26 - st * 0.22) * hs.a * (0.7 + rand() * 0.5));
+      }
+    }
+    /* --- ② 指が壁を掻いて滑り落ちた筋。指の腹から続けて出す＝手形と繋がって見える --- */
+    for (i = 0; i < HANDS.length; i++) {
+      var h2 = HANDS[i];
+      for (var fi = 0; fi < 4; fi++) {
+        var ax0 = (fi - 1.5) * 0.10 * L;
+        var ox0 = h2.x + Math.cos(h2.rot) * ax0, oy0 = h2.y - Math.sin(h2.rot) * ax0 + 0.10 * L;
+        var glen = 0.10 * H + rand() * 0.20 * H;
+        var lean = (rand() - 0.5) * 0.05 * W;
+        for (k = 0; k <= 22; k++) {
+          var gt = k / 22;
+          var gw = 0.052 * L * (1.15 - gt * 0.55);
+          softBlob(ctx, ox0 + lean * gt * gt + (rand() - 0.5) * 3, oy0 + gt * glen,
+            gw, gw * 2.6, 0, BLOOD_MID,
+            (0.42 - gt * 0.36) * h2.a * (0.75 + rand() * 0.45));
+        }
+      }
+    }
+    /* --- ③ 手形2つ（実物大。手の長さ L＝0.19m） --- */
+    for (i = 0; i < HANDS.length; i++) {
+      handPrint(ctx, HANDS[i].x, HANDS[i].y, L, HANDS[i].rot, rand, HANDS[i].a);
+    }
+    /* --- ④ 垂れ（重力に沿う細い筋）。手形より目立たせない（主役は手形） --- */
+    for (i = 0; i < 13; i++) {
+      var dx = 0.14 * W + rand() * 0.62 * W, dy = 0.34 * H + rand() * 0.24 * H;
+      var dl = 0.02 * H + rand() * 0.13 * H;
+      ctx.strokeStyle = BLOOD_DARK + (0.16 + rand() * 0.22).toFixed(3) + ')';
+      ctx.lineWidth = 1.2 + rand() * 2.6;
+      ctx.lineCap = 'round';
+      ctx.beginPath(); ctx.moveTo(dx, dy); ctx.lineTo(dx + (rand() - 0.5) * 9, dy + dl); ctx.stroke();
+      softBlob(ctx, dx + (rand() - 0.5) * 6, dy + dl, 3 + rand() * 5, 4 + rand() * 6, 0,
+        BLOOD_DARK, 0.16 + rand() * 0.18);
+    }
+    /* --- ⑤ 飛んだ細かい滴 --- */
+    for (k = 0; k < 260; k++) {
+      blot(ctx, 0.06 * W + rand() * 0.86 * W, 0.16 * H + rand() * 0.72 * H,
+        1.4 + rand() * 5.0, BLOOD_MID + (0.18 + rand() * 0.42).toFixed(3) + ')');
+    }
+    return c;
+  }
+
+  /**
+   * 引きずり跡（アルファ・V方向に始点→終点）。
+   * 面は幅 0.90m（world.js DRAG_QUAD_W）、V は run 全体（2〜4マス＝4〜8m）に割り当てる。
+   * 256px / 0.90m ＝ 284 px/m。帯の幅は 119px ≒ 0.42m（契約 30〜45cm）。
+   * 2026-09-10 差し戻し②: 鋭い折れ線・黒い帯を禁止。
+   *   ①連続した擦り帯 ②縁がにじんで薄れる ③乾いた暗赤 ④揺れは緩やか
+   *   ⑤帯の中に濃淡の筋 ⑥終点付近に掠れ（擦れた手の跡）
+   */
+  var DRAG_BAND_M = 0.42;
+  function texBloodDrag() {
+    var W = 256, H = 1024, c = makeCanvas(W, H), ctx = c.getContext('2d');
+    var rand = rng(31877);
+    ctx.clearRect(0, 0, W, H);
+    var HALF = (DRAG_BAND_M / 0.90) * W / 2;      /* 帯の半幅 60px ＝ 21cm */
+    var i, k, t, y;
+
+    /* 中心線。緩やかな2成分のうねりだけ（振れ幅は合計 ±16px ＝ ±5.6cm） */
+    function cxAt(tt) {
+      return W / 2 + Math.sin(tt * 1.9 + 0.4) * 11 + Math.sin(tt * 4.3 + 1.7) * 5;
+    }
+    /* 帯の濃さ: 始点が濃く、終点へ向けて薄れる（消え際は 0 に落とす） */
+    function ampAt(tt) {
+      var a = 0.72 - 0.50 * Math.pow(tt, 0.85);
+      if (tt > 0.90) a *= (1 - (tt - 0.90) / 0.10);
+      return Math.max(0, a);
+    }
+    /* 行ごとの太さの揺らぎ（帯の輪郭を直線にしない） */
+    function widAt(tt) {
+      return HALF * (0.86 + 0.16 * Math.sin(tt * 13.7) + 0.08 * Math.sin(tt * 31.1 + 2.0));
+    }
+
+    /* --- ① 帯の本体: 1行ずつ横方向のグラデーションで塗る＝縁が必ずにじむ --- */
+    /* 行ごとの揺らぎは「なめらかな関数」で作る。行ごとに独立した乱数を使うと
+       横縞（リボン状の縞）が出て擦り跡に見えなくなるため（2026-09-10 実測）。 */
+    function wob(tt, f1, f2, ph) {
+      return 1 + 0.10 * Math.sin(tt * f1 + ph) + 0.05 * Math.sin(tt * f2 + ph * 1.7);
+    }
+    var STEP = 3;
+    for (y = 0; y < H; y += STEP) {
+      t = y / H;
+      var a0 = ampAt(t) * wob(t, 47.3, 113.1, 0.6) * (0.98 + rand() * 0.04);
+      if (a0 <= 0.004) continue;
+      var hw = widAt(t) * wob(t, 29.7, 71.3, 2.2);
+      var cx0 = cxAt(t) + (rand() - 0.5) * 1.2;
+      var g = ctx.createLinearGradient(cx0 - hw, 0, cx0 + hw, 0);
+      var e0 = 0.15 + 0.05 * Math.sin(t * 23.1), e1 = 0.85 + 0.05 * Math.sin(t * 19.7 + 1.4);
+      g.addColorStop(0, BLOOD_MID + '0)');
+      g.addColorStop(e0, BLOOD_MID + (a0 * 0.42).toFixed(3) + ')');
+      g.addColorStop(0.36 + 0.04 * Math.sin(t * 37.7), BLOOD_MID + a0.toFixed(3) + ')');
+      g.addColorStop(0.64 + 0.04 * Math.sin(t * 41.3 + 2.0), BLOOD_MID + (a0 * 0.88).toFixed(3) + ')');
+      g.addColorStop(e1, BLOOD_MID + (a0 * 0.36).toFixed(3) + ')');
+      g.addColorStop(1, BLOOD_MID + '0)');
+      ctx.fillStyle = g;
+      ctx.fillRect(cx0 - hw, y, hw * 2, STEP + 1);
+    }
+
+    /* --- ② 帯の中の濃淡の筋（複数の指・布が擦った跡）。V方向に長く連続させる --- */
+    for (i = 0; i < 22; i++) {
+      var off = (rand() - 0.5) * HALF * 1.55;
+      var t0 = rand() * 0.62, t1 = Math.min(0.98, t0 + 0.20 + rand() * 0.46);
+      var dark = rand() < 0.62;
+      var wln = 3 + rand() * 9;
+      var seg = 22;
+      for (k = 0; k <= seg; k++) {
+        var tk = t0 + (t1 - t0) * (k / seg);
+        var fade = Math.sin(Math.PI * (k / seg));            /* 両端で消える＝途切れない */
+        var aa = (dark ? 0.20 : 0.11) * fade * ampAt(tk) / 0.7;
+        if (aa <= 0.004) continue;
+        softBlob(ctx, cxAt(tk) + off + (rand() - 0.5) * 4, tk * H,
+          wln, wln * 3.6, 0, dark ? BLOOD_DARK : BLOOD_THIN, aa);
+      }
+    }
+
+    /* --- ③ 始点の溜まり（引きずり始めが濃い） --- */
+    softBlob(ctx, cxAt(0.02) + 4, 0.028 * H, HALF * 1.15, HALF * 0.85, 0, BLOOD_DARK, 0.80);
+    softBlob(ctx, cxAt(0.05) - 14, 0.055 * H, HALF * 0.80, HALF * 0.62, 0, BLOOD_DARK, 0.62);
+    for (i = 0; i < 26; i++) {
+      var an = rand() * Math.PI * 2, r2 = HALF * (0.7 + rand() * 1.5);
+      softBlob(ctx, cxAt(0.03) + Math.cos(an) * r2, 0.04 * H + Math.sin(an) * r2 * 0.8,
+        4 + rand() * 14, 5 + rand() * 18, 0, BLOOD_MID, 0.10 + rand() * 0.32);
+    }
+
+    /* --- ④ 途切れ（床が乾いて跡が抜けた部分）。にじんだ消しだけを使う --- */
+    for (i = 0; i < 22; i++) {
+      t = 0.10 + rand() * 0.86;
+      softErase(ctx, cxAt(t) + (rand() - 0.5) * HALF * 1.5, t * H,
+        10 + rand() * 26, 16 + rand() * 48, 0, 0.18 + rand() * 0.44);
+    }
+    /* 縁の外側をさらに薄く削る（帯の幅を一定にしない） */
+    for (i = 0; i < 40; i++) {
+      t = rand();
+      softErase(ctx, cxAt(t) + (rand() < 0.5 ? -1 : 1) * (HALF * 0.95 + rand() * HALF * 0.5),
+        t * H, 12 + rand() * 22, 18 + rand() * 40, 0, 0.30 + rand() * 0.55);
+    }
+
+    /* --- ⑤ 終点付近の掠れ（擦れた手の跡・指4本ぶんの筋） --- */
+    var te = 0.855, ex = cxAt(te);
+    for (i = 0; i < 4; i++) {
+      var ox = (i - 1.5) * (HALF * 0.34);
+      for (k = 0; k <= 12; k++) {
+        var tk2 = te + (k / 12) * 0.075;
+        var fd = 1 - k / 12;
+        softBlob(ctx, ex + ox + (rand() - 0.5) * 5 + (k / 12) * ox * 0.5, tk2 * H,
+          4 + rand() * 3, 10 + rand() * 8, 0, BLOOD_DARK, 0.30 * fd + 0.05);
+      }
+    }
+    softBlob(ctx, ex, (te + 0.012) * H, HALF * 0.52, HALF * 0.40, 0, BLOOD_DARK, 0.34);
+
+    /* --- ⑥ 脇へ飛んだ細かい滴（帯の外にわずかに） --- */
+    for (i = 0; i < 200; i++) {
+      t = rand();
+      blot(ctx, cxAt(t) + (rand() - 0.5) * HALF * 3.0, t * H * 0.94,
+        1.0 + rand() * 3.4, BLOOD_MID + (0.10 + rand() * 0.34 * (1 - t)).toFixed(3) + ')');
+    }
+    return c;
+  }
+
+  /** 飛沫（アルファ・放射状に飛んだ滴） */
+  function texBloodSplat() {
+    var W = 256, H = 256, c = makeCanvas(W, H), ctx = c.getContext('2d');
+    var rand = rng(52411);
+    ctx.clearRect(0, 0, W, H);
+    var ox = 96, oy = 118;
+    /* 小さな溜まり */
+    blot(ctx, ox, oy, 26, BLOOD_DARK + '0.72)');
+    blot(ctx, ox + 10, oy + 8, 15, BLOOD_DARK + '0.60)');
+    /* 主方向を持った飛沫（一方向に長く飛ぶ＝殴打の向きが読める） */
+    var main = -0.55;
+    for (var i = 0; i < 150; i++) {
+      var a = main + (rand() - 0.5) * 1.5;
+      var r = 18 + Math.pow(rand(), 0.6) * 150;
+      var x = ox + Math.cos(a) * r, y = oy + Math.sin(a) * r;
+      if (x < -10 || x > W + 10 || y < -10 || y > H + 10) continue;
+      var sz = Math.max(0.8, 6.5 * (1 - r / 190) + rand() * 2.6);
+      ctx.save();
+      ctx.translate(x, y); ctx.rotate(a);
+      ctx.fillStyle = BLOOD_MID + (0.35 + rand() * 0.5).toFixed(2) + ')';
+      ctx.beginPath();
+      ctx.ellipse(0, 0, sz * (1 + rand() * 1.6), sz, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+      /* 尾を引く滴 */
+      if (rand() < 0.28) {
+        ctx.strokeStyle = BLOOD_THIN + (0.2 + rand() * 0.3).toFixed(2) + ')';
+        ctx.lineWidth = 1 + rand() * 2;
+        ctx.beginPath(); ctx.moveTo(x, y);
+        ctx.lineTo(x + Math.cos(a) * (6 + rand() * 18), y + Math.sin(a) * (6 + rand() * 18));
+        ctx.stroke();
+      }
+    }
+    /* 霧状の微細な飛沫 */
+    for (var k = 0; k < 420; k++) {
+      var a2 = main + (rand() - 0.5) * 2.2, r3 = 20 + rand() * 165;
+      blot(ctx, ox + Math.cos(a2) * r3, oy + Math.sin(a2) * r3,
+        0.5 + rand() * 1.7, BLOOD_MID + (0.16 + rand() * 0.4).toFixed(2) + ')');
+    }
+    return c;
+  }
+
+  /* ================================================================ */
 
   var BUILDERS = {
     wall: function () { return texWall(1337); },
@@ -1766,6 +2551,8 @@
     water: texWater, glass: texGlass, blood: texBlood, hatch: texHatch,
     sign: texSign, tankfluid: texTankFluid, board: texBoard, monitors: texMonitors,
     zonesign: texZoneSign,
+    bigboard: texBigBoard,
+    bloodHand: texBloodHand, bloodDrag: texBloodDrag, bloodSplat: texBloodSplat,
     wallPaint: texWallPaint, wallMetal: texWallMetal,
     floorTile: texFloorTile, floorWet: texFloorWet, floorMetal: texFloorMetal
   };

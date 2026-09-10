@@ -784,7 +784,9 @@
     Object.defineProperty(B, 'wall2', { get: function () { return bag((ZONE_TEX[curZone] || DEFAULT_TEX).walls[1]); } });
     Object.defineProperty(B, 'wall3', { get: function () { return bag((ZONE_TEX[curZone] || DEFAULT_TEX).walls[2]); } });
     ['ceil', 'litter', 'poster', 'sign', 'zonesign', 'metal', 'dark', 'lamp', 'screen',
-      'paper', 'sheet', 'fluid', 'board', 'monitors', 'water', 'glass', 'hatch', 'blood']
+      'paper', 'sheet', 'fluid', 'board', 'monitors', 'water', 'glass', 'hatch', 'blood',
+      /* P4.16 レーンA: 大型掲示板の紙面と、増補した血痕3種 */
+      'bigboard', 'bloodHand', 'bloodDrag', 'bloodSplat']
       .forEach(function (n) {
         Object.defineProperty(B, n, { get: function () { return bag(n); } });
       });
@@ -997,6 +999,7 @@
     /* ---- 壁付け・天井付けの造作（モニタ壁・ホワイトボード・標識・手術灯） ---- */
     this._wallKit(B, shader, planeShader);
     this._signs(B, shader, planeShader);
+    this._bigBoard(B, shader, planeShader);
     this._regionSigns(B, shader, planeShader);
     this._ceilKit(B, shader);
 
@@ -1023,13 +1026,16 @@
       metal: opaque('metal'), dark: opaque('metal'), lamp: opaque('lamp'),
       screen: opaque('screen'), paper: opaque('paper'), sheet: opaque('sheet'),
       fluid: opaque('tankfluid'), board: opaque('board'), monitors: opaque('monitors'),
-      water: decal('water'), glass: decal('glass'), hatch: decal('hatch'), blood: decal('blood')
+      water: decal('water'), glass: decal('glass'), hatch: decal('hatch'), blood: decal('blood'),
+      /* P4.16 レーンA（契約 §4「P4.16 再プレイ差し戻し」項目1・2） */
+      bigboard: opaque('bigboard'),
+      bloodHand: decal('bloodHand'), bloodDrag: decal('bloodDrag'), bloodSplat: decal('bloodSplat')
     };
     /* 描画順（不透明 → デカール）。素材は全チャンクで共有する */
     var order = ['floor', 'floorTile', 'floorWet', 'floorMetal', 'ceil',
       'wall', 'wall2', 'wall3', 'wallPaint', 'wallMetal', 'metal', 'dark', 'lamp', 'poster',
-      'screen', 'paper', 'sheet', 'fluid', 'board', 'monitors', 'sign', 'zonesign',
-      'hatch', 'blood', 'litter', 'water', 'glass'];
+      'screen', 'paper', 'sheet', 'fluid', 'board', 'monitors', 'bigboard', 'sign', 'zonesign',
+      'hatch', 'blood', 'bloodDrag', 'bloodSplat', 'bloodHand', 'litter', 'water', 'glass'];
     var matCache = Object.create(null);
     var tris = 0, groups = 0;
     var chunkKeys = Object.keys(chunkBags);
@@ -1612,6 +1618,26 @@
   World.prototype._floorDecals = function (B, shader, planeShader) {
     var map = this.map, T = map.tileSize, meta = map.meta || {};
     var self = this;
+    /**
+     * 血痕専用の面シェーダ（2026-09-10 差し戻し①②）。
+     * 差し戻しの合格条件は「3m以内なら増感なしで血痕と分かる濃さ」。ところが血痕は
+     * 闇だまり（輝度が 0.02〜0.09 しかない区間）にも置かれるので、焼き込みをそのまま
+     * 掛けると壁・床と一緒に沈んで消える。そこで**焼き込みの明るさに下限を与える**。
+     * 下限は「乾いた暗赤が読める最小」で、暗部判定（輝度40）は割らない小さな値。
+     */
+    function bloodShader(ownerKey, tint, n) {
+      var base = planeShader(ownerKey, tint, n);
+      return function (x, y, z) {
+        var c = base(x, y, z);
+        var l = (c[0] + c[1] + c[2]) / 3;
+        if (l >= BLOOD_MIN_SHADE) return c;
+        if (l > 1e-4) {
+          var k = BLOOD_MIN_SHADE / l;
+          return [c[0] * k, c[1] * k, c[2] * k];
+        }
+        return [BLOOD_MIN_SHADE * tint[0], BLOOD_MIN_SHADE * tint[1], BLOOD_MIN_SHADE * tint[2]];
+      };
+    }
     var up = [0, 1, 0];
 
     var bset = this._bset || function () {};
@@ -1623,6 +1649,17 @@
       var hx = size / 2, hz = sz / 2;
       builder.grid([cx - hx, 0, cz + hz], [size, 0, 0], [0, 0, -sz], 1, 1, 1, 1,
         planeShader(col + ',' + row, tintArr, up), null,
+        function (x, z) { return map.floorYAt(x, z) + y; });
+    }
+    /** quad と同じだが血痕専用シェーダを使う（闇だまりでも沈ませない） */
+    function bloodQuad(builderFn, col, row, size, y, tintArr, sizeZ) {
+      bset(col, row);
+      var builder = builderFn();
+      var cx = col * T + T / 2, cz = row * T + T / 2;
+      var sz = (sizeZ === undefined) ? size : sizeZ;
+      var hx = size / 2, hz = sz / 2;
+      builder.grid([cx - hx, 0, cz + hz], [size, 0, 0], [0, 0, -sz], 1, 1, 1, 1,
+        bloodShader(col + ',' + row, tintArr, up), null,
         function (x, z) { return map.floorYAt(x, z) + y; });
     }
 
@@ -1647,9 +1684,22 @@
     if (meta.exitPad) {
       quad(function () { return B.hatch; }, meta.exitPad.col, meta.exitPad.row, 1.86, 0.014, [0.95, 0.95, 0.95]);
     }
+    /* P4.16 項目2: 血痕の増補（床の血溜まり / 壁の手形と擦り跡 / 引きずり跡 / 飛沫）。
+       色はテクスチャ側で乾いた暗赤〜黒に寄せてあるので、ここでは光沢を足さない。 */
     var dec = meta.decals || [];
     for (var k = 0; k < dec.length; k++) {
-      if (dec[k].type === 'blood') quad(function () { return B.blood; }, dec[k].col, dec[k].row, 1.8, 0.018, [1, 1, 1]);
+      var dk = dec[k], ty = dk.type || 'blood';
+      if (ty === 'blood') {
+        /* 差し戻し②「黒ではなく赤みが残る」: 4種が同じ材質に見えるよう床の血溜まりも
+           赤側へ持ち上げ、闇だまりでも沈まないよう bloodShader を通す。 */
+        bloodQuad(function () { return B.blood; }, dk.col, dk.row, 1.8, 0.018, [1.45, 1.02, 0.98]);
+      } else if (ty === 'bloodSplat') {
+        bloodQuad(function () { return B.bloodSplat; }, dk.col, dk.row, 1.92, 0.017, [1.35, 1.00, 0.96]);
+      } else if (ty === 'bloodDrag') {
+        this._bloodDragDecal(B, dk, bloodShader);
+      } else if (ty === 'bloodHand') {
+        this._bloodHandDecal(B, dk, bloodShader);
+      }
     }
     /* センサー */
     var sen = meta.sensors || [];
@@ -1837,6 +1887,141 @@
         (along === 'z') ? 0.05 : 0.34, 2.02, (along === 'z') ? 0.34 : 0.05, 1.1, sh);
     }
     setYBias(0);
+  };
+
+  /* P4.16 項目1: 大型掲示板の寸法（契約 §4「幅2.4m x 高さ1.6m級」）。
+   * 機械テストはこの定数と据えた座標の両方を見る。 */
+  var BIGBOARD = { w: 2.40, h: 1.60, cy: 1.62, stick: 0.155, paperOff: 0.060 };
+
+  /**
+   * P4.16 項目1: スタート部屋の大型掲示板（契約 §4「P4.16 再プレイ差し戻し」項目1）。
+   * meta.bigBoard = { col, row, dir }。col,row は**掲示板の前に立つ歩行可能マス**、
+   * dir はそのマスから見た**掲示板が付いている壁の向き**（記録端末 _saveTerminal と同じ流儀）。
+   *
+   * 見分けの契約: 既存の張り紙（_wallPaper 0.44〜0.72m角）と同じ扱いにしない。
+   *   紙面 2.40m x 1.60m ＝ 面積で 5倍以上。金属の枠と庇（フード灯）を持ち、
+   *   焼き込みを明るくして「ここだけ照らされている」見え方にする。
+   * 壁からの突出は最大 0.155m（プレイヤー半径0.32m未満・契約 §3 の 0.30m以内）。
+   */
+  World.prototype._bigBoard = function (B, shader, planeShader) {
+    var map = this.map, T = map.tileSize;
+    var bb = (map.meta && map.meta.bigBoard) || null;
+    if (!bb) return;
+    var n = (bb.dir && FACE_VEC[bb.dir]) ? FACE_VEC[bb.dir] : this._wallDirOf(bb.col, bb.row);
+    if (!n) return;
+    if (this._bset) this._bset(bb.col, bb.row);
+    var m = [-n[0], 0, -n[2]];                    /* 面の外向き法線（部屋の側を向く） */
+    var key = bb.col + ',' + bb.row;
+    setYBias(map.cellFloorY(bb.col, bb.row));
+    var cx = bb.col * T + T / 2, cz = bb.row * T + T / 2;
+    var wx = cx + n[0] * (T * 0.5), wz = cz + n[2] * (T * 0.5);
+    var along = (n[0] !== 0) ? 'z' : 'x';
+    var CY = BIGBOARD.cy;                         /* 板の中心高さ（目線） */
+    var PW = BIGBOARD.w, PH = BIGBOARD.h;         /* 紙面（契約値） */
+    var shBody = shader(key, [0.62, 0.64, 0.66]);
+    var shTrim = shader(key, [1.34, 1.32, 1.24]);
+    var shHood = shader(key, [0.80, 0.82, 0.84]);
+    /** 壁面から off だけ手前、横 a・縦 b にずらした箱 */
+    function put(bld, off, a, b, w, h, d, uvS, sh) {
+      bld.box(wx + m[0] * off + ((along === 'z') ? 0 : a),
+        CY + b,
+        wz + m[2] * off + ((along === 'z') ? a : 0),
+        (along === 'z') ? d : w, h, (along === 'z') ? w : d, uvS, sh);
+    }
+    /* 背板（掲示板の台。紙面より一回り大きい暗い板）。突出 0.05m */
+    put(B.dark, 0.025, 0, 0, PW + 0.20, PH + 0.20, 0.05, 0.8, shBody);
+    /* 金属の枠（上下・左右）。突出 0.115m */
+    put(B.metal, 0.075, 0, (PH + 0.13) / 2, PW + 0.20, 0.13, 0.08, 1.0, shTrim);
+    put(B.metal, 0.075, 0, -(PH + 0.13) / 2, PW + 0.20, 0.13, 0.08, 1.0, shTrim);
+    put(B.metal, 0.075, (PW + 0.13) / 2, 0, 0.13, PH + 0.20, 0.08, 1.0, shTrim);
+    put(B.metal, 0.075, -(PW + 0.13) / 2, 0, 0.13, PH + 0.20, 0.08, 1.0, shTrim);
+    /* 紙面。突出 0.06m（枠より奥＝額装に見える）。
+       焼き込みを明るくして「掲示板だけ照らされている」見え方にする（契約 項目1） */
+    facePanel(B.bigboard, wx + m[0] * 0.060, CY, wz + m[2] * 0.060, m, PW, PH,
+      planeShader(key, [2.05, 2.00, 1.90], m));
+    /* 庇（フード灯）。紙面の上に伸びて板だけを照らす体裁。突出 0.155m */
+    put(B.dark, 0.085, 0, PH / 2 + 0.30, PW * 0.52, 0.09, 0.17, 1.2, shHood);
+    put(B.lamp, 0.075, 0, PH / 2 + 0.235, PW * 0.46, 0.05, 0.10, 2.0,
+      function () { return [1.05, 0.98, 0.82]; });
+    /* 留め具（四隅のボルト）。突出 0.13m */
+    for (var q = 0; q < 4; q++) {
+      var ax = ((q & 1) ? 1 : -1) * (PW / 2 + 0.055);
+      var by = ((q & 2) ? 1 : -1) * (PH / 2 + 0.055);
+      put(B.metal, 0.105, ax, by, 0.07, 0.07, 0.05, 2.4, shTrim);
+    }
+    setYBias(0);
+  };
+
+  /* P4.16 項目2 の実寸（2026-09-10 差し戻し①②）。textures.js の作画寸法と一対一。
+   *   HANDPANEL: 手形の面。1024x768px を 1.50 x 1.125m に貼る＝682.7px/m。
+   *              手形は 0.19m（130px）＝実物大。
+   *   DRAGQUAD : 引きずり跡の面の幅。256px を 0.90m に貼る＝284px/m。
+   *              帯そのものは 0.42m（119px）＝契約 30〜45cm。 */
+  var HANDPANEL = { w: 1.50, h: 1.125, handLen: 0.19, texW: 1024, texH: 768 };
+  var DRAGQUAD = { w: 0.90, band: 0.42, texW: 256, texH: 1024 };
+  /* 血痕の焼き込みの下限（bloodShader）。0＝闇に沈めてよい、1＝常に全光量。 */
+  var BLOOD_MIN_SHADE = 0.38;
+
+  /**
+   * P4.16 項目2: 壁の手形と擦り跡（契約 §4「P4.16」項目2「腰〜肩の高さ」）。
+   * d = { col, row, dir }。col,row は歩行可能マス、dir は手形が付く壁の向き
+   * （省略時は隣接する壁を自動で探す）。壁から 0.02m しか出ない＝通行に干渉しない。
+   */
+  World.prototype._bloodHandDecal = function (B, d, planeShader) {
+    var map = this.map, T = map.tileSize;
+    var n = (d.dir && FACE_VEC[d.dir]) ? FACE_VEC[d.dir] : this._wallDirOf(d.col, d.row);
+    if (!n) return;
+    if (this._bset) this._bset(d.col, d.row);
+    var m = [-n[0], 0, -n[2]];
+    var key = d.col + ',' + d.row;
+    setYBias(map.cellFloorY(d.col, d.row));
+    var cx = d.col * T + T / 2, cz = d.row * T + T / 2;
+    var wx = cx + n[0] * (T * 0.5 + 0.02), wz = cz + n[2] * (T * 0.5 + 0.02);
+    /* 面の中心 1.22m。手形はテクスチャ上 v=0.30/0.40 にあるので床から 1.45m / 1.33m
+       ＝差し戻し①「床から1.2〜1.5m」。手形そのものは実物大（手の長さ0.19m）で、
+       面の実寸はテクスチャの PPM（1024px / 1.50m）と一対一で対応させる。
+       tint は「暗い通路でも赤と分かる濃さ」のため赤側へ持ち上げる（差し戻し①）。 */
+    facePanel(B.bloodHand, wx, 1.22, wz, m, HANDPANEL.w, HANDPANEL.h,
+      planeShader(key, [1.60, 1.08, 1.02], m));
+    setYBias(0);
+  };
+
+  /**
+   * P4.16 項目2: 引きずり跡（契約 §4「P4.16」項目2「床に2〜4マス続く帯」）。
+   * d = { col, row, col2, row2 }。始点(col,row)が濃く、終点(col2,row2)へ細って消える。
+   * テクスチャの V を run 全体に割り当てるので、マスの継ぎ目に段差が出ない。
+   */
+  World.prototype._bloodDragDecal = function (B, d, planeShader) {
+    var map = this.map, T = map.tileSize;
+    var dc = (d.col2 > d.col) ? 1 : ((d.col2 < d.col) ? -1 : 0);
+    var dr = (d.row2 > d.row) ? 1 : ((d.row2 < d.row) ? -1 : 0);
+    var len = Math.abs(d.col2 - d.col) + Math.abs(d.row2 - d.row) + 1;
+    if (len < 2 || (dc !== 0 && dr !== 0)) return;
+    /* 面の幅 0.90m。帯そのものはテクスチャ内で 0.38m に収まり、両脇 0.26m は
+       にじみの余白＝マスの端で帯が切れない（差し戻し②）。 */
+    var up = [0, 1, 0], BW = DRAGQUAD.w;
+    for (var i = 0; i < len; i++) {
+      var col = d.col + dc * i, row = d.row + dr * i;
+      if (!map.isWalkable(col, row)) continue;
+      if (this._bset) this._bset(col, row);
+      var cx = col * T + T / 2, cz = row * T + T / 2;
+      var v0 = i / len, v1 = (i + 1) / len;
+      /* 帯の進行方向を V に、幅方向を U に取る。
+         2026-09-10 差し戻し②の原因: U×V が下向きになる向きがあり、表面カリングで
+         帯がまったく描かれていなかった（見えていた黒いジグザグは配管・ケーブル）。
+         U×V が必ず上（+Y）になるよう U = (-Vz, 0, Vx) で取り直す。 */
+      var vx = dc * T, vz = dr * T;
+      var ux = -dr * BW, uz = dc * BW;
+      var o = [cx - vx / 2 - ux / 2, 0, cz - vz / 2 - uz / 2];
+      var u = [ux, 0, uz], v = [vx, 0, vz];
+      B.bloodDrag.grid(o, u, v, 1, 1, 1, 1,
+        /* 差し戻し②「黒ではなく乾いた暗赤」: 床の明度に対して赤みが残る強さに持ち上げる */
+        planeShader(col + ',' + row, [1.45, 1.05, 0.98], up),
+        (function (a, b) {
+          return function (s, t) { return [s, 1 - (a + (b - a) * t)]; };
+        })(v0, v1),
+        function (x, z) { return map.floorYAt(x, z) + 0.019; });
+    }
   };
 
   /* ---------------- 壁付け・天井付けの造作 ---------------- */
@@ -2973,5 +3158,347 @@
     get ambient() { return AMBIENT; }, set ambient(v) { AMBIENT = v; },
     zoneOff: ZONE_OFF, zoneGain: ZONE_GAIN, zoneFlicker: ZONE_FLICKER
   };
+
+  /* ================================================================
+   * P4.16 レーンA 機械テスト（契約 DESIGN.md §4「P4.16 再プレイ差し戻し」項目1・2）
+   *   test.js はレーンBが同時に編集しているので、他モジュールと同じ流儀で
+   *   ESCAPE.__extraSuites へ積む。署名は test.js の suites と同じ (t, g)。
+   * ============================================================== */
+  ESCAPE.__extraSuites = ESCAPE.__extraSuites || [];
+
+  var FACE = { n: [0, 0, -1], s: [0, 0, 1], e: [1, 0, 0], w: [-1, 0, 0] };
+
+  /** 項目1: スタート部屋の大型掲示板 */
+  function testP416BigBoard(t, g) {
+    var map = g.map, meta = map.meta || {}, T = map.tileSize;
+    var bb = meta.bigBoard;
+    if (!t.ok(!!bb, 'P4.16 項目1: meta.bigBoard がある')) return;
+    t.ok(map.isWalkable(bb.col, bb.row),
+      'P4.16 項目1: 掲示板の前に立つマスが歩行可能', bb.col + ',' + bb.row);
+    var n = FACE[bb.dir];
+    if (!t.ok(!!n, 'P4.16 項目1: dir が n/s/e/w')) return;
+    t.ok(map.isSolid(bb.col + n[0], bb.row + n[2]),
+      'P4.16 項目1: dir の指す隣マスが実際に壁');
+
+    /* 契約寸法（2.4m x 1.6m 級）と、既存の張り紙より一回り以上大きいこと */
+    var BB = ESCAPE.World.BIGBOARD;
+    t.near(BB.w, 2.40, 1e-9, 'P4.16 項目1: 紙面の幅は2.40m（契約）', BB.w);
+    t.near(BB.h, 1.60, 1e-9, 'P4.16 項目1: 紙面の高さは1.60m（契約）', BB.h);
+    t.ok(BB.w * BB.h >= 0.72 * 0.98 * 4,
+      'P4.16 項目1: 既存の張り紙（最大0.72x0.98m）の4倍以上の面積',
+      (BB.w * BB.h).toFixed(2) + 'm2 vs ' + (0.72 * 0.98).toFixed(2) + 'm2');
+    t.ok(BB.stick <= 0.16 + 1e-9,
+      'P4.16 項目1: 壁からの突出は0.16m以内（通行を妨げない）', BB.stick + 'm');
+    t.ok(BB.cy - BB.h / 2 > 0.6 && BB.cy + BB.h / 2 < map.wallHeight,
+      'P4.16 項目1: 板が床と天井の間に収まる',
+      (BB.cy - BB.h / 2).toFixed(2) + '〜' + (BB.cy + BB.h / 2).toFixed(2) + 'm');
+
+    /* 板を支える壁が板の幅ぶん続いていること（端が宙に浮かない） */
+    var side = (n[0] !== 0) ? 'z' : 'x';
+    var need = Math.ceil((BB.w + 0.20 - T) / T / 2);
+    var gaps = [];
+    for (var k = -need; k <= need; k++) {
+      var wc = bb.col + n[0] + ((side === 'z') ? 0 : k);
+      var wr = bb.row + n[2] + ((side === 'z') ? k : 0);
+      if (!map.isSolid(wc, wr)) gaps.push(wc + ',' + wr);
+    }
+    t.ok(gaps.length === 0, 'P4.16 項目1: 板の幅ぶん壁が続いている（端が宙に浮かない）',
+      gaps.join(' ') || (need * 2 + 1) + 'マスを検査');
+
+    /* スポーンの正面に見えること（距離・視線・視野角） */
+    var sp = meta.spawn;
+    var sc = map.cellCenter(sp.col, sp.row);
+    var bcx = (bb.col + 0.5) * T + n[0] * T * 0.5;
+    var bcz = (bb.row + 0.5) * T + n[2] * T * 0.5;
+    var dist = Math.hypot(bcx - sc.x, bcz - sc.z);
+    t.ok(dist <= 8.5, 'P4.16 項目1: スポーンから8.5m以内（遠目でも絵が読める距離）',
+      dist.toFixed(2) + 'm');
+    var yaw = (sp.yawDeg || 0) * Math.PI / 180;
+    /* カメラは yaw=0 で -Z を向く（game.js の camera.rotation.y）。前方ベクトル */
+    var fx = -Math.sin(yaw), fz = -Math.cos(yaw);
+    var ux = (bcx - sc.x) / Math.max(1e-6, dist), uz = (bcz - sc.z) / Math.max(1e-6, dist);
+    var cosA = fx * ux + fz * uz;
+    t.ok(cosA > 0.94, 'P4.16 項目1: スポーンの視線の正面（±20度以内）',
+      (Math.acos(Math.max(-1, Math.min(1, cosA))) * 180 / Math.PI).toFixed(1) + '度');
+    if (g.ai && g.ai.blockedLine) {
+      t.ok(!g.ai.blockedLine(sc.x, sc.z, bcx - n[0] * 0.2, bcz - n[2] * 0.2),
+        'P4.16 項目1: スポーンから掲示板まで視線が通る');
+    }
+    /* スタート部屋（スポーンの部屋）の中にあること */
+    var spRegion = g.world._regionAt(sp.col, sp.row);
+    t.ok(g.world._regionAt(bb.col, bb.row) === spRegion,
+      'P4.16 項目1: 掲示板はスポーンと同じ部屋にある', spRegion);
+
+    /* 造形が実際にシーンに出ていること（紙面のメッシュ） */
+    var tri = 0, found = false;
+    g.world.group.traverse(function (o) {
+      if (o.isMesh && o.name === 'bigboard') {
+        found = true;
+        if (o.geometry && o.geometry.index) tri += o.geometry.index.count / 3;
+      }
+    });
+    t.ok(found && tri >= 2, 'P4.16 項目1: 掲示板の紙面がシーンに出ている', tri + '三角形');
+
+    /* 紙面テクスチャ（プロシージャル・外部アセットなし） */
+    var TX = ESCAPE.Textures, sz = TX.sizeOf('bigboard');
+    t.ok(sz.w >= 1000 && sz.h >= 640,
+      'P4.16 項目1: 紙面は1024x683級の解像度', sz.w + 'x' + sz.h);
+    var det = TX.detail('bigboard');
+    /* 目視合格した紙面（2026-09-10 メイン確認）の実測が 6.9。紙面は「余白のある掲示物」
+       なので壁テクスチャほど高周波は乗らない。白紙（≒0）と区別できる下限を採る。 */
+    t.ok(det.total > 5.5,
+      'P4.16 項目1: 紙面に「遠目で絵と分かる」密度がある（高周波の総量）', det.total.toFixed(1));
+
+    /* 日記のメモ（本文と自動表示はレーンB。ここは配置と造形の整合だけ見る） */
+    var nl = meta.notes || [], diary = null;
+    for (var i = 0; i < nl.length; i++) if (nl[i].id === 'a1_diary') diary = nl[i];
+    if (!t.ok(!!diary, 'P4.16 項目1: 日記のメモ a1_diary が meta.notes にある')) return;
+    t.ok(map.tileAt(diary.col, diary.row) === ESCAPE.TILE.NOTE,
+      'P4.16 項目1: 日記のマスが NOTE タイル', diary.col + ',' + diary.row);
+    var dn = FACE[diary.dir];
+    t.ok(!!dn && map.isWalkable(diary.col - dn[0], diary.row - dn[2]),
+      'P4.16 項目1: 日記を読む側のマスが歩行可能');
+    t.ok(g.world._regionAt(diary.col - dn[0], diary.row - dn[2]) === spRegion,
+      'P4.16 項目1: 日記はスタート部屋の内側の壁にある');
+  }
+
+  /** 項目2: 血痕の増補（総数・区画ごとの数・同種の間隔・引きずり・スタート部屋） */
+  function testP416Blood(t, g) {
+    var map = g.map, meta = map.meta || {}, W = g.world;
+    var dec = meta.decals || [];
+    var KINDS = { blood: 1, bloodHand: 1, bloodDrag: 1, bloodSplat: 1 };
+    t.ok(dec.length >= 22 && dec.length <= 28,
+      'P4.16 項目2: 血痕は合計22〜28か所（契約）', dec.length + 'か所');
+
+    var byZone = {}, drags = [], pts = [], i, j, d;
+    var badType = [], offMap = [], noWall = [];
+    for (i = 0; i < dec.length; i++) {
+      d = dec[i];
+      var ty = d.type || 'blood';
+      if (!KINDS[ty]) badType.push(ty);
+      var cells = [[d.col, d.row]];
+      if (ty === 'bloodDrag') cells.push([d.col2, d.row2]);
+      for (j = 0; j < cells.length; j++) {
+        if (!map.isWalkable(cells[j][0], cells[j][1])) offMap.push(ty + '@' + cells[j]);
+      }
+      if (ty === 'bloodHand') {
+        var n = d.dir ? FACE[d.dir] : null;
+        var ok = n ? map.isSolid(d.col + n[0], d.row + n[2]) : !!W._wallDirOf(d.col, d.row);
+        if (!ok) noWall.push(d.col + ',' + d.row);
+      }
+      if (ty === 'bloodDrag') drags.push(d);
+      var z = W._zoneAt(d.col, d.row);
+      byZone[z] = (byZone[z] || 0) + 1;
+      pts.push({ ty: ty, cells: cells });
+    }
+    t.ok(badType.length === 0, 'P4.16 項目2: 種類は blood/bloodHand/bloodDrag/bloodSplat のみ',
+      badType.join(',') || '4種');
+    t.ok(offMap.length === 0, 'P4.16 項目2: 全て歩行可能マスの上', offMap.join(' ') || dec.length + '件');
+    t.ok(noWall.length === 0, 'P4.16 項目2: 壁の手形は壁に接するマスにある', noWall.join(' ') || '全件');
+
+    var zbad = [];
+    var ZS = ['A', 'B', 'C', 'D', 'E', 'F'];
+    for (i = 0; i < ZS.length; i++) {
+      var n2 = byZone[ZS[i]] || 0;
+      if (n2 < 3 || n2 > 5) zbad.push(ZS[i] + '=' + n2);
+    }
+    t.ok(zbad.length === 0, 'P4.16 項目2: 各区画A〜Fに3〜5か所',
+      zbad.join(' ') || ZS.map(function (z) { return z + (byZone[z] || 0); }).join(' '));
+
+    /* 同種が4マス以内に並ばない */
+    var close = [], worst = 1e9;
+    for (i = 0; i < pts.length; i++) {
+      for (j = i + 1; j < pts.length; j++) {
+        if (pts[i].ty !== pts[j].ty) continue;
+        var dmin = 1e9;
+        for (var a = 0; a < pts[i].cells.length; a++) {
+          for (var b = 0; b < pts[j].cells.length; b++) {
+            var dd = Math.hypot(pts[i].cells[a][0] - pts[j].cells[b][0],
+              pts[i].cells[a][1] - pts[j].cells[b][1]);
+            if (dd < dmin) dmin = dd;
+          }
+        }
+        if (dmin < worst) worst = dmin;
+        if (dmin <= 4) close.push(pts[i].ty + ' ' + pts[i].cells[0] + '/' + pts[j].cells[0]);
+      }
+    }
+    t.ok(close.length === 0, 'P4.16 項目2: 同種は4マス以内に並ばない',
+      close.slice(0, 4).join(' ') || ('最小 ' + worst.toFixed(2) + 'マス'));
+
+    /* 引きずり跡: 3本まで・2〜4マス・軸に沿う・途中も歩行可能 */
+    t.ok(drags.length <= 3, 'P4.16 項目2: 引きずり跡は3本まで（契約）', drags.length + '本');
+    t.ok(drags.length >= 1, 'P4.16 項目2: 引きずり跡がある', drags.length + '本');
+    var dbad = [];
+    for (i = 0; i < drags.length; i++) {
+      d = drags[i];
+      var dc = (d.col2 > d.col) ? 1 : ((d.col2 < d.col) ? -1 : 0);
+      var dr = (d.row2 > d.row) ? 1 : ((d.row2 < d.row) ? -1 : 0);
+      if (dc !== 0 && dr !== 0) { dbad.push('斜め' + d.col + ',' + d.row); continue; }
+      var len = Math.abs(d.col2 - d.col) + Math.abs(d.row2 - d.row) + 1;
+      if (len < 2 || len > 4) dbad.push('長さ' + len);
+      for (var s2 = 0; s2 < len; s2++) {
+        if (!map.isWalkable(d.col + dc * s2, d.row + dr * s2)) dbad.push('壁' + d.col + ',' + d.row);
+      }
+    }
+    t.ok(dbad.length === 0, 'P4.16 項目2: 引きずり跡は2〜4マスの直線で全て歩行可能',
+      dbad.join(' ') || drags.length + '本');
+
+    /* スタート部屋には置かない */
+    var sp = meta.spawn, spRegion = W._regionAt(sp.col, sp.row), inStart = [];
+    for (i = 0; i < dec.length; i++) {
+      d = dec[i];
+      if (W._regionAt(d.col, d.row) === spRegion) inStart.push(d.col + ',' + d.row);
+      if (d.type === 'bloodDrag' && W._regionAt(d.col2, d.row2) === spRegion) {
+        inStart.push(d.col2 + ',' + d.row2);
+      }
+    }
+    t.ok(inStart.length === 0, 'P4.16 項目2: スタート部屋（' + spRegion + '）には血痕を置かない',
+      inStart.join(' ') || '0件');
+
+    /* 造形が出ていること */
+    var seen = {};
+    g.world.group.traverse(function (o) {
+      if (o.isMesh && (o.name === 'blood' || o.name === 'bloodHand' ||
+        o.name === 'bloodDrag' || o.name === 'bloodSplat')) seen[o.name] = true;
+    });
+    t.ok(seen.blood && seen.bloodHand && seen.bloodDrag && seen.bloodSplat,
+      'P4.16 項目2: 4種すべてがシーンに出ている', Object.keys(seen).join(','));
+
+    /* 2026-09-10 差し戻し②の原因（帯の裏表が逆で表面カリングに消えていた）に対する
+       同類全検出のアサート（契約 §6）。床のデカールは全三角形が上（+Y）を向くこと。 */
+    var faceBad = [];
+    g.world.group.traverse(function (o) {
+      if (!o.isMesh) return;
+      if (o.name !== 'blood' && o.name !== 'bloodDrag' && o.name !== 'bloodSplat') return;
+      if (o.material && o.material.side !== 0) return;      /* 両面なら向きは問わない */
+      var pa = o.geometry.attributes.position, idx = o.geometry.index;
+      var n3 = idx ? idx.count : pa.count;
+      for (var f = 0; f + 2 < n3; f += 3) {
+        var i0 = idx ? idx.getX(f) : f, i1 = idx ? idx.getX(f + 1) : f + 1,
+          i2 = idx ? idx.getX(f + 2) : f + 2;
+        var ax = pa.getX(i1) - pa.getX(i0), az = pa.getZ(i1) - pa.getZ(i0);
+        var bx = pa.getX(i2) - pa.getX(i0), bz = pa.getZ(i2) - pa.getZ(i0);
+        var ny = az * bx - ax * bz;                          /* (a×b).y */
+        if (ny <= 0) { faceBad.push(o.name + '#' + (f / 3)); break; }
+      }
+    });
+    t.ok(faceBad.length === 0,
+      'P4.16 項目2: 床の血痕はすべて上を向く（裏返しで消えない）',
+      faceBad.slice(0, 5).join(' ') || '全面 +Y');
+
+    /* 色は乾いた暗赤〜黒に近い赤（テクスチャの平均色相を見る） */
+    var TX = ESCAPE.Textures, names = ['blood', 'bloodHand', 'bloodDrag', 'bloodSplat'];
+    var hueBad = [];
+    for (i = 0; i < names.length; i++) {
+      var im = TX.get(names[i]).image;
+      var cx2 = im.getContext ? im.getContext('2d') : null;
+      if (!cx2) continue;
+      var dat = cx2.getImageData(0, 0, im.width, im.height).data;
+      var sr = 0, sg = 0, sb = 0, na = 0;
+      for (var q = 0; q < dat.length; q += 4) {
+        if (dat[q + 3] < 40) continue;
+        sr += dat[q]; sg += dat[q + 1]; sb += dat[q + 2]; na++;
+      }
+      if (!na) { hueBad.push(names[i] + ':空'); continue; }
+      sr /= na; sg /= na; sb /= na;
+      /* 2026-09-10 差し戻し①②「黒ではなく赤みが残ること」: 赤が主で、かつ明度は低い
+         （乾いた暗赤の範囲）。下限は今回増補した3種に課す（既存の床の血溜まり blood は
+         P2 以来の暗い絵で、床側の tint で赤みを出している）。 */
+      var floorMin = (names[i] === 'blood') ? 20 : 70;
+      if (!(sr > sg * 1.6 && sr > sb * 1.6 && sr >= floorMin && sr < 150)) {
+        hueBad.push(names[i] + '=' + sr.toFixed(0) + ',' + sg.toFixed(0) + ',' + sb.toFixed(0));
+      }
+    }
+    t.ok(hueBad.length === 0, 'P4.16 項目2: 乾いた暗赤（赤が主・黒ではない・明度は低い）',
+      hueBad.join(' ') || names.join(','));
+
+    /* ---- 2026-09-10 差し戻し①: 壁の手形は実物大（手の長さ 0.19m） ---- */
+    var himg = TX.get('bloodHand').image;
+    t.ok(himg.width === HANDPANEL.texW && himg.height === HANDPANEL.texH,
+      'P4.16 項目2: 手形の紙面は ' + HANDPANEL.texW + 'x' + HANDPANEL.texH,
+      himg.width + 'x' + himg.height);
+    var ppmX = himg.width / HANDPANEL.w, ppmY = himg.height / HANDPANEL.h;
+    t.ok(Math.abs(ppmX - ppmY) / ppmX < 0.01,
+      'P4.16 項目2: 手形の面は縦横の px/m が一致（歪ませない）',
+      ppmX.toFixed(1) + ' / ' + ppmY.toFixed(1) + ' px/m');
+    t.ok(HANDPANEL.handLen >= 0.17 && HANDPANEL.handLen <= 0.21,
+      'P4.16 項目2: 手形は実物大（手の長さ 0.17〜0.21m）', HANDPANEL.handLen + 'm');
+    /* 面に対する手形の占有比 = 実寸 / 面の実寸。ここが崩れると「巨大な手形」になる */
+    t.near(HANDPANEL.handLen / HANDPANEL.h, 0.169, 0.02,
+      'P4.16 項目2: 手形は面の高さの約17%（実寸比）',
+      (HANDPANEL.handLen / HANDPANEL.h).toFixed(3));
+    /* 手形の中心高さは床から 1.2〜1.5m（差し戻し①）。テクスチャ上 v=0.30 / 0.40 */
+    var hCy = 1.22, hTop = hCy + HANDPANEL.h / 2, hBad = [];
+    [0.30, 0.40].forEach(function (vv) {
+      var yy = hTop - vv * HANDPANEL.h;
+      if (yy < 1.20 || yy > 1.50) hBad.push(yy.toFixed(2) + 'm');
+    });
+    t.ok(hBad.length === 0, 'P4.16 項目2: 手形の高さは床から1.2〜1.5m',
+      hBad.join(' ') || (hTop - 0.30 * HANDPANEL.h).toFixed(2) + 'm / ' +
+      (hTop - 0.40 * HANDPANEL.h).toFixed(2) + 'm');
+
+    /* ---- 2026-09-10 差し戻し②: 引きずり跡は幅30〜45cmの連続した擦り帯 ---- */
+    var dimg = TX.get('bloodDrag').image;
+    t.ok(DRAGQUAD.band >= 0.30 && DRAGQUAD.band <= 0.45,
+      'P4.16 項目2: 引きずり帯の幅は30〜45cm', (DRAGQUAD.band * 100).toFixed(0) + 'cm');
+    t.ok(DRAGQUAD.band < DRAGQUAD.w * 0.75,
+      'P4.16 項目2: 帯の両脇ににじみの余白がある（面の端で切れない）',
+      DRAGQUAD.band + 'm / ' + DRAGQUAD.w + 'm');
+    /* 実測: 各行の「目に見える端から端まで」（アルファ24以上）の幅が契約に収まり、
+       帯が途切れず、縁が切り立っていないことを見る。 */
+    var dc2 = dimg.getContext ? dimg.getContext('2d') : null;
+    if (dc2) {
+      var dd = dc2.getImageData(0, 0, dimg.width, dimg.height).data;
+      var pxPerM = dimg.width / DRAGQUAD.w;
+      var VIS = 24;                                  /* 「見える」しきい値 */
+      var rows = 0, wSum = 0, wMin = 1e9, wMax = 0, hardEdge = 0, empty = 0;
+      for (var ry = 2; ry < dimg.height * 0.86; ry += 4) {
+        var lo = -1, hi = -1, mx = 0, xx, av;
+        for (xx = 0; xx < dimg.width; xx++) {
+          av = dd[(ry * dimg.width + xx) * 4 + 3];
+          if (av > mx) mx = av;
+          if (av >= VIS) { if (lo < 0) lo = xx; hi = xx; }
+        }
+        if (mx < VIS) { empty++; continue; }
+        var wpx = hi - lo + 1;
+        rows++; wSum += wpx;
+        if (wpx < wMin) wMin = wpx;
+        if (wpx > wMax) wMax = wpx;
+        /* 縁の硬さ: 見える端のすぐ内側 3px でアルファが 96 を超えていたら「切り立った縁」 */
+        if (dd[(ry * dimg.width + Math.min(dimg.width - 1, lo + 3)) * 4 + 3] > 96) hardEdge++;
+        if (dd[(ry * dimg.width + Math.max(0, hi - 3)) * 4 + 3] > 96) hardEdge++;
+      }
+      var wAvg = (wSum / Math.max(rows, 1)) / pxPerM;
+      t.ok(wAvg >= 0.30 && wAvg <= 0.45,
+        'P4.16 項目2: 実測の帯幅（見える端から端）の平均が30〜45cm',
+        (wAvg * 100).toFixed(1) + 'cm');
+      t.ok(empty <= (rows + empty) * 0.06,
+        'P4.16 項目2: 帯は連続している（空の行がほぼ無い）', empty + '/' + (rows + empty) + '行');
+      t.ok(hardEdge <= rows * 0.20,
+        'P4.16 項目2: 縁がにじんで薄れる（切り立った縁がない）',
+        hardEdge + ' / ' + (rows * 2) + '辺');
+      t.ok((wMax - wMin) / pxPerM > 0.04,
+        'P4.16 項目2: 帯の幅が一定でない（絵筆1本に見せない）',
+        ((wMax - wMin) / pxPerM * 100).toFixed(1) + 'cm');
+    }
+    /* 帯の中の濃淡: 帯の内側で明度（アルファ）の分散があること */
+    if (dc2) {
+      var dd2 = dc2.getImageData(0, 0, dimg.width, dimg.height).data;
+      var n3 = 0, s1 = 0, s2v = 0;
+      for (var y3 = Math.floor(dimg.height * 0.15); y3 < dimg.height * 0.7; y3 += 3) {
+        for (var x3 = Math.floor(dimg.width * 0.42); x3 < dimg.width * 0.58; x3++) {
+          var a3 = dd2[(y3 * dimg.width + x3) * 4 + 3];
+          n3++; s1 += a3; s2v += a3 * a3;
+        }
+      }
+      var mean3 = s1 / n3, sd3 = Math.sqrt(Math.max(0, s2v / n3 - mean3 * mean3));
+      t.ok(sd3 > 14, 'P4.16 項目2: 帯の中に濃淡の筋がある（アルファの標準偏差）',
+        sd3.toFixed(1) + ' (平均 ' + mean3.toFixed(0) + ')');
+    }
+  }
+
+  ESCAPE.__extraSuites.push(testP416BigBoard, testP416Blood);
+
+  World.BIGBOARD = BIGBOARD;
   ESCAPE.World = World;
 })(window);

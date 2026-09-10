@@ -110,13 +110,13 @@
       '#.......#.........#...S.#.....#.........#...W.......#.........#.........#.....##',
       '#.#.....#.F.#.#.#.#.#.#.#.F.#.#.#.....#.#.F.#.#.F##.#.#######.#.F######.###.#.##',
       '#.........F.#...#...#.....F...#.........#.F...#.F...#.#.......#.F...W.#...#...##',
-      'N.FP....##F.#.#.#...#.####F##.###.....###.F##.#.F.###.#.#######.F.###.#.#.#.#.##',
+      'N.FP....N#F.#.#.#...#.####F##.###.....###.F##.#.F.###.#.#######.F.###.#.#.#.#.##',
       '#........FF.#......#....W.F...#...........F...#.F.#...#...#.....F.......#...#.##',
       '#.......F.F.#.........###.F.###.#.....#.##F.###.F.#.#####.#.###.F.#######.###.##',
       '#.........F.......#.......F.....#.....#...F.#...F.#.#...#.......F.....#...#...##',
       '#.#...F.##F####.#.....#.##F.###.#.#######.F.#.#WF.#.#.#.########F##.#.#.###.#.##',
       '#.........F...#.#.........F.....#.........F.#...F...#.#.........F...#...#.....##',
-      '#.#.#.#.#WF.#.#.#.#.#.#.#.F###############F.#.#.F####.#.#.#.#.#.F.###.#.#.#.#.##',
+      '#.#####.#WF.#.#.#.#.#.#.#.F###############F.#.#.F####.#.#.#.#.#.F.###.#.#.#.#.##',
       '#...S.......#..B#.......#...................#...........#.....#.......#.......##',
       '################################################################################'
     ],
@@ -360,7 +360,8 @@
         { col: 22, row: 74, kind: "creak", id: "a1_tr226" }, { col: 15, row: 75, kind: "creak", id: "a1_tr227" },
         { col: 17, row: 75, kind: "can", id: "a1_tr228" }, { col: 20, row: 75, kind: "creak", id: "a1_tr229" },
         { col: 1, row: 77, kind: "wire", axis: "x", id: "a1_tr230" },
-        { col: 3, row: 77, kind: "creak", id: "a1_tr231" }, { col: 5, row: 77, kind: "creak", id: "a1_tr232" },
+        /* P4.16 項目1: (3,77)/(5,77) は掲示板の壁になったので、同じ通路の south 側へ移設 */
+        { col: 8, row: 78, kind: "creak", id: "a1_tr231" }, { col: 10, row: 78, kind: "creak", id: "a1_tr232" },
         { col: 59, row: 77, kind: "wire", axis: "x", id: "a1_tr233" },
         { col: 30, row: 78, kind: "wire", axis: "z", id: "a1_tr234" },
         { col: 33, row: 78, kind: "wire", axis: "z", id: "a1_tr235" },
@@ -524,8 +525,19 @@
         { col: 44, row: 28, dir: "s", id: "a1_n3" },
         { col: 67, row: 54, dir: "s", id: "a1_n4" },
         { col: 0, row: 71, dir: "e", id: "a1_n5" },
-        { col: 19, row: 4, dir: "e", id: "a1_n6" }
+        { col: 19, row: 4, dir: "e", id: "a1_n6" },
+        /* P4.16 項目1: 研究員の日記（本文は docs/notes.md「P4.16追加」の正文）。
+         * スタート部屋（受入ホール 1,70-9,76）の**出口の内側の壁**＝北へ抜ける
+         * (9,70)→(9,69) の手前、(8,70) から読む面に貼る。自動表示はレーンBの領分。 */
+        { col: 8, row: 71, dir: "n", id: "a1_diary" }
       ],
+
+      /* P4.16 項目1: スタート部屋の大型掲示板（幅2.4m x 高さ1.6m）。
+       * col,row = 掲示板の前に立つ歩行可能マス、dir = そのマスから見た壁の向き。
+       * スポーン(4,74・yaw180＝+row向き)の正面5mに来る受入ホール南端の壁。
+       * この壁を作るため rows の (3,77)/(5,77) を通路から壁へ変えてある
+       * （到達可能性・最短経路299マス・分岐/行き止まりの数は変化なしを確認済み）。 */
+      bigBoard: { col: 4, row: 76, dir: "s" },
 
       /* 区画銘板（「調べる」で地図に区画名が記入される）。各帯の入口付近に1枚ずつ */
       regionSigns: [
@@ -614,20 +626,48 @@
         { col: 76, row: 1, dir: "s", id: "sg_bulkhead" }
       ],
 
+      /* P4.16 項目2: 血痕の増補（契約 §4「P4.16 再プレイ差し戻し」項目2）。
+       * 種類: blood 床の血溜まり / bloodHand 壁の手形と擦り跡（腰〜肩）/
+       *       bloodDrag 引きずり跡（col,row=始点 col2,row2=終点。2〜4マス）/ bloodSplat 飛沫。
+       * 配置規則: 合計22〜28か所・区画A〜Fに3〜5か所・同種は4マス以内に並べない・
+       *           引きずり跡は3本まで・スタート部屋（受入ホール）には置かない
+       *           （掲示板を目立たせる）・すべて歩行可能マス（手形は壁に接するマス）。
+       * 旧・床の血溜まり50か所は本項目で失効（同じ絵が固まって並んでいた）。
+       * 検査は js/world.js の testP416Blood（__extraSuites）。 */
       decals: [
-        { col: 10, row: 45, type: "blood" }, { col: 9, row: 45, type: "blood" }, { col: 44, row: 58, type: "blood" }, { col: 43, row: 35, type: "blood" },
-        { col: 41, row: 33, type: "blood" }, { col: 22, row: 60, type: "blood" }, { col: 70, row: 59, type: "blood" }, { col: 33, row: 48, type: "blood" },
-        { col: 5, row: 71, type: "blood" }, { col: 70, row: 20, type: "blood" }, { col: 31, row: 21, type: "blood" }, { col: 19, row: 5, type: "blood" },
-        { col: 3, row: 6, type: "blood" }, { col: 70, row: 8, type: "blood" }, { col: 55, row: 45, type: "blood" }, { col: 20, row: 32, type: "blood" },
-        { col: 59, row: 34, type: "blood" }, { col: 17, row: 73, type: "blood" }, { col: 35, row: 71, type: "blood" }, { col: 20, row: 4, type: "blood" },
-        { col: 72, row: 6, type: "blood" }, { col: 73, row: 7, type: "blood" }, { col: 75, row: 7, type: "blood" }, { col: 72, row: 8, type: "blood" },
-        { col: 74, row: 8, type: "blood" }, { col: 34, row: 15, type: "blood" }, { col: 73, row: 17, type: "blood" }, { col: 29, row: 25, type: "blood" },
-        { col: 40, row: 31, type: "blood" }, { col: 41, row: 32, type: "blood" }, { col: 37, row: 34, type: "blood" }, { col: 41, row: 34, type: "blood" },
-        { col: 40, row: 35, type: "blood" }, { col: 31, row: 43, type: "blood" }, { col: 52, row: 46, type: "blood" }, { col: 11, row: 47, type: "blood" },
-        { col: 12, row: 48, type: "blood" }, { col: 31, row: 49, type: "blood" }, { col: 36, row: 50, type: "blood" }, { col: 3, row: 51, type: "blood" },
-        { col: 69, row: 54, type: "blood" }, { col: 21, row: 62, type: "blood" }, { col: 26, row: 63, type: "blood" }, { col: 21, row: 64, type: "blood" },
-        { col: 24, row: 64, type: "blood" }, { col: 51, row: 64, type: "blood" }, { col: 3, row: 67, type: "blood" }, { col: 17, row: 67, type: "blood" },
-        { col: 8, row: 72, type: "blood" }, { col: 9, row: 73, type: "blood" }
+        /* 区画E 記録区画: 所長室前の記録端末へ引きずられた跡と、観察モニター室の惨状 */
+        { col: 67, row: 9, type: "blood" },
+        { col: 72, row: 6, type: "bloodHand", dir: "w" },
+        { col: 19, row: 5, type: "bloodSplat" },
+        { col: 3, row: 6, type: "blood" },
+        /* 区画F 機械区画: 循環ポンプ室と、記録端末(65,19)へ向かう引きずり跡 */
+        { col: 68, row: 19, col2: 65, row2: 19, type: "bloodDrag" },
+        { col: 70, row: 20, type: "blood" },
+        { col: 73, row: 17, type: "bloodHand", dir: "w" },
+        { col: 29, row: 25, type: "bloodSplat" },
+        { col: 34, row: 15, type: "blood" },
+        /* 区画D 拘束区画: 行き止まりの房(40,31)へ引きずられた跡 */
+        { col: 40, row: 29, col2: 40, row2: 31, type: "bloodDrag" },
+        { col: 20, row: 32, type: "blood" },
+        { col: 59, row: 34, type: "bloodHand", dir: "n" },
+        { col: 43, row: 35, type: "bloodSplat" },
+        /* 区画B 実験区画: 培養器室からロッカー(38,51)の前まで続く引きずり跡 */
+        { col: 37, row: 48, col2: 37, row2: 51, type: "bloodDrag" },
+        { col: 10, row: 45, type: "blood" },
+        { col: 12, row: 48, type: "bloodHand", dir: "w" },
+        { col: 52, row: 46, type: "bloodSplat" },
+        { col: 31, row: 49, type: "blood" },
+        /* 区画C 検体区画（(21,64) は檻の並ぶ行き止まり。§3「行き止まりに来た意味」を満たす） */
+        { col: 22, row: 60, type: "blood" },
+        { col: 21, row: 64, type: "blood" },
+        { col: 41, row: 58, type: "bloodHand", dir: "w" },
+        { col: 69, row: 54, type: "bloodSplat" },
+        { col: 51, row: 64, type: "blood" },
+        /* 区画A 受入区画（スタート部屋の外側だけ） */
+        { col: 17, row: 73, type: "blood" },
+        { col: 33, row: 71, type: "bloodHand", dir: "w" },
+        { col: 47, row: 68, type: "bloodSplat" },
+        { col: 68, row: 74, type: "blood" }
       ],
 
       /* 什器は実体マスに置く。既定は dir 方向の壁面だけを什器に差し替える（アルコーブ）。
@@ -735,7 +775,7 @@
         { col: 48, row: 60, type: "gurney", dir: "e", open: true }, { col: 2, row: 69, type: "crate", dir: "s", open: true },
         { col: 8, row: 69, type: "shelf", dir: "s", open: true }, { col: 10, row: 69, type: "crate", dir: "e", open: true },
         { col: 2, row: 75, type: "crate", dir: "e", open: true }, { col: 8, row: 75, type: "shelf", dir: "w", open: true },
-        { col: 2, row: 77, type: "crate", dir: "n", open: true }, { col: 4, row: 77, type: "crate", dir: "n", open: true },
+        { col: 2, row: 77, type: "crate", dir: "n", open: false }, { col: 9, row: 75, type: "crate", dir: "n", open: true },
         { col: 6, row: 77, type: "shelf", dir: "n", open: true }, { col: 8, row: 77, type: "crate", dir: "n", open: true },
         { col: 10, row: 77, type: "crate", dir: "e", open: true }, { col: 14, row: 71, type: "cabinet", dir: "e", open: true },
         { col: 22, row: 71, type: "crate", dir: "w", open: true }, { col: 16, row: 75, type: "shelf", dir: "n", open: true },

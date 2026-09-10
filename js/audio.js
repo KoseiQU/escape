@@ -1572,6 +1572,56 @@
   }
 
   /* ================================================================
+   * P4.16 項目3「鼓動の画面表示」（契約 §4「P4.16 再プレイ差し戻し」項目3）
+   *
+   *   heartbeatFor に同期して**画面の縁が赤く脈打つ**。要素は JS から作る
+   *   （index.html はレーンB／メインの領域なので触らない）。既存の周辺減光
+   *   （#fx-vignette）とは別レイヤーで、中心から半径40%は常に無着色。
+   *
+   *   1拍＝2つの衝撃（第1音で強く・第2音で弱く）。それぞれ HBRIM_A で立ち上がり、
+   *   HBRIM_TAU で指数減衰する。最速の拍（158+14=172bpm＝周期0.349s）でも
+   *   次の拍までにピークの20%以下へ落ちる（契約）。
+   * ============================================================== */
+  var HBRIM_A = 0.045;        /* 立ち上がり(s) */
+  var HBRIM_TAU = 0.090;      /* 減衰の時定数(s) */
+  var HBRIM_GAP = 0.145;      /* 第2音までの間(s)。音色側の 120〜160ms に合わせる */
+  var HBRIM_SECOND = 0.55;    /* 第2音の強さ（第1音より弱い＝契約） */
+  var HBRIM_FAR = 0.12;       /* 20m のピーク不透明度（契約 0.08〜0.15） */
+  var HBRIM_NEAR = 0.52;      /* 5m のピーク不透明度（契約 0.45〜0.60） */
+  var HBRIM_MAX = 0.60;       /* 追跡中＝最大（契約） */
+  var HBRIM_IN_FAR = 72;      /* 20m の無着色半径(%)＝縁だけ薄く光る */
+  var HBRIM_IN_NEAR = 40;     /* 5m・追跡中の無着色半径(%)。契約「中心から40%は常に無着色」 */
+  var HBRIM_LIFE = 1.2;       /* この秒数を過ぎた衝撃は捨てる */
+
+  /** 1つの衝撃の包絡（0..1）。t<0 は未発火 */
+  function hbRimShape(t) {
+    if (!(t > 0)) return 0;
+    if (t < HBRIM_A) return t / HBRIM_A;
+    return Math.exp(-(t - HBRIM_A) / HBRIM_TAU);
+  }
+  /** 距離・追跡から「縁の赤」のピーク不透明度と無着色半径(%)を出す（純関数） */
+  function hbRimFor(dist, chase) {
+    var h = heartbeatFor(dist, !!chase);
+    var s = clamp(h.near, 0, 1);
+    var amp = HBRIM_FAR + (HBRIM_NEAR - HBRIM_FAR) * s;
+    var inner = HBRIM_IN_FAR + (HBRIM_IN_NEAR - HBRIM_IN_FAR) * s;
+    if (chase) { amp = HBRIM_MAX; inner = HBRIM_IN_NEAR; }
+    return { amp: amp, inner: Math.max(HBRIM_IN_NEAR, inner), on: h.on, bpm: h.bpm };
+  }
+  /** 縁の赤のグラデーション（中心 inner% までは完全に透明＝視認性を保つ） */
+  function hbRimGradient(inner) {
+    var i0 = Math.max(HBRIM_IN_NEAR, Math.round(inner));
+    var i1 = Math.round(i0 + (100 - i0) * 0.55);
+    /* 2026-09-10 差し戻し③: 楕円の半径を画面の半幅・半高そのものに合わせる
+       （旧 `ellipse 50% 50%` は半径が半分で、赤が中央まで届いてしまう）。
+       これで 0〜inner% が完全透明、inner%〜100% が画面端へ向かう赤のグラデーション
+       ＝「画面端から内側 (100-inner)% まで赤・中央 inner% は透明」になる。
+       色は血に近い暗赤（#7a0a0a 系）。 */
+    return 'radial-gradient(ellipse 100% 100% at 50% 50%, rgba(122,10,10,0) 0%, ' +
+      'rgba(122,10,10,0) ' + i0 + '%, rgba(122,10,10,0.45) ' + i1 + '%, rgba(138,8,7,1) 100%)';
+  }
+
+  /* ================================================================
    * OfflineAudioContext レンダヘルパー（契約 §4「検証」）
    * ============================================================== */
   function offlineCtor() {
@@ -2544,6 +2594,9 @@
       vignette: 0, shake: 0, shakeImpulse: 0, fovAdd: 0,
       flash: 0, flashDecay: 1, noise: 0, noiseDecay: 1, black: 0, dread: 0
     };
+    /* P4.16 項目3: 鼓動に同期した画面の縁（別レイヤー。fx.vignette とは混ぜない） */
+    this.hbRim = { v: 0, amp: HBRIM_FAR, inner: HBRIM_IN_FAR };
+    this._hbImp = [];
     this._live.length = 0;
     this._rng = lcg(31337);
   };
@@ -2585,10 +2638,61 @@
     this._dom = {
       vignette: document.getElementById('fx-vignette'),
       flash: document.getElementById('fx-flash'),
-      noise: document.getElementById('fx-noise')
+      noise: document.getElementById('fx-noise'),
+      /* P4.16 項目3: 鼓動の縁は JS で作る（index.html は触らない） */
+      hbrim: this._ensureHbRim()
     };
     this._domVal = {};
     return this;
+  };
+
+  /**
+   * P4.16 項目3: 鼓動の縁のレイヤーを作る（1回だけ）。
+   * #fx-vignette(z-index:30) より上・#blackout(40) より下に置き、
+   * pointer-events:none で操作を一切奪わない。中心 40% は常に無着色。
+   */
+  Engine.prototype._ensureHbRim = function () {
+    if (this._hbRimEl) return this._hbRimEl;
+    if (typeof document === 'undefined' || !document.body) return null;
+    var el = document.getElementById('fx-hbrim');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'fx-hbrim';
+      document.body.appendChild(el);
+    }
+    el.style.position = 'fixed';
+    el.style.left = '0'; el.style.top = '0'; el.style.right = '0'; el.style.bottom = '0';
+    el.style.zIndex = '34';
+    el.style.pointerEvents = 'none';
+    el.style.opacity = '0';
+    el.style.willChange = 'opacity';
+    el.style.backgroundImage = hbRimGradient(HBRIM_IN_FAR);
+    this._hbRimEl = el;
+    return el;
+  };
+
+  /** 1拍ぶんの衝撃を積む（第1音＝強／第2音＝弱、HBRIM_GAP 秒あと） */
+  Engine.prototype._hbRimBeat = function (dist, chase) {
+    if (this.testMode) return;
+    var r = hbRimFor(dist, chase);
+    this.hbRim.amp = r.amp;
+    this.hbRim.inner = r.inner;
+    var L = this._hbImp;
+    if (L.length > 6) L.length = 0;
+    L.push({ a: 1, t: 0 });
+    L.push({ a: HBRIM_SECOND, t: -HBRIM_GAP });
+  };
+
+  /** 縁の脈動を1フレーム進める。鳴っていない時・演出中・テスト中は 0 */
+  Engine.prototype._stepHbRim = function (dt, quiet) {
+    var L = this._hbImp, R = this.hbRim, v = 0, i;
+    if (quiet || this.testMode) { L.length = 0; R.v = 0; return; }
+    for (i = L.length - 1; i >= 0; i--) {
+      L[i].t += dt;
+      if (L[i].t > HBRIM_LIFE) { L.splice(i, 1); continue; }
+      v += L[i].a * hbRimShape(L[i].t);
+    }
+    R.v = clamp(R.amp * v, 0, 1);
   };
 
   Engine.prototype._duck = function (sec) { this.duckT = Math.max(this.duckT, sec); };
@@ -2922,6 +3026,8 @@
         this.hbT -= period;
         if (this.hbT > period) this.hbT = 0;    /* 大きな dt で溜まりすぎない */
         this.play('heartbeat', { level: hb.level, near: hb.near, bus: 'self', priority: nearChase ? 1 : 0 });
+        /* P4.16 項目3: 同じ拍で画面の縁も脈打たせる（音と絵を1か所で発火させる） */
+        this._hbRimBeat(nd, nearChase);
       }
     } else {
       this.hbT = 0;
@@ -3038,6 +3144,9 @@
       if (nf && nf.dist < 9 && this._rand() < 0.07) fx.black = 0.92;
     }
 
+    /* P4.16 項目3: 鼓動の縁（別レイヤー） */
+    this._stepHbRim(dt, quiet || jail);
+
     this._applyFxDom(false);
   };
 
@@ -3064,6 +3173,20 @@
     }
     /* 瞬間暗転は既存の #blackout を借りず専用に扱う（牢の暗転と混ざらないため
        vignette の要素を一時的に真っ黒にする） */
+    /* P4.16 項目3: 鼓動の縁。不透明度は毎拍動き、無着色半径は距離が変わった時だけ書く */
+    var R = this.hbRim;
+    if (d.hbrim && R) {
+      var hv = clamp(R.v, 0, 1);
+      if (force || Math.abs((v.hb || 0) - hv) > 0.004) {
+        d.hbrim.style.opacity = hv.toFixed(3);
+        v.hb = hv;
+      }
+      var inn = Math.max(HBRIM_IN_NEAR, Math.round(R.inner));
+      if (force || v.hbIn !== inn) {
+        d.hbrim.style.backgroundImage = hbRimGradient(inn);
+        v.hbIn = inn;
+      }
+    }
     var bk = clamp(fx.black, 0, 1);
     if (d.vignette && (force || Math.abs((v.bk || 0) - bk) > 0.01)) {
       d.vignette.style.background = bk > 0.01
@@ -3132,6 +3255,11 @@
     TEN_XF: TEN_XF, TEN_HOP: TEN_HOP, TEN_OCT: TEN_OCT,
     scheduleTensionChunk: scheduleTensionChunk,
     HB_DUCK_DIST: HB_DUCK_DIST, HB_DUCK_AMOUNT: HB_DUCK_AMOUNT, AMB_BUS_GAIN: AMB_BUS_GAIN,
+    /* P4.16 項目3: 鼓動の画面表示（純関数。機械テストはここを直接検査する） */
+    hbRimFor: hbRimFor, hbRimShape: hbRimShape, hbRimGradient: hbRimGradient,
+    HBRIM_A: HBRIM_A, HBRIM_TAU: HBRIM_TAU, HBRIM_GAP: HBRIM_GAP, HBRIM_SECOND: HBRIM_SECOND,
+    HBRIM_FAR: HBRIM_FAR, HBRIM_NEAR: HBRIM_NEAR, HBRIM_MAX: HBRIM_MAX,
+    HBRIM_IN_FAR: HBRIM_IN_FAR, HBRIM_IN_NEAR: HBRIM_IN_NEAR,
     envelopePeaks: envelopePeaks,
     centroidSeries: centroidSeries,
     lowRatioIn: lowRatioIn,
@@ -3370,7 +3498,150 @@
     return au.bus.amb.gain.value >= AMB_BUS_GAIN * 0.70 - 1e-9;
   }
 
-  ESCAPE.__extraSuites.push(testP413Heartbeat, testP413Tension, testP413TensionInPlay);
+
+  /* ================================================================
+   * P4.16 項目3 機械テスト（契約 §4「P4.16 再プレイ差し戻し」項目3）
+   *   距離20/12/5m・追跡での不透明度ピーク／拍間の減衰／中央透明／停止時0。
+   *   DOM は computed style で判定する。
+   * ============================================================== */
+
+  /** 純関数（距離→ピーク不透明度・無着色半径）と包絡 */
+  function testP416HeartRimNumbers(t, g) {
+    var A = ESCAPE.Audio;
+    var f20 = A.hbRimFor(20, false), f12 = A.hbRimFor(12, false), f5 = A.hbRimFor(5, false);
+    var fc = A.hbRimFor(5, true), fc20 = A.hbRimFor(20, true);
+    t.ok(f20.amp >= 0.08 && f20.amp <= 0.15,
+      'P4.16 項目3: 20m の縁のピーク不透明度は0.08〜0.15（契約）', f20.amp.toFixed(3));
+    t.ok(f5.amp >= 0.45 && f5.amp <= 0.60,
+      'P4.16 項目3: 5m の縁のピーク不透明度は0.45〜0.60（契約）', f5.amp.toFixed(3));
+    t.ok(f12.amp > f20.amp && f12.amp < f5.amp,
+      'P4.16 項目3: 12m は20mより濃く5mより薄い（距離で連続に変わる）', f12.amp.toFixed(3));
+    t.near(fc.amp, A.HBRIM_MAX, 1e-9, 'P4.16 項目3: 追跡中は最大（0.60）', fc.amp.toFixed(3));
+    t.near(fc20.amp, A.HBRIM_MAX, 1e-9, 'P4.16 項目3: 追跡中は距離に依らず最大', fc20.amp.toFixed(3));
+    t.ok(A.HBRIM_MAX <= 0.60 + 1e-9, 'P4.16 項目3: 縁は0.60を超えない（中央の視認性）', A.HBRIM_MAX);
+
+    /* 内側への広がり: 近いほど中心へ寄る。ただし常に半径40%は無着色 */
+    t.ok(f20.inner > f5.inner, 'P4.16 項目3: 近いほど内側へ広がる',
+      f20.inner.toFixed(0) + '% → ' + f5.inner.toFixed(0) + '%');
+    var innBad = [];
+    for (var d = 0; d <= 24; d += 1) {
+      if (A.hbRimFor(d, false).inner < 40 - 1e-9) innBad.push(d + 'm');
+      if (A.hbRimFor(d, true).inner < 40 - 1e-9) innBad.push(d + 'm(追跡)');
+    }
+    t.ok(innBad.length === 0, 'P4.16 項目3: 中心から半径40%は常に無着色（契約）',
+      innBad.join(' ') || '0〜24m を検査');
+
+    /* 包絡: 第1音で最大・第2音は弱い・次の拍までに20%以下 */
+    var A0 = A.HBRIM_A, GAP = A.HBRIM_GAP, SEC = A.HBRIM_SECOND;
+    function sum(tt) { return A.hbRimShape(tt) + SEC * A.hbRimShape(tt - GAP); }
+    t.near(sum(A0), 1, 1e-9, 'P4.16 項目3: 第1音の立ち上がりでピーク（=1）', sum(A0).toFixed(4));
+    t.ok(sum(GAP + A0) < sum(A0) * 0.85,
+      'P4.16 項目3: 第2音は第1音より弱い（ドッ→クン）',
+      sum(GAP + A0).toFixed(3) + ' vs ' + sum(A0).toFixed(3));
+    var fastBpm = A.HB_BPM_MAX + 14;                 /* 追跡中の最速 */
+    var period = 60 / fastBpm;
+    t.ok(sum(period) <= 0.20,
+      'P4.16 項目3: 最速の拍でも次の拍までにピークの20%以下へ減衰（契約）',
+      (sum(period) * 100).toFixed(1) + '% @' + fastBpm.toFixed(0) + 'bpm');
+    t.ok(sum(60 / A.hbRimFor(5, false).bpm) <= 0.20,
+      'P4.16 項目3: 5m（非追跡）でも拍ごとに減衰しきる',
+      (sum(60 / A.hbRimFor(5, false).bpm) * 100).toFixed(1) + '%');
+    t.ok(sum(1.0) < 0.001, 'P4.16 項目3: 鳴り止めば縁は消える', sum(1.0).toFixed(5));
+
+    /* グラデーションの中央が透明であること（文字列を直接見る） */
+    var gs = A.hbRimGradient(40);
+    t.ok(gs.indexOf('rgba(122,10,10,0) 0%') >= 0 && gs.indexOf('rgba(122,10,10,0) 40%') >= 0,
+      'P4.16 項目3: 中心40%まで完全に透明なグラデーション', gs.slice(0, 84));
+    /* 2026-09-10 差し戻し③: 楕円は画面の半幅・半高いっぱい（旧 50% では赤が中央を侵す） */
+    t.ok(gs.indexOf('ellipse 100% 100% at 50% 50%') >= 0,
+      'P4.16 項目3: 赤は画面端から内側60%までに広がる（楕円は画面いっぱい）', gs.slice(0, 46));
+  }
+
+  /** DOM（computed style）での判定 */
+  function testP416HeartRimDom(t, g) {
+    var A = ESCAPE.Audio, au = ESCAPE.audio;
+    if (!t.ok(!!au, 'P4.16 項目3: 音響エンジンがある')) return;
+    var el = au._ensureHbRim ? au._ensureHbRim() : null;
+    if (!t.ok(!!el, 'P4.16 項目3: 鼓動の縁の要素が JS から作られている')) return;
+    t.ok(el.parentNode === document.body, 'P4.16 項目3: body 直下にある');
+    var cs = global.getComputedStyle(el);
+    t.ok(cs.position === 'fixed', 'P4.16 項目3: 画面に固定されている', cs.position);
+    t.ok(cs.pointerEvents === 'none', 'P4.16 項目3: 操作を奪わない（pointer-events:none）',
+      cs.pointerEvents);
+    var vg = document.getElementById('fx-vignette');
+    var zr = parseInt(cs.zIndex, 10), zv = vg ? parseInt(global.getComputedStyle(vg).zIndex, 10) : 0;
+    t.ok(isFinite(zr) && zr > zv, 'P4.16 項目3: 既存の周辺減光より上のレイヤー',
+      zr + ' > ' + zv);
+    t.ok(vg && vg !== el, 'P4.16 項目3: fx.vignette とは別レイヤー');
+
+    var was = au.testMode, dt = ESCAPE.FIXED_DT;
+    au.testMode = true;
+    au._hbRimBeat(5, false);
+    au._stepHbRim(A.HBRIM_A, false);
+    au._applyFxDom(true);
+    t.near(parseFloat(global.getComputedStyle(el).opacity), 0, 1e-6,
+      'P4.16 項目3: テストモードでは縁は出ない');
+
+    au.testMode = false;
+    var cases = [[20, false, 0.08, 0.15], [12, false, 0.15, 0.45], [5, false, 0.45, 0.60],
+      [5, true, 0.59, 0.61]];
+    for (var i = 0; i < cases.length; i++) {
+      var dist = cases[i][0], chase = cases[i][1];
+      au._hbImp.length = 0; au.hbRim.v = 0;
+      au._hbRimBeat(dist, chase);
+      au._stepHbRim(A.HBRIM_A, false);
+      au._applyFxDom(true);
+      var op = parseFloat(global.getComputedStyle(el).opacity);
+      t.ok(op >= cases[i][2] - 1e-6 && op <= cases[i][3] + 1e-6,
+        'P4.16 項目3: ' + (chase ? '追跡中' : dist + 'm') + ' のピーク不透明度 ' +
+        cases[i][2] + '〜' + cases[i][3], op.toFixed(3));
+      /* 無着色半径が距離で変わり、常に40%以上 */
+      var bg = global.getComputedStyle(el).backgroundImage;
+      /* 透明の停止位置は 0% と inner% の2つ。**最後の**透明停止位置が無着色半径。 */
+      var mAll = bg.match(/rgba\(122, ?10, ?10, ?0\) (\d+)%/g);
+      var innPct = mAll ? parseInt(/(\d+)%/.exec(mAll[mAll.length - 1])[1], 10) : -1;
+      t.ok(innPct >= 40,
+        'P4.16 項目3: ' + (chase ? '追跡中' : dist + 'm') + ' も中央40%は無着色',
+        innPct >= 0 ? innPct + '%' : bg.slice(0, 60));
+      /* 次の拍までに20%以下 */
+      var peak = op, elapsed = A.HBRIM_A;
+      var per = 60 / A.hbRimFor(dist, chase).bpm;
+      while (elapsed < per) { au._stepHbRim(dt, false); elapsed += dt; }
+      au._applyFxDom(true);
+      var end = parseFloat(global.getComputedStyle(el).opacity);
+      t.ok(end <= peak * 0.20 + 1e-6,
+        'P4.16 項目3: ' + (chase ? '追跡中' : dist + 'm') + ' 次の拍までにピークの20%以下',
+        end.toFixed(4) + ' / ' + peak.toFixed(3));
+    }
+
+    /* 第1音で強く・第2音で弱く（実際の時間発展で見る） */
+    au._hbImp.length = 0; au.hbRim.v = 0;
+    au._hbRimBeat(5, false);
+    var v1 = 0, v2 = 0, tt = 0;
+    while (tt < A.HBRIM_GAP) { au._stepHbRim(dt, false); tt += dt; if (au.hbRim.v > v1) v1 = au.hbRim.v; }
+    while (tt < A.HBRIM_GAP * 2.4) { au._stepHbRim(dt, false); tt += dt; if (au.hbRim.v > v2) v2 = au.hbRim.v; }
+    t.ok(v1 > v2 && v2 > 0, 'P4.16 項目3: 第1音で強く・第2音で弱く脈打つ',
+      v1.toFixed(3) + ' → ' + v2.toFixed(3));
+
+    /* 鳴っていない時は 0（演出中＝quiet でも 0） */
+    au._hbRimBeat(5, false);
+    au._stepHbRim(A.HBRIM_A, true);
+    au._applyFxDom(true);
+    t.near(parseFloat(global.getComputedStyle(el).opacity), 0, 1e-6,
+      'P4.16 項目3: 演出中（メモ・牢・暗転）は縁を出さない');
+    au._hbImp.length = 0; au.hbRim.v = 0;
+    for (var k = 0; k < 90; k++) au._stepHbRim(dt, false);
+    au._applyFxDom(true);
+    t.near(parseFloat(global.getComputedStyle(el).opacity), 0, 1e-6,
+      'P4.16 項目3: 鼓動が鳴っていなければ 0');
+
+    au.testMode = was;
+    au._hbImp.length = 0; au.hbRim.v = 0;
+    au._applyFxDom(true);
+  }
+
+  ESCAPE.__extraSuites.push(testP413Heartbeat, testP413Tension, testP413TensionInPlay,
+    testP416HeartRimNumbers, testP416HeartRimDom);
 
   /* 検証フック（機械テスト・E2E用） */
   global.__audioDebug = {
