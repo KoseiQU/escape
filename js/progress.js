@@ -79,6 +79,22 @@
         '歩けば点く。止まれば消える。\n' +
         '—— 点けたまま奴の前に出るな。光は遠くからでも見える。'
     },
+    /* P4.16 項目1 — 研究員の日記（正文 docs/notes.md「P4.16追加（導入・タイトル）」）。
+       スタート部屋を初めて出た瞬間に**自動で1回**開く（既読はセーブに永続）。
+       壁のメモとしてもスタート部屋の出口脇に置かれ、何度でも読み返せる。 */
+    a1_diary: {
+      title: '研究員の日記',
+      body: '九月　日付は忘れた\n\n' +
+        '封鎖区画に「あれ」が残っている。人だったものだ。\n' +
+        '二本の足で立って歩く。だが、こちらを見つけると床に伏せて、四つ足で追ってくる。速い。\n\n' +
+        '近づかれると、胸が締めつけられる。心臓の音が耳の奥で強くなる。\n' +
+        '目で見るより先に、心臓が教えてくれる。速くなったら立ち止まれ。隠れろ。\n' +
+        'ロッカーの中なら見つからなかった。板の陰でも、息を殺せば。\n\n' +
+        '床のガラス、金属板、水たまり —— 走って踏むな。缶を蹴るな。センサーの前で走るな。\n' +
+        '音を立てると、あれは叫ぶ。叫んだら、もう走ってきている。\n\n' +
+        '出口は北の隔壁。鍵は所長室の金庫。\n' +
+        '三度目はない。'
+    },
     /* memo6 — 拘束室の前室（旧本文のまま） */
     a1_n3: {
       title: '拘束区画 運用規程',
@@ -168,6 +184,13 @@
   /* 端末の向き（壁の向き）→ 復帰時に向く方角(deg)。端末（緑のランプ）が正面に来る */
   var SAVE_YAW_DEG = { n: 0, s: 180, e: -90, w: 90 };
 
+  /* P4.16 項目1: 研究員の日記の自動表示（契約 §4「P4.16 再プレイ差し戻し」項目1）。
+     スタート部屋（＝spawn を含む「部屋」region）の外へ出た最初のフレームに1回だけ開く。
+     ROOM_MAX は js/minimap.js の部屋判定と同じ値。minimap が居ない構成でも
+     同じ規則で部屋を選べるようにここにも置く（判定の実体は minimap.roomRegions()）。 */
+  var DIARY_ID = 'a1_diary';
+  var ROOM_MAX_FALLBACK = 14;
+
   var SAVE_KEY = 'escape.save.area1.v2';
   var SAVE_KEY_OLD = 'escape.save.area1.v1';   /* P4.7 以前のセーブ（読まずに消す） */
 
@@ -210,6 +233,12 @@
     this._geos = [];
     this._mats = [];
     this._buildNoteGlow();
+    /* P4.16 項目1: 日記の自動表示のオン/オフ。製品は常に true。
+       機械テストの台本歩行（walkCells 等）は「スタート部屋から歩いて出る」経路を
+       何度も通るので、runAll の間だけ false にする（音の罠 g.traps.enabled と同じ扱い。
+       自動表示そのものは専用スイート testP416Diary が実経路で検証する）。
+       reset() では触らない＝g.reset() を挟んでも runAll の間ずっと止まったまま。 */
+    this.diaryAuto = true;
     this.reset();
     this._bind();
   }
@@ -233,6 +262,12 @@
     this.savePointsSeen = Object.create(null);
     this.savePointsSeenCount = 0;
     this.checkpoint = null;
+    /* P4.16 項目1: 研究員の日記。diaryRead はセーブに永続する既読フラグ＝
+       一度読んだら二度と自動では開かない（壁のメモからは何度でも読める）。
+       _diaryArmed は「スポーンの部屋の中に居た」ことの記憶＝自動表示は
+       **中→外の遷移**でしか起きない（reset 直後にいきなり外側へ置かれても開かない）。 */
+    this.diaryRead = false;
+    this._diaryArmed = false;
     this._t = 0;
     this._saveHintT = 0;
     this._saveHintId = null;
@@ -278,6 +313,82 @@
     var rs = meta.regionSigns || [];
     for (var r = 0; r < rs.length; r++) this._regionSignAt[rs[r].col + ',' + rs[r].row] = rs[r];
     this.regionSigns = rs;
+    /* P4.16 項目1: スポーンの部屋（自動日記の発火境界）。マップを掴み直すたびに1回だけ焼く */
+    this.spawnRoom = this._findSpawnRoom(meta);
+  };
+
+  /* ================================================================
+   * P4.16 項目1: 研究員の日記の自動表示
+   *
+   * 「スポーンの部屋」= meta.spawn を含む **部屋** region のうち最も小さいもの。
+   * 部屋の判定は js/minimap.js roomRegions()（帯ゾーン80×13・ランドマーク長廊下を除く）を
+   * 唯一の実体として使い、minimap が居ない構成のためだけに同じ規則のフォールバックを持つ。
+   * area1 では受入ホール（hall: 1,70〜9,76）が選ばれ、spawn(4,74) はその中にある。
+   * ============================================================== */
+  Progress.prototype._findSpawnRoom = function (meta) {
+    var sp = meta && meta.spawn;
+    if (!sp) return null;
+    var mm = this.game.minimap;
+    var rooms = (mm && mm.roomRegions) ? mm.roomRegions() : this._roomRegionsFallback(meta);
+    var best = null, bestArea = Infinity;
+    for (var i = 0; i < rooms.length; i++) {
+      var r = rooms[i];
+      if (sp.col < r.c0 || sp.col > r.c1 || sp.row < r.r0 || sp.row > r.r1) continue;
+      var area = (r.c1 - r.c0 + 1) * (r.r1 - r.r0 + 1);
+      if (area < bestArea) { bestArea = area; best = r; }
+    }
+    return best;
+  };
+
+  Progress.prototype._roomRegionsFallback = function (meta) {
+    var regions = (meta && meta.regions) || [], lm = (meta && meta.landmarks) || [], out = [];
+    for (var i = 0; i < regions.length; i++) {
+      var r = regions[i];
+      if (!r.zone) continue;
+      var w = r.c1 - r.c0 + 1, h = r.r1 - r.r0 + 1;
+      if (w > ROOM_MAX_FALLBACK || h > ROOM_MAX_FALLBACK || w < 2 || h < 2) continue;
+      var isLm = false;
+      for (var j = 0; j < lm.length; j++) if (lm[j].id === r.id) { isLm = true; break; }
+      if (!isLm) out.push(r);
+    }
+    return out;
+  };
+
+  /** プレイヤーのマスがスポーンの部屋の中にいるか */
+  Progress.prototype.inSpawnRoom = function () {
+    var r = this.spawnRoom;
+    if (!r) return true;                 /* 部屋が特定できない構成では発火させない */
+    var p = this.game.player, c = p.col(), w = p.row();
+    return (c >= r.c0 && c <= r.c1 && w >= r.r0 && w <= r.r1);
+  };
+
+  /** 自動表示を「今」出してよいか。タイトル中・捕獲演出中・他のモーダル中は保留する */
+  Progress.prototype._diaryHeld = function () {
+    var g = this.game;
+    if (this.modal) return true;                                      /* 別のメモ/クリア画面 */
+    if (ESCAPE.Title && ESCAPE.Title.blocking && ESCAPE.Title.blocking()) return true;
+    if (g.cinematic && g.cinematic.active && g.cinematic.active()) return true;
+    if (g.stealth && g.stealth.jail && g.stealth.jail.phase && g.stealth.jail.phase !== 'none') return true;
+    return false;
+  };
+
+  /** 毎フレーム: スポーンの部屋の中に居た状態から**外へ出た最初のフレーム**に1回だけ開く。
+   *
+   *  契約の「出た瞬間」は状態ではなく**遷移**なので、部屋の中に居たこと（_diaryArmed）を
+   *  前提にする。復帰・ワープのように部屋を通らずに外側から始まった場合は「出た」ではない
+   *  ので開かない（次にスタート部屋へ戻って出た時に開く）。
+   *  保留（タイトル中・捕獲演出中・他のモーダル中）の間は armed のまま持ち越す。 */
+  Progress.prototype._checkDiary = function () {
+    if (this.diaryRead) { this._diaryArmed = false; return false; }
+    if (!this.diaryAuto) return false;   /* 機械テスト中の台本歩行では止める（下の注記） */
+    if (!NOTE_TEXTS[DIARY_ID]) return false;
+    if (this.inSpawnRoom()) { this._diaryArmed = true; return false; }
+    if (!this._diaryArmed) return false; /* 部屋に居たことが無い＝「出た瞬間」ではない */
+    if (this._diaryHeld()) return false; /* 保留。armed のまま次の機会に開く */
+    this._diaryArmed = false;
+    this.diaryRead = true;               /* _openMemo → save() の前に立てて永続させる */
+    this._openMemo(DIARY_ID);
+    return true;
   };
 
   /* ================================================================
@@ -609,6 +720,8 @@
     /* 【P4.12 失効】ここにあった「ロープが張った」の画面表示は、ロープ無制限化で失効した。 */
     /* P4.14: セーブポイントの発見と案内（【失効】旧「マスを踏むと自動で記録＋効果音」） */
     this._checkSavePoints(dt);
+    /* P4.16 項目1: スタート部屋を出た最初のフレームに研究員の日記を自動で開く（1回・既読は永続） */
+    this._checkDiary();
     this._checkClear();
     this._updateNoteGlow(dt);
     this._updatePrompt();
@@ -828,6 +941,9 @@
     var txt = NOTE_TEXTS[id];
     if (!txt) return;
     this.notesRead[id] = true;
+    /* P4.16 項目1: 壁のメモとして先に読んだ場合も既読にする＝部屋を出た直後に
+       同じ日記をもう一度突きつけない（自動表示は「素通り禁止」のための保険）。 */
+    if (id === DIARY_ID) this.diaryRead = true;
     this.modal = 'memo';
     this.memoId = id;
     if (this.dom.memoTitle) this.dom.memoTitle.textContent = txt.title;
@@ -899,6 +1015,8 @@
         gimmick: { key: this.gimmick.key, doorOpen: this.gimmick.doorOpen },
         notesRead: Object.keys(this.notesRead),
         signsRead: Object.keys(this.signsRead),
+        /* P4.16 項目1: 日記の自動表示は1回きり。既読はセーブに永続する */
+        diaryRead: this.diaryRead,
         cleared: this.cleared,
         rope: this.game.rope ? this.game.rope.save() : null,
         map: this.game.minimap ? this.game.minimap.save() : null
@@ -923,6 +1041,9 @@
     for (var i = 0; i < nr.length; i++) this.notesRead[nr[i]] = true;
     var sr = data.signsRead || [];
     for (var j = 0; j < sr.length; j++) this.signsRead[sr[j]] = true;
+    /* P4.16 項目1: 既読フラグ。旧セーブ（diaryRead 無し）は「壁のメモとして読んでいれば既読」
+       として拾う＝日記を読み終えた人に二度目の自動表示をしない。 */
+    this.diaryRead = !!data.diaryRead || !!this.notesRead[DIARY_ID];
     this.cleared = !!data.cleared;
     if (this.game.minimap && data.map) this.game.minimap.load(data.map);
     /* P4.14: 記録済みセーブポイント。旧セーブ（v3以前）は checkpoint に文字列が入っている
@@ -991,6 +1112,8 @@
   ESCAPE.ZONE_NAMES = ZONE_NAMES;
   ESCAPE.zoneLabel = zoneLabel;
   ESCAPE.PROGRESS_SAVE_KEY = SAVE_KEY;
+  /* P4.16 項目1: 自動表示する日記のid（機械テストが参照する） */
+  ESCAPE.PROGRESS_DIARY_ID = DIARY_ID;
 
   /* 検証フック（機械テスト・E2E用）。ESCAPE.game.progress への遅延参照のみ。 */
   global.__progressDebug = {
@@ -1008,7 +1131,11 @@
         trapHint: pr.trapHintText(), trapHintKind: pr.trapHintKind(),
         hintLine: pr.hintLineText(), saveHint: pr.saveHintText(),
         saved: Object.keys(pr.saved), seen: Object.keys(pr.savePointsSeen),
-        respawn: pr.respawnPoint()
+        respawn: pr.respawnPoint(),
+        /* P4.16 項目1: 日記の自動表示 */
+        diaryRead: pr.diaryRead, inSpawnRoom: pr.inSpawnRoom(),
+        diaryArmed: pr._diaryArmed, diaryAuto: pr.diaryAuto,
+        spawnRoom: pr.spawnRoom ? pr.spawnRoom.id : null
       };
     }
   };

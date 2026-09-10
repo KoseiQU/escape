@@ -1642,7 +1642,7 @@
   function testMemoNotes(t, g) {
     g.reset();
     var notes = g.map.meta.notes || [];
-    t.ok(notes.length === 6, 'メモ: area1に6枚に絞られている（契約 §4 継承リスト）', notes.length);
+    t.ok(notes.length === 7, 'メモ: area1は7枚（旧6枚＋P4.16の研究員の日記）', notes.length);
     var seenMemoTitles = {};
     for (var i = 0; i < notes.length; i++) {
       var n = notes[i];
@@ -1662,7 +1662,7 @@
       var h2 = g.progress.onInteract();
       t.ok(h2 === true && g.progress.modal === null, 'メモ ' + n.id + ': 「調べる」で閉じる');
     }
-    t.ok(Object.keys(seenMemoTitles).length === 6, 'メモ: 6枚が重複なく1枚ずつ対応している',
+    t.ok(Object.keys(seenMemoTitles).length === 7, 'メモ: 7枚が重複なく1枚ずつ対応している',
       Object.keys(seenMemoTitles).length);
     /* P4.8 で差し替えた3枚（memo1/4/5）が v3 の正文になっていること */
     t.ok(ESCAPE.PROGRESS_NOTE_TEXTS.a1_n5.body.indexOf('鍵は所長室の金庫') >= 0,
@@ -3557,7 +3557,7 @@
     }
     t.ok(badBand.length === 0, 'P4.9: 区画銘板が自分の帯の入口付近にある', badBand.join(' / '));
 
-    /* メモ: 6枚が区画A〜Fに1枚ずつ（どの帯に居るかで数える） */
+    /* メモ: 区画A〜Fに行き渡っている（P4.16 でスタート部屋の日記が区画Aに1枚増えた） */
     function zoneOfRow(row) {
       for (var k = 0; k < bands.length; k++) if (row >= bands[k].r0 && row <= bands[k].r1) return bands[k].zone;
       return null;
@@ -3567,7 +3567,7 @@
       var zz = zoneOfRow(notes[ni].row);
       nz[zz] = (nz[zz] || 0) + 1;
     }
-    t.ok(notes.length === 6, 'P4.9: メモは6枚', notes.length);
+    t.ok(notes.length === 7, 'P4.9+P4.16: メモは7枚（6枚＋研究員の日記）', notes.length);
     var nmiss = [];
     for (var nz2 = 0; nz2 < ZONES.length; nz2++) if (!nz[ZONES[nz2]]) nmiss.push(ZONES[nz2]);
     t.ok(nmiss.length === 0, 'P4.9: メモが区画A〜Fに行き渡っている', JSON.stringify(nz));
@@ -4546,6 +4546,369 @@
     g.reset();
   }
 
+  /* ================================================================
+   * P4.16 レーンB（契約 §4「P4.16 再プレイ差し戻し」項目1・項目4）
+   *
+   *   項目1 研究員の日記: スタート部屋を出た最初のフレームに自動で1回開く／
+   *                       閉じると進める／既読は永続／壁のメモから読み返せる
+   *   項目4 タイトル画面: 起動で出る／タップで消えてゲームが動く／
+   *                       セーブ有無で選択肢が変わる／`最初から`でセーブが消える／
+   *                       タイトル中は更新が止まる（座標も鼓動も進まない・声も鳴らない）
+   * ============================================================== */
+
+  /** 実機のタップと同じ経路で発火させる（title.js は mousedown も拾う） */
+  function tapEl(el) {
+    if (!el) return false;
+    el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+    return true;
+  }
+
+  /** スポーンの部屋の外の、部屋から最も近い歩行可能マス */
+  function firstCellOutsideSpawnRoom(g, room) {
+    var meta = g.map.meta, sp = meta.spawn;
+    var seen = Object.create(null), q = [[sp.col, sp.row]], h = 0;
+    var D = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+    seen[sp.col + ',' + sp.row] = true;
+    while (h < q.length) {
+      var cu = q[h++];
+      if (cu[0] < room.c0 || cu[0] > room.c1 || cu[1] < room.r0 || cu[1] > room.r1) {
+        return { col: cu[0], row: cu[1] };
+      }
+      for (var i = 0; i < 4; i++) {
+        var nc = cu[0] + D[i][0], nr = cu[1] + D[i][1], k = nc + ',' + nr;
+        if (seen[k] || !g.map.isWalkable(nc, nr)) continue;
+        seen[k] = true;
+        q.push([nc, nr]);
+      }
+    }
+    return null;
+  }
+
+  /** マス列を歩く。モーダルが開いた（＝日記が出た）時点で必ず止まる */
+  function walkUntilModal(g, cells) {
+    var dt = ESCAPE.FIXED_DT, p = g.player, frames = 0;
+    var trapsWas = g.traps ? g.traps.enabled : null;
+    if (g.traps) g.traps.enabled = false;
+    for (var i = 0; i < cells.length && !g.progress.modal; i++) {
+      var c = g.map.cellCenter(cells[i].col, cells[i].row), guard = 0;
+      while (guard++ < 240 && !g.progress.modal) {
+        var dx = c.x - p.x, dz = c.z - p.z;
+        if (Math.hypot(dx, dz) < 0.30) break;
+        p.yaw = Math.atan2(-dx, -dz);
+        g.input.moveX = 0; g.input.moveY = 1;
+        g.stepFrame(dt);
+        frames++;
+      }
+    }
+    g.input.reset();
+    if (g.traps && trapsWas !== null) g.traps.enabled = trapsWas;
+    return frames;
+  }
+
+  function testP416Diary(t, g) {
+    var pr = g.progress, DID = ESCAPE.PROGRESS_DIARY_ID;
+    var autoWas = pr.diaryAuto;
+    t.ok(DID === 'a1_diary', 'P4.16 項目1: 自動表示する日記のid', DID);
+    var txt = ESCAPE.PROGRESS_NOTE_TEXTS[DID];
+    if (!t.ok(!!txt, 'P4.16 項目1: 日記の本文が組み込まれている')) return;
+    /* 正文（docs/notes.md「P4.16追加（導入・タイトル）」）と一字一句一致すること */
+    t.ok(txt.title === '研究員の日記', 'P4.16 項目1: 表示タイトルが正文', txt.title);
+    var LINES = [
+      '九月　日付は忘れた', '',
+      '封鎖区画に「あれ」が残っている。人だったものだ。',
+      '二本の足で立って歩く。だが、こちらを見つけると床に伏せて、四つ足で追ってくる。速い。', '',
+      '近づかれると、胸が締めつけられる。心臓の音が耳の奥で強くなる。',
+      '目で見るより先に、心臓が教えてくれる。速くなったら立ち止まれ。隠れろ。',
+      'ロッカーの中なら見つからなかった。板の陰でも、息を殺せば。', '',
+      '床のガラス、金属板、水たまり —— 走って踏むな。缶を蹴るな。センサーの前で走るな。',
+      '音を立てると、あれは叫ぶ。叫んだら、もう走ってきている。', '',
+      '出口は北の隔壁。鍵は所長室の金庫。',
+      '三度目はない。'
+    ];
+    t.ok(txt.body === LINES.join('\n'), 'P4.16 項目1: 本文が docs/notes.md の正文と一致する',
+      txt.body.length + '文字');
+
+    /* --- 壁のメモ（スタート部屋の出口脇）から読み返せる --- */
+    g.reset();
+    try { global.localStorage.removeItem(SAVE_KEY); } catch (e) { /* 無効環境は対象外 */ }
+    pr.diaryAuto = false;                       /* ここは「壁のメモ」の検証。自動表示は下で見る */
+    var nl = g.map.meta.notes || [], wall = null, injected = false;
+    for (var wi = 0; wi < nl.length; wi++) if (nl[wi].id === DID) wall = nl[wi];
+    if (!wall) {
+      /* レーンAの配置がまだ無い構成でも「読み返せる」ことは検証する（一時注入・後で戻す） */
+      wall = { col: 8, row: 71, dir: 'n', id: DID };
+      nl.push(wall); pr._rebuildLookups(); injected = true;
+    }
+    t.ok(injected === false, 'P4.16 項目1: 壁のメモ a1_diary が meta.notes に置かれている',
+      injected ? '【注入して検証】area1.js に未配置' : wall.col + ',' + wall.row);
+    var room0 = pr.spawnRoom;
+    if (room0) {
+      t.ok(wall.col >= room0.c0 - 1 && wall.col <= room0.c1 + 1 &&
+        wall.row >= room0.r0 - 1 && wall.row <= room0.r1 + 1,
+        'P4.16 項目1: 日記の壁メモがスタート部屋の（出口）脇にある',
+        wall.col + ',' + wall.row + ' / ' + room0.id);
+    }
+    var ap = adjacentTo(g.map, wall.col, wall.row);
+    if (t.ok(!!ap, 'P4.16 項目1: 日記の壁メモに「調べる」が届く隣接マスがある')) {
+      place(g, ap.col, ap.row, ap.yawDeg);
+      var hit = pr.onInteract();
+      t.ok(hit === true && pr.modal === 'memo' && pr.memoId === DID,
+        'P4.16 項目1: 壁のメモから日記を読み返せる', pr.memoId);
+      t.ok(pr.dom.memoBody.textContent === txt.body,
+        'P4.16 項目1: 壁のメモの本文も正文と一致する');
+      t.ok(pr.diaryRead === true,
+        'P4.16 項目1: 壁のメモで先に読めば既読になる（直後に自動で突きつけない）');
+      pr.onCloseTap();
+      t.ok(pr.modal === null, 'P4.16 項目1: 日記を閉じられる');
+    }
+    if (injected) { nl.pop(); pr._rebuildLookups(); }
+
+    /* --- 自動表示: スポーンの部屋を出た最初のフレームで開く --- */
+    g.reset();
+    pr.diaryAuto = true;
+    var room = pr.spawnRoom;
+    if (!t.ok(!!room, 'P4.16 項目1: スポーンの部屋が特定できている', room && room.id)) {
+      pr.diaryAuto = autoWas; g.reset(); return;
+    }
+    t.ok(pr.inSpawnRoom() === true, 'P4.16 項目1: 開始時はスポーンの部屋の中にいる', room.id);
+    t.ok(pr.diaryRead === false && pr.modal === null, 'P4.16 項目1: 開始時は日記が未読');
+    var out = firstCellOutsideSpawnRoom(g, room);
+    if (!t.ok(!!out, 'P4.16 項目1: スポーンの部屋の外へ抜けるマスがある')) {
+      pr.diaryAuto = autoWas; g.reset(); return;
+    }
+    var route = routeTo(g, g.map.meta.spawn.col, g.map.meta.spawn.row, out.col, out.row);
+    if (!t.ok(!!route, 'P4.16 項目1: 出口までの経路がある')) {
+      pr.diaryAuto = autoWas; g.reset(); return;
+    }
+    walkUntilModal(g, route);
+    t.ok(pr.inSpawnRoom() === false, 'P4.16 項目1: スタート部屋の外へ出た',
+      g.player.col() + ',' + g.player.row());
+    t.ok(pr.modal === 'memo' && pr.memoId === DID,
+      'P4.16 項目1: 部屋を出た最初のフレームで日記が自動で開く', pr.modal + '/' + pr.memoId);
+    t.ok(pr.diaryRead === true, 'P4.16 項目1: 自動表示で既読になる');
+    t.ok(pr.dom.memoBody.textContent === txt.body && pr.dom.memoTitle.textContent === txt.title,
+      'P4.16 項目1: 自動表示の中身が正文どおり');
+    t.ok(pr.dom.memoOverlay.classList.contains('show') === true,
+      'P4.16 項目1: メモUIが実際に画面へ出ている');
+
+    /* 閉じるまで進行停止 → 閉じると進める */
+    var x0 = g.player.x, z0 = g.player.z, yaw0 = g.player.yaw;
+    g.input.moveY = 1; g.input.lookDX = 600;
+    sim(g, 20);
+    g.input.reset();
+    t.ok(g.player.x === x0 && g.player.z === z0 && g.player.yaw === yaw0,
+      'P4.16 項目1: 日記を閉じるまで進行が止まる');
+    pr.onCloseTap();
+    t.ok(pr.modal === null, 'P4.16 項目1: 日記を閉じられる（自動表示ぶん）');
+    g.input.moveY = 1;
+    sim(g, 20);
+    g.input.reset();
+    t.ok(Math.hypot(g.player.x - x0, g.player.z - z0) > 0.2,
+      'P4.16 項目1: 閉じるとゲームが進む',
+      Math.hypot(g.player.x - x0, g.player.z - z0).toFixed(2) + 'm');
+
+    /* 既読後は二度と自動では開かない（部屋へ戻って出直しても） */
+    place(g, g.map.meta.spawn.col, g.map.meta.spawn.row, 180);
+    sim(g, 2);
+    t.ok(pr.inSpawnRoom() === true, 'P4.16 項目1: スタート部屋へ戻れた（前提）');
+    place(g, out.col, out.row, 0);
+    sim(g, 3);
+    t.ok(pr.modal === null, 'P4.16 項目1: 既読後は出直しても自動では開かない', pr.modal);
+
+    /* save → load で既読が残る */
+    try {
+      pr.save();
+      var raw = global.localStorage.getItem(SAVE_KEY);
+      if (t.ok(!!raw, 'P4.16 項目1: セーブが書き込まれている（前提）')) {
+        t.ok(JSON.parse(raw).diaryRead === true, 'P4.16 項目1: セーブ内容に日記の既読が入る');
+      }
+      pr.reset(); g.rope.reset(); g.minimap.reset();
+      t.ok(pr.diaryRead === false, 'P4.16 項目1: reset() で未読へ戻る（前提）');
+      pr.load();
+      t.ok(pr.diaryRead === true, 'P4.16 項目1: load() で既読が復元される（セーブに永続）');
+      place(g, out.col, out.row, 0);
+      sim(g, 3);
+      t.ok(pr.modal === null, 'P4.16 項目1: 復元後も自動では開かない', pr.modal);
+      global.localStorage.removeItem(SAVE_KEY);
+    } catch (e) { /* localStorage無効環境は対象外 */ }
+
+    /* 復帰・ワープのように部屋を通らずに外側から始まった時は「出た瞬間」ではない */
+    g.reset();
+    place(g, out.col, out.row, 0);
+    sim(g, 5);
+    t.ok(pr.modal === null && pr.diaryRead === false,
+      'P4.16 項目1: 部屋を通らず外側から始まった時は開かない（＝中→外の遷移でのみ発火）');
+
+    pr.diaryAuto = autoWas;
+    g.reset();
+    try { global.localStorage.removeItem(SAVE_KEY); } catch (e2) { /* 無視 */ }
+  }
+
+  function testP416Title(t, g) {
+    var T = ESCAPE.Title, C = ESCAPE.TITLE_CONST;
+    if (!t.ok(!!T, 'P4.16 項目4: タイトル画面のモジュールが結線されている')) return;
+    t.ok(T.state === 'playing' && T.blocking() === false,
+      'P4.16 項目4: runAll は自動でタイトルを抜けて実行されている', T.state);
+
+    var d = T.dom;
+    if (!t.ok(!!(d && d.overlay && d.tap && d.choice && d.btnContinue && d.btnNew),
+      'P4.16 項目4: タイトルのDOMが揃っている')) return;
+    /* 正文（docs/notes.md「P4.16追加（導入・タイトル）」） */
+    t.ok(d.word.textContent === 'Escape',
+      'P4.16 項目4: タイトルの綴りが `Escape`（旧ESCAPE表記は失効）', d.word.textContent);
+    t.ok(d.tap.textContent === 'タップして始める', 'P4.16 項目4: 開始の文言が正文', d.tap.textContent);
+    t.ok(d.btnContinue.textContent === '続きから' && d.btnNew.textContent === '最初から',
+      'P4.16 項目4: 2択の文言が正文', d.btnContinue.textContent + '/' + d.btnNew.textContent);
+    t.near(C.FADE_MS, 1000, 1e-9, 'P4.16 項目4: タップから1秒の暗転を挟む');
+    /* 崩し字: s と p が別書体・別サイズ、a は赤 */
+    var css = function (sel) {
+      var el = d.word.querySelector(sel);
+      return el ? global.getComputedStyle(el) : null;
+    };
+    var base = global.getComputedStyle(d.word);
+    var cs = css('.l-s'), cp = css('.l-p'), ca = css('.l-a');
+    if (t.ok(!!(cs && cp && ca), 'P4.16 項目4: 崩す文字（s/p/a）が個別の要素になっている')) {
+      t.ok(cs.fontFamily !== base.fontFamily && cp.fontFamily !== base.fontFamily &&
+        cs.fontFamily !== cp.fontFamily,
+        'P4.16 項目4: s と p が本体とも互いとも別書体', cs.fontFamily + ' / ' + cp.fontFamily);
+      var fB = parseFloat(base.fontSize), fS = parseFloat(cs.fontSize), fP = parseFloat(cp.fontSize);
+      t.ok(fS > fB * 1.1 && fP < fB * 0.9,
+        'P4.16 項目4: s は大きく p は小さい（大きさでも崩す）',
+        fB.toFixed(1) + ' / s' + fS.toFixed(1) + ' / p' + fP.toFixed(1));
+      var m = /rgba?\((\d+),\s*(\d+),\s*(\d+)/.exec(ca.color);
+      t.ok(!!m && +m[1] > 180 && +m[1] > +m[2] * 1.8 && +m[1] > +m[3] * 1.8,
+        'P4.16 項目4: a が赤い', ca.color);
+      t.ok((ca.textShadow || '').split(',').length >= 3,
+        'P4.16 項目4: a が滲んでいる（多重のぼかし）', (ca.textShadow || '').split(',').length + '重');
+    }
+    /* グリッチ: 常時ではなく数秒に一度・0.2〜0.4秒 */
+    t.ok(C.GLITCH_MIN >= 3000 && C.GLITCH_MAX <= 6000 && C.GLITCH_MIN < C.GLITCH_MAX,
+      'P4.16 項目4: グリッチは数秒に一度（3〜6秒間隔）', C.GLITCH_MIN + '〜' + C.GLITCH_MAX + 'ms');
+    t.ok(C.GLITCH_DUR_MIN >= 200 && C.GLITCH_DUR_MAX <= 400,
+      'P4.16 項目4: グリッチの持続は0.2〜0.4秒', C.GLITCH_DUR_MIN + '〜' + C.GLITCH_DUR_MAX + 'ms');
+    t.ok(d.stack.querySelectorAll('.title-ghost').length === 2,
+      'P4.16 項目4: 色ずれの分身（赤・シアン）が2枚ある',
+      d.stack.querySelectorAll('.title-ghost').length);
+
+    /* --- 起動状態: タイトルが「見えている」（computed style で判定） --- */
+    var saveWas = null;
+    try { saveWas = global.localStorage.getItem(SAVE_KEY); global.localStorage.removeItem(SAVE_KEY); }
+    catch (e) { /* 無効環境は対象外 */ }
+    T.show();
+    t.ok(T.visible() === true, 'P4.16 項目4: 起動でタイトルが画面に出る',
+      JSON.stringify({ display: T.info().display, visibility: T.info().visibility, opacity: T.info().opacity }));
+    t.ok(T.blocking() === true, 'P4.16 項目4: タイトル中はゲームの更新が止まる');
+    t.ok(T.info().tapShown === true && T.info().choiceShown === false,
+      'P4.16 項目4: セーブが無い時は `タップして始める` だけが出る');
+
+    /* --- タイトル中は step が進まない（座標・鼓動・声） --- */
+    g.reset();
+    T.show();
+    var au = ESCAPE.audio;
+    /* 敵をすぐ隣に置く＝タイトルが無ければ必ず鼓動が刻まれる状況にする */
+    placeEnemy(g, g.player.col(), g.player.row(), 0);
+    g.ai.enemy.x = g.player.x + 1.0; g.ai.enemy.z = g.player.z;
+    var hb0 = au.hbT, hbeat0 = au.fired.heartbeat || 0;
+    var vinf0 = (ESCAPE.voice && ESCAPE.voice.info) ? ESCAPE.voice.info() : { count: 0, t: 0 };
+    var vcount0 = vinf0.count, vt0 = vinf0.t;
+    var px0 = g.player.x, pz0 = g.player.z, pyaw0 = g.player.yaw, sim0 = g.simTime;
+    g.input.moveY = 1; g.input.lookDX = 600;
+    sim(g, 60);
+    g.input.reset();
+    t.ok(g.player.x === px0 && g.player.z === pz0 && g.player.yaw === pyaw0,
+      'P4.16 項目4: タイトル中はプレイヤーの座標が動かない');
+    t.near(au.hbT, hb0, 1e-9, 'P4.16 項目4: タイトル中は鼓動の累積器が進まない');
+    t.ok((au.fired.heartbeat || 0) === hbeat0,
+      'P4.16 項目4: タイトル中は鼓動が鳴らない', (au.fired.heartbeat || 0) - hbeat0 + '回');
+    t.ok(g.simTime === sim0, 'P4.16 項目4: タイトル中は論理時間が進まない');
+    if (ESCAPE.voice && ESCAPE.voice.info) {
+      t.ok(ESCAPE.voice.info().count === vcount0 && ESCAPE.voice.info().t === vt0,
+        'P4.16 項目4: タイトル中は声が鳴らない（時計も進まない）',
+        JSON.stringify({ count: ESCAPE.voice.info().count, t: ESCAPE.voice.info().t }));
+    }
+
+    /* --- タップで消えてゲームが進む --- */
+    tapEl(d.overlay);
+    t.ok(T.state === 'fading', 'P4.16 項目4: タップで暗転に入る', T.state);
+    t.ok(T.blocking() === true, 'P4.16 項目4: 暗転の1秒間もまだ更新は止まっている');
+    T.flush();
+    t.ok(T.state === 'playing', 'P4.16 項目4: 暗転が明けるとゲームへ入る', T.state);
+    t.ok(T.visible() === false, 'P4.16 項目4: タイトルが画面から消える',
+      JSON.stringify({ display: T.info().display, opacity: T.info().opacity }));
+    t.ok(T.blocking() === false, 'P4.16 項目4: ゲームの更新が動き出す');
+    g.input.moveY = 1;
+    sim(g, 40);
+    g.input.reset();
+    t.ok(Math.hypot(g.player.x - px0, g.player.z - pz0) > 0.2,
+      'P4.16 項目4: タップのあとはプレイヤーが動く',
+      Math.hypot(g.player.x - px0, g.player.z - pz0).toFixed(2) + 'm');
+    t.ok(g.simTime > sim0, 'P4.16 項目4: タップのあとは論理時間が進む');
+    t.ok((au.fired.heartbeat || 0) > hbeat0,
+      'P4.16 項目4: タップのあとは鼓動が刻まれる（止めていたのはタイトルだけ）',
+      (au.fired.heartbeat || 0) - hbeat0 + '回');
+    g.reset();
+
+    /* --- セーブの有無で選択肢が変わる --- */
+    try {
+      global.localStorage.setItem(SAVE_KEY, JSON.stringify({ v: 4, diaryRead: true }));
+      T.show();
+      t.ok(T.hasSave() === true, 'P4.16 項目4: セーブの有無を見ている');
+      t.ok(T.info().choiceShown === true && T.info().tapShown === false,
+        'P4.16 項目4: セーブがある時は `続きから`／`最初から` の2択になる',
+        JSON.stringify({ choice: T.info().choiceShown, tap: T.info().tapShown }));
+      /* 画面のどこでもタップ では始まらない（選択の意味を残す） */
+      tapEl(d.overlay);
+      t.ok(T.state === 'title',
+        'P4.16 項目4: 2択の時は画面をタップしただけでは始まらない', T.state);
+      /* `続きから`: セーブは残る */
+      tapEl(d.btnContinue);
+      t.ok(T.state === 'fading' && T.mode === 'continue',
+        'P4.16 項目4: `続きから` で開始する', T.state + '/' + T.mode);
+      t.ok(global.localStorage.getItem(SAVE_KEY) !== null,
+        'P4.16 項目4: `続きから` ではセーブが残る');
+      T.flush();
+      t.ok(T.state === 'playing', 'P4.16 項目4: `続きから` でゲームへ入る');
+
+      /* `最初から`: セーブが消える */
+      global.localStorage.setItem(SAVE_KEY, JSON.stringify({ v: 4, diaryRead: true }));
+      T.show();
+      t.ok(T.info().choiceShown === true, 'P4.16 項目4: 2択に戻る（前提）');
+      tapEl(d.btnNew);
+      t.ok(global.localStorage.getItem(SAVE_KEY) === null,
+        'P4.16 項目4: `最初から` でセーブが消える',
+        String(global.localStorage.getItem(SAVE_KEY)));
+      t.ok(T.mode === 'new', 'P4.16 項目4: `最初から` として開始する', T.mode);
+      T.flush();
+      t.ok(g.progress.diaryRead === false && g.progress.gimmick.key === false,
+        'P4.16 項目4: `最初から` は進行も製品初期状態へ戻す');
+      /* セーブが消えたので、次にタイトルへ戻ると `タップして始める` に戻る */
+      T.show();
+      t.ok(T.info().tapShown === true && T.info().choiceShown === false,
+        'P4.16 項目4: セーブが無くなれば `タップして始める` へ戻る');
+    } catch (e3) { /* localStorage無効環境は対象外 */ }
+
+    /* グリッチが実際に走る（.glitch が付いて、持続後に外れる） */
+    T.show();
+    var gl0 = T.glitches;
+    var dur = T.glitchNow(200);
+    t.ok(T.glitches === gl0 + 1 && dur === 200, 'P4.16 項目4: グリッチを起こせる', dur + 'ms');
+    t.ok(d.stack.classList.contains('glitch') === true,
+      'P4.16 項目4: グリッチ中はクラスが付く');
+    t.ok(global.getComputedStyle(d.stack).animationName.indexOf('tg-jitter') >= 0,
+      'P4.16 項目4: グリッチのアニメーションが当たっている',
+      global.getComputedStyle(d.stack).animationName);
+    d.stack.classList.remove('glitch');
+
+    /* 後始末: runAll の続きが動くようにタイトルを抜けておく（最後に restore で戻す） */
+    T.skip();
+    t.ok(T.blocking() === false, 'P4.16 項目4: 検証後にタイトルを抜けられる');
+    try {
+      if (saveWas === null) global.localStorage.removeItem(SAVE_KEY);
+      else global.localStorage.setItem(SAVE_KEY, saveWas);
+    } catch (e4) { /* 無視 */ }
+    g.reset();
+  }
+
   function runAll(opts) {
     var g = ESCAPE.game;
     var t = new Runner();
@@ -4559,6 +4922,17 @@
     var au = ESCAPE.audio;
     var audioWasTest = au ? au.testMode : false;
     if (au) { au.testMode = true; au.panic(); }
+
+    /* P4.16 項目4: 製品初期状態はタイトル表示＝ゲームの更新が止まっている。
+       runAll は自動でタイトルを抜けてから実行し、最後にタイトル状態へ戻す（契約 §6）。 */
+    var TITLE = ESCAPE.Title;
+    if (TITLE && TITLE.skip) TITLE.skip();
+
+    /* P4.16 項目1: 台本歩行は「スタート部屋から歩いて出る」経路を何度も通るので、
+       日記の自動表示は runAll の間だけ止める（音の罠 g.traps.enabled と同じ扱い）。
+       自動表示そのものは testP416Diary が実経路で検証し、そこだけ一時的に戻す。 */
+    var diaryAutoWas = g.progress ? g.progress.diaryAuto : null;
+    if (g.progress) g.progress.diaryAuto = false;
 
     // 実行前スナップショット（＝製品初期状態）
     g.reset();
@@ -4595,7 +4969,9 @@
       testP49Zones, testP49Look, testP49DeadEnds, testP49Props,
       testP49RopeTension, testP49RopeFeasible,
       /* P4.11 レーンB: ロープ緩和・地図の踏破記録・ヘッドライトの形・ミニマップ */
-      testP411RopeRelax, testP411FogTruth, testP411MapPixels, testP411MinimapUi, testP411Headlight
+      testP411RopeRelax, testP411FogTruth, testP411MapPixels, testP411MinimapUi, testP411Headlight,
+      /* P4.16 レーンB: タイトル画面 Escape ／ 研究員の日記の自動表示 */
+      testP416Diary, testP416Title
     ];
     /* 他モジュールが登録した追加スイート（P4.10a の敵2体・絶叫・地図リセット等）も runAll に乗せる */
     if (ESCAPE.__extraSuites && ESCAPE.__extraSuites.length) suites = suites.concat(ESCAPE.__extraSuites);
@@ -4716,6 +5092,27 @@
         t.near(au.buzz.out.gain.value, 0, 1e-9, '復帰: 蛍光灯のジー音が止まっている');
         t.near(au.breath.out.gain.value, 0, 1e-9, '復帰: 呼吸音が止まっている');
       }
+    }
+
+    /* P4.16 項目1: 日記の自動表示を製品どおりに戻す（＝runAll 後の通常プレイで出る） */
+    if (g.progress && diaryAutoWas !== null) {
+      g.progress.diaryAuto = diaryAutoWas;
+      t.ok(g.progress.diaryAuto === true, '復帰: 日記の自動表示が製品どおりに戻る',
+        g.progress.diaryAuto);
+      t.ok(g.progress.diaryRead === false && g.progress._diaryArmed === false,
+        '復帰: 日記が未読・未武装の初期状態',
+        g.progress.diaryRead + '/' + g.progress._diaryArmed);
+    }
+
+    /* P4.16 項目4: 最後にタイトルへ戻す＝製品初期状態（起動直後と同じ画面）へ完全復帰 */
+    if (TITLE && TITLE.restore) {
+      TITLE.restore();
+      t.ok(TITLE.state === 'title', '復帰: タイトル画面の状態に戻る', TITLE.state);
+      t.ok(TITLE.visible() === true, '復帰: タイトルが画面に出ている（製品初期状態）',
+        JSON.stringify(TITLE.info()));
+      t.ok(TITLE.blocking() === true, '復帰: タイトルがゲームの更新を止めている');
+      t.ok(TITLE.hasSave() === false, '復帰: セーブが無い＝タイトルは「タップして始める」',
+        JSON.stringify({ tap: TITLE.info().tapShown, choice: TITLE.info().choiceShown }));
     }
 
     return summarize(t, opts);

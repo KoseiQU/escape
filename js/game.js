@@ -128,8 +128,17 @@
     this.render();
   };
 
+  /** タイトル画面がゲームの更新を止めているか（P4.16 項目4）。
+   *  ここが唯一のゲート＝rAFループも __pump も同じように止まる。描画は続くので
+   *  画面は生きたまま、simTime も frameCount も進まない（＝声・鼓動・環境音が鳴らない）。 */
+  Game.prototype.titleBlocked = function () {
+    return !!(ESCAPE.Title && ESCAPE.Title.blocking && ESCAPE.Title.blocking());
+  };
+
   /** 1論理ステップ。__pump もrAFループもここを通る */
   Game.prototype.stepFrame = function (dt) {
+    /* P4.16 項目4: タイトル中・タイトルからの暗転中は一切更新しない */
+    if (this.titleBlocked()) return;
     var input = this.input;
     /* メモ・テンキーが開いている間は「中断安全」= 視点・移動を止める
        （敵AI・音イベントは止めない＝メモを読んでいる間に敵が接近する状況を再現できる。

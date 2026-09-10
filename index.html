@@ -232,9 +232,131 @@
     border-radius:3px; padding:5px 8px;
   }
 
-  /* --- 縦持ち警告 --- */
+  /* ================================================================
+     P4.16 項目4: タイトル画面（契約 §4「P4.16 再プレイ差し戻し」項目4）
+     綴りは `Escape`（2026-09-10ユーザー指示。旧「ESCAPE」表記は失効）。
+     フォントは同梱できない（$0構成・外部アセット禁止）ので、システムフォントの
+     フォールバック指定だけで字体を崩す: s=セリフ体で大きく傾け、p=等幅で小さく逆に傾け、
+     a=赤く滲ませる（多重 text-shadow）。グリッチは常時ではなく数秒に一度だけ
+     （js/title.js が 3〜6秒間隔で .glitch を 0.2〜0.4秒だけ付ける）。
+     ================================================================ */
+  #title-overlay {
+    position:fixed; inset:0; z-index:90; background:#000;
+    display:flex; flex-direction:column; align-items:center; justify-content:center;
+    pointer-events:auto; -webkit-tap-highlight-color:transparent;
+    /* 縁のごく淡い赤み（画面全体が真っ黒だと平坦なので、奥行きだけ足す） */
+    background-image:radial-gradient(ellipse at 50% 46%,
+      rgba(38,10,10,.55) 0%, rgba(6,6,8,.9) 52%, #000 100%);
+  }
+  #title-overlay.hidden { display:none; visibility:hidden; opacity:0; pointer-events:none; }
+  /* タップ後の1秒の暗転: 文字と選択肢だけを落とし、黒はそのまま残す */
+  #title-overlay.fading #title-stack,
+  #title-overlay.fading #title-actions { opacity:0; transition:opacity .42s ease; pointer-events:none; }
+  #title-overlay.fading { background-image:none; transition:background-image .42s linear; }
+
+  #title-stack { position:relative; display:inline-block; }
+  .title-word {
+    font-family:"Helvetica Neue", Helvetica, Arial, sans-serif;
+    font-weight:700; font-size:clamp(54px, 15vw, 148px); line-height:1.06;
+    letter-spacing:.05em; white-space:nowrap; color:#c9d2da;
+    text-shadow:0 2px 18px rgba(0,0,0,.9);
+  }
+  .title-word span { display:inline-block; }
+  /* s: セリフ体・一回り大きく・ベースラインを下げて左へ傾ける */
+  .title-word .l-s {
+    font-family:Georgia, "Times New Roman", "Hiragino Mincho ProN", serif;
+    font-weight:400; font-style:italic; font-size:1.24em;
+    transform:translateY(.07em) rotate(-8deg); color:#b4bec7;
+  }
+  /* p: 等幅・一回り小さく・ベースラインを上げて右へ傾ける（隣の a と噛み合わない程度に空ける） */
+  .title-word .l-p {
+    font-family:"Courier New", Courier, monospace; font-weight:700; font-size:.84em;
+    transform:translateY(-.07em) rotate(5deg); color:#a6b0b9;
+    margin:0 .05em 0 .09em;
+  }
+  /* c: ごくわずかに傾けて「並びが揃っていない」感を出す */
+  .title-word .l-c { transform:translateY(-.025em) rotate(-2.5deg); }
+  /* a: 赤く滲ませる（多重 text-shadow のぼかし重ね＋下へ垂れる滲み） */
+  .title-word .l-a {
+    color:#e8544c;
+    text-shadow:
+      0 0 2px rgba(255,140,130,.95),
+      0 0 10px rgba(226,44,36,.95),
+      0 0 26px rgba(188,16,12,.85),
+      0 .10em 34px rgba(150,4,4,.8),
+      0 .18em 62px rgba(112,0,0,.66),
+      0 0 120px rgba(90,0,0,.5);
+  }
+  /* 色ずれの分身（赤/シアン）。通常は完全に透明で、グリッチの瞬間だけ出る */
+  #title-stack .title-ghost {
+    position:absolute; left:0; top:0; opacity:0; pointer-events:none;
+    mix-blend-mode:screen; will-change:transform, opacity, clip-path;
+  }
+  #title-stack .title-ghost span { color:inherit !important; text-shadow:none !important; }
+  #title-stack .g-r { color:#ff3b30; }
+  #title-stack .g-c { color:#28e0ea; }
+
+  /* グリッチ（横スライスのずれ＋赤/シアンの色ずれ）。持続は --tg（js/title.js が 0.2〜0.4秒で渡す） */
+  #title-stack.glitch { animation:tg-jitter var(--tg,.3s) steps(4) 1; }
+  /* jump-start: 最初の1コマ目から崩れる（jump-end だと頭の 1/6 が素通しになる） */
+  #title-stack.glitch .g-r { animation:tg-red var(--tg,.3s) steps(6, jump-start) 1; }
+  #title-stack.glitch .g-c { animation:tg-cyan var(--tg,.3s) steps(6, jump-start) 1; }
+  #title-stack.glitch .title-word.base { animation:tg-base var(--tg,.3s) steps(6, jump-start) 1; }
+  @keyframes tg-jitter {
+    0%   { transform:translate(0,0); }
+    20%  { transform:translate(-3px,1px); }
+    45%  { transform:translate(4px,-1px); }
+    70%  { transform:translate(-2px,0); }
+    100% { transform:translate(0,0); }
+  }
+  @keyframes tg-base {
+    0%,100% { opacity:1; filter:none; }
+    30%     { opacity:.82; filter:blur(.4px); }
+    60%     { opacity:.95; }
+  }
+  @keyframes tg-red {
+    0%   { opacity:0;  transform:translate(0,0);          clip-path:inset(0 0 100% 0); }
+    16%  { opacity:.95; transform:translate(-19px,-3px);  clip-path:inset(4% 0 66% 0); }
+    33%  { opacity:.92; transform:translate(15px,2px);    clip-path:inset(42% 0 36% 0); }
+    50%  { opacity:.9;  transform:translate(-13px,3px);   clip-path:inset(68% 0 6% 0); }
+    67%  { opacity:.85; transform:translate(17px,-2px);   clip-path:inset(22% 0 54% 0); }
+    84%  { opacity:.6;  transform:translate(-8px,0);      clip-path:inset(54% 0 26% 0); }
+    100% { opacity:0;   transform:translate(0,0);         clip-path:inset(0 0 100% 0); }
+  }
+  @keyframes tg-cyan {
+    0%   { opacity:0;  transform:translate(0,0);          clip-path:inset(100% 0 0 0); }
+    16%  { opacity:.85; transform:translate(17px,3px);    clip-path:inset(50% 0 24% 0); }
+    33%  { opacity:.9;  transform:translate(-16px,-2px);  clip-path:inset(10% 0 62% 0); }
+    50%  { opacity:.82; transform:translate(12px,-3px);   clip-path:inset(64% 0 10% 0); }
+    67%  { opacity:.8;  transform:translate(-14px,2px);   clip-path:inset(30% 0 44% 0); }
+    84%  { opacity:.55; transform:translate(7px,0);       clip-path:inset(76% 0 2% 0); }
+    100% { opacity:0;   transform:translate(0,0);         clip-path:inset(100% 0 0 0); }
+  }
+
+  #title-actions {
+    margin-top:clamp(34px, 7vh, 66px); text-align:center;
+    display:flex; flex-direction:column; align-items:center; gap:16px;
+  }
+  #title-tap {
+    font-size:13px; letter-spacing:.34em; color:rgba(178,192,204,.72);
+    padding-left:.34em; animation:tg-breathe 2.9s ease-in-out infinite;
+  }
+  @keyframes tg-breathe { 0%,100% { opacity:.42; } 50% { opacity:1; } }
+  #title-choice { display:none; gap:14px; }
+  #title-overlay.has-save #title-tap { display:none; }
+  #title-overlay.has-save #title-choice { display:flex; }
+  .title-btn {
+    pointer-events:auto; -webkit-tap-highlight-color:transparent;
+    min-width:132px; padding:13px 22px;
+    font-family:inherit; font-size:13px; letter-spacing:.22em; padding-left:calc(22px + .22em);
+    color:#cbd6e0; background:rgba(26,30,36,.6);
+    border:1px solid rgba(170,195,215,.34); border-radius:2px;
+  }
+  #title-new { color:rgba(198,168,168,.85); border-color:rgba(170,110,110,.32); }
+
+  /* --- 縦持ち警告（P4.16: タイトル(90)より前に出す＝縦持ちの案内はタイトルでも見える） --- */
   #orientation {
-    position:fixed; inset:0; display:none; z-index:50;
+    position:fixed; inset:0; display:none; z-index:96;
     background:#07090b; color:#c9d4de;
     align-items:center; justify-content:center; text-align:center;
   }
@@ -306,6 +428,21 @@
 
   <button id="btn-erase" type="button">データ全消去</button>
 
+  <!-- P4.16 項目4: タイトル画面（正文 docs/notes.md「P4.16追加（導入・タイトル）」）。
+       色ずれの分身2枚は js/title.js が .title-word.base を複製して作る（綴りの二重管理を避ける）。 -->
+  <div id="title-overlay">
+    <div id="title-stack">
+      <div class="title-word base"><span class="l-E">E</span><span class="l-s">s</span><span class="l-c">c</span><span class="l-a">a</span><span class="l-p">p</span><span class="l-e">e</span></div>
+    </div>
+    <div id="title-actions">
+      <div id="title-tap">タップして始める</div>
+      <div id="title-choice">
+        <button class="title-btn" id="title-continue" type="button">続きから</button>
+        <button class="title-btn" id="title-new" type="button">最初から</button>
+      </div>
+    </div>
+  </div>
+
   <div id="orientation">
     <div class="inner">
       <span class="icon">⟳</span>
@@ -333,6 +470,7 @@
   <script src="js/progress.js"></script>
   <script src="js/audio.js"></script>
   <script src="js/voice.js"></script>
+  <script src="js/title.js"></script>
   <script src="js/test.js"></script>
 </body>
 </html>
