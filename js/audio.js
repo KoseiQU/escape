@@ -1617,8 +1617,11 @@
        これで 0〜inner% が完全透明、inner%〜100% が画面端へ向かう赤のグラデーション
        ＝「画面端から内側 (100-inner)% まで赤・中央 inner% は透明」になる。
        色は血に近い暗赤（#7a0a0a 系）。 */
+    /* メイン監査（2026-09-10）: 暗い画面に暗赤を重ねても読めなかったため、色を明るい血の赤に上げ、
+       要素側を mix-blend-mode:screen（加算寄り）にして黒背景でも縁の赤が立つようにした。
+       透明側の停止位置（0%・inner%）は据え置き＝中央の無着色は不変。 */
     return 'radial-gradient(ellipse 100% 100% at 50% 50%, rgba(122,10,10,0) 0%, ' +
-      'rgba(122,10,10,0) ' + i0 + '%, rgba(122,10,10,0.45) ' + i1 + '%, rgba(138,8,7,1) 100%)';
+      'rgba(122,10,10,0) ' + i0 + '%, rgba(196,24,18,0.55) ' + i1 + '%, rgba(232,34,26,1) 100%)';
   }
 
   /* ================================================================
@@ -2666,6 +2669,7 @@
     el.style.pointerEvents = 'none';
     el.style.opacity = '0';
     el.style.willChange = 'opacity';
+    el.style.mixBlendMode = 'screen';
     el.style.backgroundImage = hbRimGradient(HBRIM_IN_FAR);
     this._hbRimEl = el;
     return el;
