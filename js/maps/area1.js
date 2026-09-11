@@ -626,48 +626,31 @@
         { col: 76, row: 1, dir: "s", id: "sg_bulkhead" }
       ],
 
-      /* P4.16 項目2: 血痕の増補（契約 §4「P4.16 再プレイ差し戻し」項目2）。
-       * 種類: blood 床の血溜まり / bloodHand 壁の手形と擦り跡（腰〜肩）/
-       *       bloodDrag 引きずり跡（col,row=始点 col2,row2=終点。2〜4マス）/ bloodSplat 飛沫。
-       * 配置規則: 合計22〜28か所・区画A〜Fに3〜5か所・同種は4マス以内に並べない・
-       *           引きずり跡は3本まで・スタート部屋（受入ホール）には置かない
-       *           （掲示板を目立たせる）・すべて歩行可能マス（手形は壁に接するマス）。
-       * 旧・床の血溜まり50か所は本項目で失効（同じ絵が固まって並んでいた）。
-       * 検査は js/world.js の testP416Blood（__extraSuites）。 */
+      /* P4.17 項目1: 血痕は「たまに見る程度」（契約 §4「P4.17 再プレイ差し戻し」項目1。
+       * P4.16 項目2 の 22〜28か所は失効）。
+       * 種類: blood 床の血溜まり / bloodHand 壁の血痕「押しつけた擦り」（腰〜肩）/
+       *       bloodSplat 飛沫（dir があれば壁・無ければ床）/ bloodDrag 引きずり跡。
+       * 数量: 合計8〜12（床5〜7・壁2〜4・引きずり1〜2）・区画ごと最大2・
+       *       スタート部屋（受入ホール）には置かない・すべて歩行可能マス。
+       * 検査は js/world.js の testP417Blood（__extraSuites）。 */
       decals: [
-        /* 区画E 記録区画: 所長室前の記録端末へ引きずられた跡と、観察モニター室の惨状 */
+        /* 区画E 記録区画（北） */
         { col: 67, row: 9, type: "blood" },
         { col: 72, row: 6, type: "bloodHand", dir: "w" },
-        { col: 19, row: 5, type: "bloodSplat" },
-        { col: 3, row: 6, type: "blood" },
-        /* 区画F 機械区画: 循環ポンプ室と、記録端末(65,19)へ向かう引きずり跡 */
+        /* 区画F 機械区画: 記録端末(65,19)へ向かう引きずり跡 */
         { col: 68, row: 19, col2: 65, row2: 19, type: "bloodDrag" },
-        { col: 70, row: 20, type: "blood" },
-        { col: 73, row: 17, type: "bloodHand", dir: "w" },
-        { col: 29, row: 25, type: "bloodSplat" },
         { col: 34, row: 15, type: "blood" },
-        /* 区画D 拘束区画: 行き止まりの房(40,31)へ引きずられた跡 */
-        { col: 40, row: 29, col2: 40, row2: 31, type: "bloodDrag" },
+        /* 区画D 拘束区画 */
+        { col: 59, row: 34, type: "bloodSplat", dir: "n" },
         { col: 20, row: 32, type: "blood" },
-        { col: 59, row: 34, type: "bloodHand", dir: "n" },
-        { col: 43, row: 35, type: "bloodSplat" },
         /* 区画B 実験区画: 培養器室からロッカー(38,51)の前まで続く引きずり跡 */
-        { col: 37, row: 48, col2: 37, row2: 51, type: "bloodDrag" },
-        { col: 10, row: 45, type: "blood" },
         { col: 12, row: 48, type: "bloodHand", dir: "w" },
-        { col: 52, row: 46, type: "bloodSplat" },
-        { col: 31, row: 49, type: "blood" },
-        /* 区画C 検体区画（(21,64) は檻の並ぶ行き止まり。§3「行き止まりに来た意味」を満たす） */
+        { col: 37, row: 48, col2: 37, row2: 51, type: "bloodDrag" },
+        /* 区画C 検体区画（(51,64)・(22,60)） */
         { col: 22, row: 60, type: "blood" },
-        { col: 21, row: 64, type: "blood" },
-        { col: 41, row: 58, type: "bloodHand", dir: "w" },
-        { col: 69, row: 54, type: "bloodSplat" },
         { col: 51, row: 64, type: "blood" },
         /* 区画A 受入区画（スタート部屋の外側だけ） */
-        { col: 17, row: 73, type: "blood" },
-        { col: 33, row: 71, type: "bloodHand", dir: "w" },
-        { col: 47, row: 68, type: "bloodSplat" },
-        { col: 68, row: 74, type: "blood" }
+        { col: 17, row: 73, type: "blood" }
       ],
 
       /* 什器は実体マスに置く。既定は dir 方向の壁面だけを什器に差し替える（アルコーブ）。
@@ -1241,7 +1224,13 @@
         { col: 36, row: 72, y: 2.10, rgb: [0.50, 0.74, 1], R: 5.60, gain: 0.46 }
       ],
 
-      /* 壁付けの造作。col,row は「手前の歩行可能マス」、dir はそこから見た壁の向き */
+      /* 壁付けの造作。col,row は「手前の歩行可能マス」、dir はそこから見た壁の向き。
+       * 2026-09-11 P4.17 項目1: 血痕を8〜12か所へ減らした結果、血痕だけが「来た意味」
+       * だった行き止まり2箇所（(29,25) 機械区画・(21,64) 檻の並ぶ検体区画）が空になった。
+       * 物を増やさず、重複していた造作を1つずつその行き止まりへ移して意味を戻している:
+       *   filePile   (17,29)→(29,25)  … (17,29) は corkboard と同じマスで二重だった
+       *   bioPlacard (19,63)→(21,64)  … (20,63) の supplyShelf が同じ通路に残る
+       * 検査は js/test.js の testP49DeadEnds（行き止まりすべてに「来た意味」がある）。 */
       wallKit: [
         { col: 1, row: 3, dir: "w", type: "filePile" }, { col: 9, row: 5, dir: "e", type: "filePile" }, { col: 1, row: 7, dir: "w", type: "filePile" },
         { col: 1, row: 4, dir: "w", type: "corkboard" }, { col: 9, row: 7, dir: "e", type: "corkboard" }, { col: 1, row: 6, dir: "w", type: "whiteboard" },
@@ -1264,7 +1253,7 @@
         { col: 39, row: 29, dir: "n", type: "restraintRack" }, { col: 43, row: 29, dir: "n", type: "restraintRack" }, { col: 43, row: 32, dir: "w", type: "corkboard" },
         { col: 35, row: 29, dir: "n", type: "corkboard" }, { col: 41, row: 34, dir: "e", type: "crateRow" }, { col: 15, row: 29, dir: "e", type: "monitorBank" },
         { col: 15, row: 29, dir: "n", type: "monitorBank" }, { col: 17, row: 29, dir: "w", type: "corkboard" }, { col: 22, row: 29, dir: "n", type: "corkboard" },
-        { col: 17, row: 29, dir: "n", type: "filePile" }, { col: 21, row: 29, dir: "n", type: "filePile" }, { col: 56, row: 31, dir: "n", type: "corkboard" },
+        { col: 29, row: 25, dir: "s", type: "filePile" }, { col: 21, row: 29, dir: "n", type: "filePile" }, { col: 56, row: 31, dir: "n", type: "corkboard" },
         { col: 62, row: 31, dir: "n", type: "corkboard" }, { col: 57, row: 31, dir: "e", type: "restraintRack" }, { col: 3, row: 42, dir: "s", type: "labBench" },
         { col: 7, row: 42, dir: "w", type: "labBench" }, { col: 11, row: 42, dir: "n", type: "labBench" }, { col: 15, row: 42, dir: "w", type: "labBench" },
         { col: 3, row: 42, dir: "n", type: "xrayBox" }, { col: 8, row: 42, dir: "n", type: "xrayBox" }, { col: 4, row: 42, dir: "n", type: "bioPlacard" },
@@ -1274,7 +1263,7 @@
         { col: 59, row: 44, dir: "s", type: "labBench" }, { col: 51, row: 42, dir: "n", type: "xrayBox" }, { col: 53, row: 42, dir: "w", type: "supplyShelf" },
         { col: 53, row: 42, dir: "n", type: "supplyShelf" }, { col: 63, row: 55, dir: "s", type: "labBench" }, { col: 68, row: 55, dir: "n", type: "labBench" },
         { col: 64, row: 55, dir: "n", type: "bioPlacard" }, { col: 65, row: 55, dir: "n", type: "pipeBank" }, { col: 71, row: 55, dir: "e", type: "pipeBank" },
-        { col: 74, row: 55, dir: "n", type: "pipeBank" }, { col: 19, row: 63, dir: "s", type: "bioPlacard" }, { col: 20, row: 63, dir: "s", type: "supplyShelf" },
+        { col: 74, row: 55, dir: "n", type: "pipeBank" }, { col: 21, row: 64, dir: "s", type: "bioPlacard" }, { col: 20, row: 63, dir: "s", type: "supplyShelf" },
         { col: 22, row: 63, dir: "s", type: "supplyShelf" }, { col: 23, row: 63, dir: "s", type: "supplyShelf" }, { col: 26, row: 63, dir: "s", type: "crateRow" },
         { col: 17, row: 57, dir: "w", type: "crateRow" }, { col: 41, row: 55, dir: "w", type: "labBench" }, { col: 45, row: 55, dir: "w", type: "labBench" },
         { col: 41, row: 55, dir: "n", type: "xrayBox" }, { col: 42, row: 55, dir: "n", type: "bioPlacard" }, { col: 1, row: 70, dir: "w", type: "crateRow" },

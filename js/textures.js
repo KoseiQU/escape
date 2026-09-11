@@ -156,23 +156,38 @@
     ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
   }
 
-  /** 錆だれ: 上端から下へ流れる帯＋粒。錆の輪郭がにじむように2層で描く */
+  /**
+   * P4.17 項目1: 壁テクスチャごとの錆だれ（縦筋）の本数。prev は P4.16 までの本数で、
+   * 契約は「本数を現行の1/4以下」。機械テスト（world.js testP417Wall）がここを読む。
+   * wallMetal は2ループ（塗装の剥げ＋打痕まわり）の合計。
+   */
+  var RUST_RUNS = {
+    wall: 2, wallPaint: 1, wallMetalA: 5, wallMetalB: 3, metal: 3,
+    prev: { wall: 9, wallPaint: 6, wallMetal: 36, metal: 14 }
+  };
+
+  /**
+   * 錆だれ: 上端から下へ流れる帯＋粒。錆の輪郭がにじむように2層で描く。
+   * 2026-09-11 P4.17 項目1（ユーザー評「壁に無数の赤い線が引いてあって質が下がった」）:
+   * 色相を赤茶から**茶**へ振り、彩度を落とす（R−G を 56 → 16 前後に）。本数と長さは
+   * 呼び出し側で1/4以下へ削っている。遠目に「赤い縦線」と読めないことが合格条件。
+   */
   function rustRun(ctx, x, y, w, len, rand, alpha) {
     var g = ctx.createLinearGradient(0, y, 0, y + len);
-    g.addColorStop(0, 'rgba(124,68,30,' + (0.42 * alpha) + ')');
-    g.addColorStop(0.35, 'rgba(104,56,26,' + (0.30 * alpha) + ')');
-    g.addColorStop(1, 'rgba(92,52,26,0)');
+    g.addColorStop(0, 'rgba(96,80,58,' + (0.34 * alpha) + ')');
+    g.addColorStop(0.35, 'rgba(84,70,52,' + (0.24 * alpha) + ')');
+    g.addColorStop(1, 'rgba(78,66,50,0)');
     ctx.fillStyle = g;
     ctx.fillRect(x, y, w, len);
     /* 縁のにじみ */
-    ctx.fillStyle = 'rgba(140,86,40,' + (0.20 * alpha) + ')';
+    ctx.fillStyle = 'rgba(112,96,72,' + (0.16 * alpha) + ')';
     for (var i = 0; i < len; i += 3) {
       var jitter = (rand() - 0.5) * w * 0.8;
       ctx.fillRect(x + jitter, y + i, w * (0.4 + rand() * 0.5), 3);
     }
     /* 粒 */
     for (var k = 0; k < len * 0.5; k++) {
-      ctx.fillStyle = 'rgba(' + (80 + rand() * 70 | 0) + ',' + (40 + rand() * 34 | 0) + ',18,' + (0.25 + rand() * 0.4) * alpha + ')';
+      ctx.fillStyle = 'rgba(' + (78 + rand() * 46 | 0) + ',' + (64 + rand() * 38 | 0) + ',' + (46 + rand() * 20 | 0) + ',' + (0.22 + rand() * 0.34) * alpha + ')';
       ctx.fillRect(x + (rand() - 0.2) * w, y + rand() * len, 1 + (rand() < 0.3 ? 1 : 0), 1 + (rand() < 0.3 ? 1 : 0));
     }
   }
@@ -316,9 +331,9 @@
       ctx.strokeRect(bx + 2, by + 2, TS - 4, TS - 4);
     }
 
-    /* 錆だれ（上の配管から）*/
-    for (var s = 0; s < 9; s++) {
-      rustRun(ctx, rand() * W, rand() * H * 0.4, 7 + rand() * 16, 120 + rand() * 380, rand, 1);
+    /* 錆だれ（上の配管から）。P4.17 項目1: 9本→2本・長さも1/3以下に */
+    for (var s = 0; s < RUST_RUNS.wall; s++) {
+      rustRun(ctx, rand() * W, rand() * H * 0.4, 5 + rand() * 8, 50 + rand() * 90, rand, 0.85);
     }
     /* 水の垂れ跡（無彩色） */
     for (var s2 = 0; s2 < 16; s2++) {
@@ -354,7 +369,7 @@
     ctx.fillStyle = 'rgba(0,0,0,0.45)'; ctx.fillRect(0, H - 8, W, 8);
     /* 幅木の錆・剥げ */
     for (var bb = 0; bb < 26; bb++) {
-      ctx.fillStyle = 'rgba(96,58,30,' + (0.25 + rand() * 0.4) + ')';
+      ctx.fillStyle = 'rgba(98,78,50,' + (0.25 + rand() * 0.4) + ')';
       ctx.fillRect(rand() * W, H - 44 + rand() * 34, 3 + rand() * 20, 2 + rand() * 8);
     }
 
@@ -592,12 +607,12 @@
       ctx.fillStyle = 'rgba(124,120,112,0.8)'; ctx.fill();
       ctx.strokeStyle = 'rgba(30,32,30,0.5)'; ctx.lineWidth = 1.5; ctx.stroke();
     }
-    /* 錆だれ（縦） */
-    for (var r = 0; r < 14; r++) {
-      rustRun(ctx, rand() * W, rand() * H * 0.6, 5 + rand() * 13, 60 + rand() * 190, rand, 1.1);
+    /* 錆だれ（縦）。P4.17 項目1: 14本→3本・長さ短縮 */
+    for (var r = 0; r < RUST_RUNS.metal; r++) {
+      rustRun(ctx, rand() * W, rand() * H * 0.6, 5 + rand() * 8, 40 + rand() * 70, rand, 0.9);
     }
-    /* 錆の点 */
-    speckle(ctx, W, H, 2200, rand, 'rgba(112,62,28,0.35)');
+    /* 錆の点（P4.17 項目1: 赤茶→茶・数も半分） */
+    speckle(ctx, W, H, 1100, rand, 'rgba(98,82,58,0.32)');
     /* 傷 */
     for (var s = 0; s < 40; s++) {
       ctx.strokeStyle = 'rgba(198,206,212,' + (0.16 + rand() * 0.3) + ')';
@@ -1433,7 +1448,8 @@
       ctx.fillRect(tx, ty, 60 + rand() * 70, 80 + rand() * 90);
     }
     /* 錆だれ・水だれ・しみ */
-    for (var s2 = 0; s2 < 6; s2++) rustRun(ctx, rand() * W, rand() * H * 0.35, 6 + rand() * 12, 100 + rand() * 340, rand, 0.8);
+    /* P4.17 項目1: 錆だれ 6本→1本・長さ短縮（水だれ（無彩色）は残す） */
+    for (var s2 = 0; s2 < RUST_RUNS.wallPaint; s2++) rustRun(ctx, rand() * W, rand() * H * 0.35, 5 + rand() * 8, 45 + rand() * 80, rand, 0.7);
     for (var s3 = 0; s3 < 14; s3++) {
       var sx = rand() * W, sw = 5 + rand() * 16, sh = 80 + rand() * 400;
       var gr = ctx.createLinearGradient(0, 0, 0, sh);
@@ -1455,7 +1471,7 @@
     ctx.fillStyle = 'rgba(255,255,255,0.08)'; ctx.fillRect(0, H - 44, W, 3);
     ctx.fillStyle = 'rgba(0,0,0,0.45)'; ctx.fillRect(0, H - 8, W, 8);
     for (var bb = 0; bb < 22; bb++) {
-      ctx.fillStyle = 'rgba(102,62,32,' + (0.22 + rand() * 0.38) + ')';
+      ctx.fillStyle = 'rgba(102,82,54,' + (0.22 + rand() * 0.38) + ')';
       ctx.fillRect(rand() * W, H - 42 + rand() * 32, 3 + rand() * 18, 2 + rand() * 7);
     }
 
@@ -1512,10 +1528,11 @@
         ctx.beginPath(); ctx.arc(rx + 1.4, ry + 1.8, d * 0.72, 0, Math.PI * 2); ctx.fill();
       }
     }
-    /* 塗装の剥げと錆（重力方向に流れる） */
-    for (var s = 0; s < 22; s++) rustRun(ctx, rand() * W, rand() * H * 0.6, 6 + rand() * 20, 90 + rand() * 320, rand, 1.15);
-    for (var k = 0; k < 40; k++) {
-      ctx.fillStyle = 'rgba(' + (98 + rand() * 50 | 0) + ',' + (58 + rand() * 34 | 0) + ',24,' + (0.25 + rand() * 0.45) + ')';
+    /* 塗装の剥げと錆（重力方向に流れる）。P4.17 項目1: 22本→5本・長さ短縮、
+       剥げの斑も赤茶→茶（R−G を 46 → 20 前後へ）・数を 40→14 に */
+    for (var s = 0; s < RUST_RUNS.wallMetalA; s++) rustRun(ctx, rand() * W, rand() * H * 0.6, 6 + rand() * 10, 45 + rand() * 85, rand, 0.95);
+    for (var k = 0; k < 14; k++) {
+      ctx.fillStyle = 'rgba(' + (94 + rand() * 34 | 0) + ',' + (78 + rand() * 28 | 0) + ',' + (54 + rand() * 20 | 0) + ',' + (0.22 + rand() * 0.34) + ')';
       ctx.fillRect(rand() * W, rand() * H, 4 + rand() * 22, 3 + rand() * 12);
     }
     for (var b2 = 0; b2 < 14; b2++) blot(ctx, rand() * W, rand() * H, 30 + rand() * 90, 'rgba(46,40,30,0.30)');
@@ -1541,8 +1558,9 @@
       ctx.fillStyle = 'rgba(210,218,224,0.14)';
       ctx.fillRect(dx4 - dr4 * 0.5, dy4 + dr4 * 0.45, dr4, 2);
     }
-    for (var rs = 0; rs < 14; rs++) {
-      rustRun(ctx, rand() * W, rand() * H * 0.55, 5 + rand() * 12, 60 + rand() * 240, rand, 0.9);
+    /* P4.17 項目1: 14本→3本・長さ短縮 */
+    for (var rs = 0; rs < RUST_RUNS.wallMetalB; rs++) {
+      rustRun(ctx, rand() * W, rand() * H * 0.55, 5 + rand() * 8, 40 + rand() * 70, rand, 0.75);
     }
     fineGrit(ctx, 30000, rand, 'rgba(38,42,46,0.24)');
     fineGrit(ctx, 9000, rand, 'rgba(196,206,214,0.14)');
@@ -2228,6 +2246,12 @@
   var BLOOD_DARK = 'rgba(72,13,10,';   /* 芯（最も濃い） */
   var BLOOD_MID = 'rgba(104,22,16,';   /* 帯・手形の本体 */
   var BLOOD_THIN = 'rgba(132,38,28,';  /* 擦れ・にじみの縁 */
+  /* 2026-09-11 P4.17 項目1（ユーザー評「壁の血痕も床と同じ赤黒く濃い色に」）:
+     壁に貼る2種（押しつけた擦り／飛沫）専用の、床の血溜まりに寄せた暗い段。
+     鮮やかな赤に見えていた旧 BLOOD_MID/THIN は壁では使わない。 */
+  var BLOOD_WALL_DARK = 'rgba(54,10,8,';
+  var BLOOD_WALL_MID = 'rgba(78,16,12,';
+  var BLOOD_WALL_THIN = 'rgba(96,26,20,';
 
   /** にじんだ塊（楕円の放射グラデーション）。縁が立たないので擦り跡の基材に使う */
   function softBlob(ctx, x, y, rx, ry, rot, col, a) {
@@ -2259,10 +2283,12 @@
    * 手形を1つ押す。L = 手の長さ(px)。全長は概ね L（指先 -0.65L 〜 手首 +0.34L）。
    * 手のひら幅は 0.43L ≒ 8.2cm（L=19cm のとき）＝実寸の人の手。
    */
-  function handPrint(ctx, cx, cy, L, rot, rand, alpha) {
+  function handPrint(ctx, cx, cy, L, rot, rand, alpha, palette) {
     ctx.save();
     ctx.translate(cx, cy); ctx.rotate(rot);
-    var col = BLOOD_DARK;
+    /* P4.17 項目1: 壁に貼るときは暗い段（BLOOD_WALL_*）を渡す */
+    var pal = palette || { dark: BLOOD_DARK, thin: BLOOD_THIN };
+    var col = pal.dark;
     /* --- 手のひら --- */
     softBlob(ctx, 0, 0.06 * L, 0.235 * L, 0.29 * L, 0, col, alpha);
     ctx.fillStyle = col + (alpha * 0.92).toFixed(3) + ')';
@@ -2308,74 +2334,73 @@
     for (i = 0; i < 14; i++) {
       var an = rand() * Math.PI * 2, rr = 0.20 * L + rand() * 0.24 * L;
       softBlob(ctx, Math.cos(an) * rr * 0.9, Math.sin(an) * rr, 0.05 * L + rand() * 0.06 * L,
-        0.05 * L + rand() * 0.06 * L, 0, BLOOD_THIN, 0.08 + rand() * 0.16);
+        0.05 * L + rand() * 0.06 * L, 0, pal.thin, 0.08 + rand() * 0.16);
     }
     ctx.restore();
   }
 
   /**
-   * 壁の手形と擦り跡（アルファ）。面は 1.50m x 1.125m、中心高さ 1.22m（腰〜肩）。
+   * 壁の血痕「押しつけた擦り」（アルファ）。面は 1.50m x 1.125m、中心高さ 1.22m（腰〜肩）。
    * 1024px / 1.50m ＝ 682.7 px/m。手形は HAND_LEN_M（0.19m）＝130px で押す＝実物大。
+   *
+   * 2026-09-11 P4.17 項目1（ユーザー評「壁の無数の赤い縦線を消す」「壁も床と同じ赤黒く」）:
+   *   ①指が掻いた長い筋（1面あたり8本・最長34cm）は**全廃**。
+   *   ②掌が滑った擦りは短く（P4_17_HAND.smearM＝7cm以内）。
+   *   ③垂れは P4_17_HAND.drips 本（＝2本）・各 P4_17_HAND.dripM（＝17cm）以内。
+   *   ④色は BLOOD_WALL_* の暗い段（床の血溜まりと同じ赤黒）。
+   *   数値は機械テスト（world.js testP417Blood）が読む。
    */
+  var P4_17_HAND = { drips: 2, dripM: 0.17, smearM: 0.07, droplets: 90 };
   function texBloodHand() {
     var W = 1024, H = 768, c = makeCanvas(W, H), ctx = c.getContext('2d');
     var rand = rng(70311);
     ctx.clearRect(0, 0, W, H);
     var PPM = W / 1.50;                 /* 682.7 px/m */
     var L = HAND_LEN_M * PPM;           /* 手の長さ 130px ＝ 19cm（実物大） */
+    var PAL = { dark: BLOOD_WALL_DARK, thin: BLOOD_WALL_THIN };
     var i, k;
 
     /* 手形の位置（実物大の手が2つ。角度と濃さだけ変える） */
-    var HANDS = [{ x: 0.235 * W, y: 0.30 * H, rot: -0.14, a: 0.90 },
-      { x: 0.615 * W, y: 0.41 * H, rot: 0.46, a: 0.78 }];
+    var HANDS = [{ x: 0.235 * W, y: 0.32 * H, rot: -0.14, a: 0.90 },
+      { x: 0.615 * W, y: 0.43 * H, rot: 0.46, a: 0.78 }];
 
-    /* --- ① 掌が滑り落ちた幅広の擦り（手形の真下から。にじんだ塊だけで描く） --- */
+    /* --- ① 掌が押しつけられて少しだけ滑った擦り（7cm以内。にじんだ塊だけで描く） --- */
     for (i = 0; i < HANDS.length; i++) {
-      var hs = HANDS[i], slen = 0.22 * H + rand() * 0.10 * H;
-      for (k = 0; k <= 20; k++) {
-        var st = k / 20;
-        softBlob(ctx, hs.x + Math.sin(st * 2.3 + i) * 0.012 * W + (rand() - 0.5) * 0.012 * W,
+      var hs = HANDS[i], slen = P4_17_HAND.smearM * PPM * (0.7 + rand() * 0.3);
+      for (k = 0; k <= 14; k++) {
+        var st = k / 14;
+        softBlob(ctx, hs.x + Math.sin(st * 2.3 + i) * 0.008 * W + (rand() - 0.5) * 0.010 * W,
           hs.y + 0.30 * L + st * slen,
-          L * (0.30 - st * 0.10), L * (0.22 - st * 0.06), 0,
-          BLOOD_MID, (0.26 - st * 0.22) * hs.a * (0.7 + rand() * 0.5));
+          L * (0.30 - st * 0.12), L * (0.20 - st * 0.07), 0,
+          BLOOD_WALL_MID, (0.30 - st * 0.26) * hs.a * (0.7 + rand() * 0.5));
       }
     }
-    /* --- ② 指が壁を掻いて滑り落ちた筋。指の腹から続けて出す＝手形と繋がって見える --- */
+    /* --- ② 手形2つ（実物大。手の長さ L＝0.19m） --- */
     for (i = 0; i < HANDS.length; i++) {
-      var h2 = HANDS[i];
-      for (var fi = 0; fi < 4; fi++) {
-        var ax0 = (fi - 1.5) * 0.10 * L;
-        var ox0 = h2.x + Math.cos(h2.rot) * ax0, oy0 = h2.y - Math.sin(h2.rot) * ax0 + 0.10 * L;
-        var glen = 0.10 * H + rand() * 0.20 * H;
-        var lean = (rand() - 0.5) * 0.05 * W;
-        for (k = 0; k <= 22; k++) {
-          var gt = k / 22;
-          var gw = 0.052 * L * (1.15 - gt * 0.55);
-          softBlob(ctx, ox0 + lean * gt * gt + (rand() - 0.5) * 3, oy0 + gt * glen,
-            gw, gw * 2.6, 0, BLOOD_MID,
-            (0.42 - gt * 0.36) * h2.a * (0.75 + rand() * 0.45));
-        }
-      }
+      handPrint(ctx, HANDS[i].x, HANDS[i].y, L, HANDS[i].rot, rand, HANDS[i].a, PAL);
     }
-    /* --- ③ 手形2つ（実物大。手の長さ L＝0.19m） --- */
-    for (i = 0; i < HANDS.length; i++) {
-      handPrint(ctx, HANDS[i].x, HANDS[i].y, L, HANDS[i].rot, rand, HANDS[i].a);
-    }
-    /* --- ④ 垂れ（重力に沿う細い筋）。手形より目立たせない（主役は手形） --- */
-    for (i = 0; i < 13; i++) {
-      var dx = 0.14 * W + rand() * 0.62 * W, dy = 0.34 * H + rand() * 0.24 * H;
-      var dl = 0.02 * H + rand() * 0.13 * H;
-      ctx.strokeStyle = BLOOD_DARK + (0.16 + rand() * 0.22).toFixed(3) + ')';
-      ctx.lineWidth = 1.2 + rand() * 2.6;
+    /* --- ③ 垂れ（重力に沿う細い筋）。2本・17cm以内。手形から離して置く
+           （手形と繋がると1本の長い縦線に見えるため） --- */
+    var DRIPS = [{ x: 0.085 * W, y: 0.300 * H, len: P4_17_HAND.dripM * PPM },
+      { x: 0.880 * W, y: 0.470 * H, len: P4_17_HAND.dripM * PPM * 0.70 }];
+    for (i = 0; i < P4_17_HAND.drips; i++) {
+      var dp = DRIPS[i], dl = dp.len;
+      ctx.strokeStyle = BLOOD_WALL_DARK + (0.34 + rand() * 0.16).toFixed(3) + ')';
+      ctx.lineWidth = 2.0 + rand() * 2.2;
       ctx.lineCap = 'round';
-      ctx.beginPath(); ctx.moveTo(dx, dy); ctx.lineTo(dx + (rand() - 0.5) * 9, dy + dl); ctx.stroke();
-      softBlob(ctx, dx + (rand() - 0.5) * 6, dy + dl, 3 + rand() * 5, 4 + rand() * 6, 0,
-        BLOOD_DARK, 0.16 + rand() * 0.18);
+      ctx.beginPath(); ctx.moveTo(dp.x, dp.y);
+      ctx.lineTo(dp.x + (rand() - 0.5) * 7, dp.y + dl); ctx.stroke();
+      /* 垂れの先の玉 */
+      softBlob(ctx, dp.x + (rand() - 0.5) * 5, dp.y + dl, 4 + rand() * 4, 5 + rand() * 5, 0,
+        BLOOD_WALL_DARK, 0.30 + rand() * 0.16);
+      /* 垂れの出どころ（小さな擦り） */
+      softBlob(ctx, dp.x, dp.y - 4, 9 + rand() * 6, 7 + rand() * 5, 0,
+        BLOOD_WALL_MID, 0.26 + rand() * 0.14);
     }
-    /* --- ⑤ 飛んだ細かい滴 --- */
-    for (k = 0; k < 260; k++) {
-      blot(ctx, 0.06 * W + rand() * 0.86 * W, 0.16 * H + rand() * 0.72 * H,
-        1.4 + rand() * 5.0, BLOOD_MID + (0.18 + rand() * 0.42).toFixed(3) + ')');
+    /* --- ④ 飛んだ細かい滴（P4.17: 260→90。点在程度に） --- */
+    for (k = 0; k < P4_17_HAND.droplets; k++) {
+      blot(ctx, 0.08 * W + rand() * 0.82 * W, 0.18 * H + rand() * 0.66 * H,
+        1.2 + rand() * 4.0, BLOOD_WALL_MID + (0.16 + rand() * 0.34).toFixed(3) + ')');
     }
     return c;
   }
@@ -2504,8 +2529,8 @@
     ctx.clearRect(0, 0, W, H);
     var ox = 96, oy = 118;
     /* 小さな溜まり */
-    blot(ctx, ox, oy, 26, BLOOD_DARK + '0.72)');
-    blot(ctx, ox + 10, oy + 8, 15, BLOOD_DARK + '0.60)');
+    blot(ctx, ox, oy, 26, BLOOD_WALL_DARK + '0.72)');
+    blot(ctx, ox + 10, oy + 8, 15, BLOOD_WALL_DARK + '0.60)');
     /* 主方向を持った飛沫（一方向に長く飛ぶ＝殴打の向きが読める） */
     var main = -0.55;
     for (var i = 0; i < 150; i++) {
@@ -2516,14 +2541,14 @@
       var sz = Math.max(0.8, 6.5 * (1 - r / 190) + rand() * 2.6);
       ctx.save();
       ctx.translate(x, y); ctx.rotate(a);
-      ctx.fillStyle = BLOOD_MID + (0.35 + rand() * 0.5).toFixed(2) + ')';
+      ctx.fillStyle = BLOOD_WALL_MID + (0.35 + rand() * 0.5).toFixed(2) + ')';
       ctx.beginPath();
       ctx.ellipse(0, 0, sz * (1 + rand() * 1.6), sz, 0, 0, Math.PI * 2);
       ctx.fill();
       ctx.restore();
       /* 尾を引く滴 */
       if (rand() < 0.28) {
-        ctx.strokeStyle = BLOOD_THIN + (0.2 + rand() * 0.3).toFixed(2) + ')';
+        ctx.strokeStyle = BLOOD_WALL_THIN + (0.2 + rand() * 0.3).toFixed(2) + ')';
         ctx.lineWidth = 1 + rand() * 2;
         ctx.beginPath(); ctx.moveTo(x, y);
         ctx.lineTo(x + Math.cos(a) * (6 + rand() * 18), y + Math.sin(a) * (6 + rand() * 18));
@@ -2534,7 +2559,7 @@
     for (var k = 0; k < 420; k++) {
       var a2 = main + (rand() - 0.5) * 2.2, r3 = 20 + rand() * 165;
       blot(ctx, ox + Math.cos(a2) * r3, oy + Math.sin(a2) * r3,
-        0.5 + rand() * 1.7, BLOOD_MID + (0.16 + rand() * 0.4).toFixed(2) + ')');
+        0.5 + rand() * 1.7, BLOOD_WALL_MID + (0.16 + rand() * 0.4).toFixed(2) + ')');
     }
     return c;
   }
@@ -2579,6 +2604,12 @@
   ESCAPE.Textures = {
     get: get,
     names: function () { return Object.keys(BUILDERS); },
+    /** P4.17 項目1: 壁の血痕の作画数値（機械テストが読む）。垂れの本数と長さ・擦りの長さ */
+    wallBloodMetrics: function () {
+      return { drips: P4_17_HAND.drips, dripM: P4_17_HAND.dripM, smearM: P4_17_HAND.smearM };
+    },
+    /** P4.17 項目1: 壁テクスチャの錆だれの本数（機械テストが読む。旧値は P4.16 まで） */
+    rustRunCounts: function () { return RUST_RUNS; },
     setAnisotropy: function (n) {
       anisotropy = n;
       for (var k in cache) { cache[k].anisotropy = n; cache[k].needsUpdate = true; }
