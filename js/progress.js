@@ -95,6 +95,36 @@
         '出口は北の隔壁。鍵は所長室の金庫。\n' +
         '三度目はない。'
     },
+    /* P4.17 項目2 — 日記2（ライト）（正文 docs/notes.md「P4.17追加」） */
+    a1_diary2: {
+      title: '研究員の日記',
+      body: '九月　何日目かは数えていない\n' +
+        '\n' +
+        '灯りは腰のライトしかない。歩き出すと勝手に点いて、足を止めると消える。\n' +
+        '壊れているのではない。そういう作りだ。点検員が立ち止まる場所で、余計な光を残さないように。\n' +
+        '点いている間は遠くまで見える。だが、遠くからもこちらがよく見える。\n' +
+        'あれに気づかれたくなければ、止まって、暗いままでいろ。'
+    },
+    /* P4.17 項目2 — 日記3（音と罠）（正文 docs/notes.md「P4.17追加」） */
+    a1_diary3: {
+      title: '研究員の日記',
+      body: '床を見ろ。\n' +
+        '\n' +
+        'ガラスの破片、金属の板、水たまり、転がった缶、軋む板。踏むなら歩け。走ればすべて鳴る。\n' +
+        '膝の高さに張られた線がある。吊った缶が鳴る。しゃがんで潜れ。\n' +
+        '赤い小さな目が点滅している所はセンサーだ。走って前を横切れば警報が鳴る。歩け。\n' +
+        '音を立てると、あれは叫ぶ。叫び声が聞こえた時には、もうこちらへ走っている。'
+    },
+    /* P4.17 項目2 — 日記4（ロッカーと板）（正文 docs/notes.md「P4.17追加」） */
+    a1_diary4: {
+      title: '研究員の日記',
+      body: '今日、通路の端でロッカーに入った。あれは目の前を通り過ぎた。\n' +
+        '扉の隙間から、長い髪が揺れるのが見えた。息を止めていた。\n' +
+        '\n' +
+        'ただし、音を聞かれた後は違う。あれは近くのロッカーを一つずつ開けて回る。\n' +
+        '立てかけた板は、倒せば道を塞げる。あれは回り道をする。その間に離れろ。\n' +
+        '隠れる場所と塞ぐ板を、通る前に覚えておけ。'
+    },
     /* memo6 — 拘束室の前室（旧本文のまま） */
     a1_n3: {
       title: '拘束区画 運用規程',
@@ -268,6 +298,18 @@
        **中→外の遷移**でしか起きない（reset 直後にいきなり外側へ置かれても開かない）。 */
     this.diaryRead = false;
     this._diaryArmed = false;
+    /* P4.17 項目2: 物語ゲート（研究員の日記 2〜4）。
+       storyRead     … セーブに永続する既読フラグ（id ごと）
+       _storyQueue   … 「ゲートのマスに入った」記憶の待ち行列＝タイトル/捕獲/他のモーダル中は
+                       保留し、開ける最初の機会に**入った順**で開く。保留中に次のゲートへ
+                       進んでも前のぶんを落とさないよう配列で持つ。
+       _storyCell    … 前フレームのマス（「入った最初のフレーム」を遷移として捉えるため）。
+                       reset 直後は null ＝最初の評価を遷移として扱う（＝復帰でゲートのマスの
+                       上に置かれた場合も取りこぼさない。日記1と違い「素通り禁止」が目的なので
+                       出し損なう方を避ける）。 */
+    this.storyRead = Object.create(null);
+    this._storyQueue = [];
+    this._storyCell = null;
     this._t = 0;
     this._saveHintT = 0;
     this._saveHintId = null;
@@ -296,6 +338,18 @@
     this._noteAt = Object.create(null);
     var notes = meta.notes || [];
     for (var i = 0; i < notes.length; i++) this._noteAt[notes[i].col + ',' + notes[i].row] = notes[i];
+    /* P4.17 項目2: 物語ゲートの壁メモ（読み返し用）。js/maps/area1_story.js が area1 の定義へ
+       焼いた分は上のループで拾える（＝既存の壁メモと同じ造形・同じ「調べる」経路）。
+       焼けなかった構成（壁が '#' でない等）の保険として、ここでも meta.notes 相当として索引する。 */
+    this._storyWallAt = Object.create(null);
+    var sgs = ESCAPE.STORY_GATES || [];
+    for (var sg = 0; sg < sgs.length; sg++) {
+      var sw = sgs[sg].wall;
+      if (!sw) continue;
+      var swk = sw.col + ',' + sw.row;
+      if (this._noteAt[swk]) continue;
+      this._storyWallAt[swk] = { col: sw.col, row: sw.row, dir: sw.dir, id: sgs[sg].id, story: true };
+    }
     this._gimmickAt = Object.create(null);
     var gm = meta.gimmicks || [];
     for (var j = 0; j < gm.length; j++) this._gimmickAt[gm[j].col + ',' + gm[j].row] = gm[j];
@@ -388,6 +442,48 @@
     this._diaryArmed = false;
     this.diaryRead = true;               /* _openMemo → save() の前に立てて永続させる */
     this._openMemo(DIARY_ID);
+    return true;
+  };
+
+  /* ================================================================
+   * P4.17 項目2: 物語形式の強制メモ（研究員の日記 2〜4）
+   *
+   * 契約 DESIGN.md「### P4.17 再プレイ差し戻し」項目2 / 正文 docs/notes.md「P4.17追加」。
+   * 地点は js/maps/area1_story.js の ESCAPE.STORY_GATES（スタートからの経路距離で機械的に算出）。
+   * 規則は日記1と同じ:
+   *   ・ゲート地点のマスに**初めて入った最初のフレーム**に開く
+   *   ・それぞれ初回のみ。既読はセーブに永続（壁のメモからは何度でも読み返せる）
+   *   ・タイトル中・捕獲演出中・他のモーダル中は保留し、開ける最初の機会に開く
+   *   ・開いている間は移動不可（modal の共通仕様＝js/game.js）
+   *   ・runAll の台本歩行では diaryAuto=false で止める（専用スイートが実経路で検証する）
+   * ============================================================== */
+
+  /** その日記を読み終えているか。壁のメモで先に読んだ場合も既読として扱う（日記1と同じ） */
+  Progress.prototype.storyGateRead = function (id) {
+    return !!(this.storyRead[id] || this.notesRead[id]);
+  };
+
+  Progress.prototype._checkStoryGates = function () {
+    if (!this.diaryAuto) return false;
+    var gates = ESCAPE.STORY_GATES || [];
+    if (!gates.length) return false;
+    var p = this.game.player, c = p.col(), r = p.row(), key = c + ',' + r;
+    if (key !== this._storyCell) {
+      this._storyCell = key;                  /* ここが「マスに入った」遷移 */
+      for (var i = 0; i < gates.length; i++) {
+        var gt = gates[i];
+        if (gt.col !== c || gt.row !== r) continue;
+        if (!NOTE_TEXTS[gt.id] || this.storyGateRead(gt.id)) continue;
+        if (this._storyQueue.indexOf(gt.id) < 0) this._storyQueue.push(gt.id);
+      }
+    }
+    /* 保留が解けるまで待つ。解けたら**入った順**に1枚ずつ（1フレーム1枚）開く */
+    while (this._storyQueue.length && this.storyGateRead(this._storyQueue[0])) this._storyQueue.shift();
+    if (!this._storyQueue.length) return false;
+    if (this._diaryHeld()) return false;      /* 保留。待ち行列のまま次の機会に開く */
+    var id = this._storyQueue.shift();
+    this.storyRead[id] = true;                /* _openMemo → save() の前に立てて永続させる */
+    this._openMemo(id);
     return true;
   };
 
@@ -590,6 +686,10 @@
         if (tile === TILE.NOTE) {
           entry = this._noteAt[c + ',' + r];
           if (entry) kind = 'note';
+        } else if (this._storyWallAt[c + ',' + r] && map.isSolid(c, r)) {
+          /* P4.17 項目2: タイルを NOTE に焼けなかった構成の保険（上の索引を参照） */
+          entry = this._storyWallAt[c + ',' + r];
+          kind = 'note';
         } else if (tile === TILE.GIMMICK || tile === TILE.DOOR) {
           /* P4.8: 失効した仕掛けのタイル（造形だけ残置）は meta に居ないので対象外になる。
              北の隔壁は DOOR タイルそのものが対象。 */
@@ -722,6 +822,8 @@
     this._checkSavePoints(dt);
     /* P4.16 項目1: スタート部屋を出た最初のフレームに研究員の日記を自動で開く（1回・既読は永続） */
     this._checkDiary();
+    /* P4.17 項目2: 進行路上の3地点で日記2〜4を強制表示（それぞれ初回のみ・既読は永続） */
+    this._checkStoryGates();
     this._checkClear();
     this._updateNoteGlow(dt);
     this._updatePrompt();
@@ -1017,6 +1119,8 @@
         signsRead: Object.keys(this.signsRead),
         /* P4.16 項目1: 日記の自動表示は1回きり。既読はセーブに永続する */
         diaryRead: this.diaryRead,
+        /* P4.17 項目2: 物語ゲート（日記2〜4）の既読。id ごとに永続する */
+        storyRead: Object.keys(this.storyRead),
         cleared: this.cleared,
         rope: this.game.rope ? this.game.rope.save() : null,
         map: this.game.minimap ? this.game.minimap.save() : null
@@ -1044,6 +1148,10 @@
     /* P4.16 項目1: 既読フラグ。旧セーブ（diaryRead 無し）は「壁のメモとして読んでいれば既読」
        として拾う＝日記を読み終えた人に二度目の自動表示をしない。 */
     this.diaryRead = !!data.diaryRead || !!this.notesRead[DIARY_ID];
+    /* P4.17 項目2: 物語ゲートの既読。旧セーブ（storyRead 無し）は空＝未読のまま壊れない。
+       壁のメモとして読んでいれば storyGateRead() が notesRead 側で既読と判定する。 */
+    var st = data.storyRead || [];
+    for (var s3 = 0; s3 < st.length; s3++) this.storyRead[st[s3]] = true;
     this.cleared = !!data.cleared;
     if (this.game.minimap && data.map) this.game.minimap.load(data.map);
     /* P4.14: 記録済みセーブポイント。旧セーブ（v3以前）は checkpoint に文字列が入っている

@@ -1642,8 +1642,10 @@
   function testMemoNotes(t, g) {
     g.reset();
     var notes = g.map.meta.notes || [];
-    t.ok(notes.length === 7, 'メモ: area1は7枚（旧6枚＋P4.16の研究員の日記）', notes.length);
-    var seenMemoTitles = {};
+    /* P4.17 項目2: 壁メモの数え方を改訂。旧6枚＋P4.16の研究員の日記1＋P4.17の日記2〜4
+       （日記2〜4は js/maps/area1_story.js が起動時に meta.notes へ焼く）＝10枚。 */
+    t.ok(notes.length === 10, 'メモ: area1は10枚（旧6枚＋研究員の日記1〜4）', notes.length);
+    var seenMemoIds = {};
     for (var i = 0; i < notes.length; i++) {
       var n = notes[i];
       var text = ESCAPE.PROGRESS_NOTE_TEXTS[n.id];
@@ -1658,12 +1660,14 @@
       t.ok(h === true && g.progress.modal === 'memo', 'メモ ' + n.id + ': 「調べる」で拡大表示が開く');
       t.ok(g.progress.dom.memoBody.textContent === text.body, 'メモ ' + n.id + ': 本文が docs/notes.md と一致する');
       t.ok(g.progress.notesRead[n.id] === true, 'メモ ' + n.id + ': 既読として記録される');
-      seenMemoTitles[text.title] = true;
+      seenMemoIds[n.id] = true;
       var h2 = g.progress.onInteract();
       t.ok(h2 === true && g.progress.modal === null, 'メモ ' + n.id + ': 「調べる」で閉じる');
     }
-    t.ok(Object.keys(seenMemoTitles).length === 7, 'メモ: 7枚が重複なく1枚ずつ対応している',
-      Object.keys(seenMemoTitles).length);
+    /* P4.17 項目2: 日記1〜4は表示タイトルが4枚とも『研究員の日記』（正文の指定）なので、
+       「重複なく1枚ずつ」は**タイトルではなく id** で数える。 */
+    t.ok(Object.keys(seenMemoIds).length === 10, 'メモ: 10枚が重複なく1枚ずつ対応している',
+      Object.keys(seenMemoIds).length);
     /* P4.8 で差し替えた3枚（memo1/4/5）が v3 の正文になっていること */
     t.ok(ESCAPE.PROGRESS_NOTE_TEXTS.a1_n5.body.indexOf('鍵は所長室の金庫') >= 0,
       'メモ: memo1 が v3 の差し替え本文（所長室の金庫）');
@@ -3567,7 +3571,7 @@
       var zz = zoneOfRow(notes[ni].row);
       nz[zz] = (nz[zz] || 0) + 1;
     }
-    t.ok(notes.length === 7, 'P4.9+P4.16: メモは7枚（6枚＋研究員の日記）', notes.length);
+    t.ok(notes.length === 10, 'P4.9+P4.16+P4.17: メモは10枚（6枚＋研究員の日記1〜4）', notes.length);
     var nmiss = [];
     for (var nz2 = 0; nz2 < ZONES.length; nz2++) if (!nz[ZONES[nz2]]) nmiss.push(ZONES[nz2]);
     t.ok(nmiss.length === 0, 'P4.9: メモが区画A〜Fに行き渡っている', JSON.stringify(nz));
@@ -4744,6 +4748,374 @@
     try { global.localStorage.removeItem(SAVE_KEY); } catch (e2) { /* 無視 */ }
   }
 
+  /* ================================================================
+   * P4.17 項目2: 物語形式の強制メモ（研究員の日記 2〜4）
+   * 契約 DESIGN.md「### P4.17 再プレイ差し戻し」項目2 / 正文 docs/notes.md「P4.17追加」。
+   * 地点データは js/maps/area1_story.js（ESCAPE.STORY_GATES）、仕組みは js/progress.js。
+   * ============================================================== */
+
+  /** 静的な歩行可能判定。牢の鉄格子など runtime の通行止めを無視する
+   *  （進行路＝発火地点は静的なマップデータだけで決まる契約なので、そこに合わせる） */
+  function staticWalkable(map, col, row) {
+    if (!map.inBounds(col, row)) return false;
+    var d = ESCAPE.TILE_DEFS[map.tileAt(col, row)];
+    return !!(d && d.walkable);
+  }
+  var STORY_D4 = [[1, 0], [-1, 0], [0, 1], [0, -1]];   /* 東・西・南・北（決定的なタイブレーク） */
+  /** (sc,sr) からの経路距離（マス）の表 {"c,r": d}。到達不能なマスは載らない */
+  function storyDistMap(map, sc, sr) {
+    var dist = Object.create(null), q = [[sc, sr]], h = 0;
+    dist[sc + ',' + sr] = 0;
+    while (h < q.length) {
+      var cu = q[h++], d0 = dist[cu[0] + ',' + cu[1]];
+      for (var i = 0; i < 4; i++) {
+        var nc = cu[0] + STORY_D4[i][0], nr = cu[1] + STORY_D4[i][1], k = nc + ',' + nr;
+        if (dist[k] !== undefined || !staticWalkable(map, nc, nr)) continue;
+        dist[k] = d0 + 1;
+        q.push([nc, nr]);
+      }
+    }
+    return dist;
+  }
+  /** (sc,sr)→(tc,tr) の最短マス列（始点を含む）。近傍順は東・西・南・北で決定的 */
+  function storyPath(map, sc, sr, tc, tr) {
+    var prev = Object.create(null), q = [[sc, sr]], h = 0;
+    prev[sc + ',' + sr] = null;
+    while (h < q.length) {
+      var cu = q[h++];
+      if (cu[0] === tc && cu[1] === tr) break;
+      for (var i = 0; i < 4; i++) {
+        var nc = cu[0] + STORY_D4[i][0], nr = cu[1] + STORY_D4[i][1], k = nc + ',' + nr;
+        if (prev[k] !== undefined || !staticWalkable(map, nc, nr)) continue;
+        prev[k] = cu[0] + ',' + cu[1];
+        q.push([nc, nr]);
+      }
+    }
+    var tk = tc + ',' + tr;
+    if (prev[tk] === undefined) return null;
+    var out = [];
+    while (tk) { var pp = tk.split(','); out.push({ col: +pp[0], row: +pp[1] }); tk = prev[tk]; }
+    return out.reverse();
+  }
+  /** 金庫の前に立つマス（＝進行路の中継点）。金庫そのものは壁なので隣の床を採る */
+  function storyKeyCell(map, meta, dS) {
+    var gl = meta.gimmicks || [], safe = null, i;
+    for (i = 0; i < gl.length; i++) if (gl[i].role === 'safe') safe = gl[i];
+    if (!safe) return null;
+    var best = null, bestD = Infinity;
+    for (i = 0; i < 4; i++) {
+      var c = safe.col + STORY_D4[i][0], r = safe.row + STORY_D4[i][1], d = dS[c + ',' + r];
+      if (d === undefined || d >= bestD) continue;
+      bestD = d; best = { col: c, row: r };
+    }
+    return best;
+  }
+
+  function testP417StoryGates(t, g) {
+    var pr = g.progress, autoWas = pr.diaryAuto, map = g.map, meta = map.meta;
+    var GATES = ESCAPE.STORY_GATES;
+    if (!t.ok(!!GATES && GATES.length === 3, 'P4.17 項目2: 物語ゲートが3地点ある',
+      GATES ? GATES.length : 'ESCAPE.STORY_GATES なし')) return;
+    var IDS = ['a1_diary2', 'a1_diary3', 'a1_diary4'];
+    var i, j, gt;
+    for (i = 0; i < 3; i++) {
+      t.ok(GATES[i].id === IDS[i], 'P4.17 項目2: ' + IDS[i] + ' が ' + (i + 1) + '番目のゲート', GATES[i].id);
+    }
+
+    /* ---------- 正文（docs/notes.md「P4.17追加」と一字一句一致） ---------- */
+    var BODIES = {
+      a1_diary2: [
+        '九月　何日目かは数えていない', '',
+        '灯りは腰のライトしかない。歩き出すと勝手に点いて、足を止めると消える。',
+        '壊れているのではない。そういう作りだ。点検員が立ち止まる場所で、余計な光を残さないように。',
+        '点いている間は遠くまで見える。だが、遠くからもこちらがよく見える。',
+        'あれに気づかれたくなければ、止まって、暗いままでいろ。'
+      ].join('\n'),
+      a1_diary3: [
+        '床を見ろ。', '',
+        'ガラスの破片、金属の板、水たまり、転がった缶、軋む板。踏むなら歩け。走ればすべて鳴る。',
+        '膝の高さに張られた線がある。吊った缶が鳴る。しゃがんで潜れ。',
+        '赤い小さな目が点滅している所はセンサーだ。走って前を横切れば警報が鳴る。歩け。',
+        '音を立てると、あれは叫ぶ。叫び声が聞こえた時には、もうこちらへ走っている。'
+      ].join('\n'),
+      a1_diary4: [
+        '今日、通路の端でロッカーに入った。あれは目の前を通り過ぎた。',
+        '扉の隙間から、長い髪が揺れるのが見えた。息を止めていた。', '',
+        'ただし、音を聞かれた後は違う。あれは近くのロッカーを一つずつ開けて回る。',
+        '立てかけた板は、倒せば道を塞げる。あれは回り道をする。その間に離れろ。',
+        '隠れる場所と塞ぐ板を、通る前に覚えておけ。'
+      ].join('\n')
+    };
+    for (i = 0; i < 3; i++) {
+      var tx = ESCAPE.PROGRESS_NOTE_TEXTS[IDS[i]];
+      if (!t.ok(!!tx, 'P4.17 項目2: ' + IDS[i] + ' の本文が組み込まれている')) continue;
+      t.ok(tx.title === '研究員の日記', 'P4.17 項目2: ' + IDS[i] + ' の表示タイトルが正文', tx.title);
+      t.ok(tx.body === BODIES[IDS[i]], 'P4.17 項目2: ' + IDS[i] + ' の本文が docs/notes.md の正文と一致する',
+        tx.body.length + '文字');
+    }
+
+    /* ---------- 地点が契約の規則どおりか（マップデータから独立に算出し直す） ---------- */
+    var sp = meta.spawn, ep = meta.exitPad;
+    var dS = storyDistMap(map, sp.col, sp.row);
+    var dE = storyDistMap(map, ep.col, ep.row);
+    var kc = storyKeyCell(map, meta, dS);
+    if (!t.ok(!!kc, 'P4.17 項目2: 金庫の前のマスが特定できる')) { g.reset(); return; }
+    var dK = storyDistMap(map, kc.col, kc.row);
+    var SE = dS[ep.col + ',' + ep.row], SK = dS[kc.col + ',' + kc.row];
+    /* 進行路 = スタート →(金庫)→ 出口パッド。最短経路の取り方に依らないよう、
+       ゲートの位置は「三角等式」（スタートからの距離＋先までの距離＝全体）で判定する。 */
+    var route = storyPath(map, sp.col, sp.row, kc.col, kc.row);
+    var seg2 = storyPath(map, kc.col, kc.row, ep.col, ep.row);
+    if (!t.ok(!!route && !!seg2, 'P4.17 項目2: 進行路（スタート→金庫→出口）が引ける')) { g.reset(); return; }
+    route = route.concat(seg2.slice(1));
+    var routeIdx = Object.create(null);
+    for (i = 0; i < route.length; i++) {
+      var rk = route[i].col + ',' + route[i].row;
+      if (routeIdx[rk] === undefined) routeIdx[rk] = i;
+    }
+    var hall = pr.spawnRoom;
+    function inHall(c, r) {
+      return !!hall && c >= hall.c0 && c <= hall.c1 && r >= hall.r0 && r <= hall.r1;
+    }
+    var prevD = -1;
+    for (i = 0; i < 3; i++) {
+      gt = GATES[i];
+      var gk = gt.col + ',' + gt.row, d = dS[gk];
+      t.ok(staticWalkable(map, gt.col, gt.row), 'P4.17 項目2: ' + gt.id + ' のマスが歩行可能',
+        gt.col + ',' + gt.row);
+      t.ok(d !== undefined && d === gt.dist,
+        'P4.17 項目2: ' + gt.id + ' の経路距離が宣言どおり', d + ' / 宣言 ' + gt.dist);
+      /* 最短経路上＝スタートからの距離と出口/金庫までの距離の和が全体と等しい */
+      t.ok(d + dE[gk] === SE && d + dK[gk] === SK,
+        'P4.17 項目2: ' + gt.id + ' がスタート→出口／スタート→金庫の最短経路上にある',
+        (d + dE[gk]) + '/' + SE + ' · ' + (d + dK[gk]) + '/' + SK);
+      t.ok(inHall(gt.col, gt.row) === false,
+        'P4.17 項目2: ' + gt.id + ' がスタート部屋の外（日記1より手前に割り込まない）');
+      t.ok(d > prevD, 'P4.17 項目2: ' + gt.id + ' の経路距離が番号順に増える', prevD + ' → ' + d);
+      prevD = d;
+    }
+    /* 日記2 = 経路距離12マス（契約「約12マス」） */
+    t.ok(GATES[0].dist === 12, 'P4.17 項目2: 日記2 は経路距離12マス（契約の約12マス）', GATES[0].dist);
+
+    /* 日記3 = 進行路で最初に出会う音の罠（音地盤 NOISE かワイヤー）の3マス手前。
+       ただし規則どおりの3マス手前が4近傍に壁を持たない時は、壁を持つマスまで手前へ寄せる。 */
+    var TILE = ESCAPE.TILE, sound = [], tl = meta.traps || [];
+    for (i = 0; i < route.length; i++) {
+      if (map.tileAt(route[i].col, route[i].row) === TILE.NOISE) sound.push({ i: i, what: 'noise' });
+    }
+    for (j = 0; j < tl.length; j++) {
+      if (tl[j].kind !== 'wire') continue;
+      var wi = routeIdx[tl[j].col + ',' + tl[j].row];
+      if (wi !== undefined) sound.push({ i: wi, what: 'wire:' + tl[j].id });
+    }
+    sound.sort(function (a, b) { return a.i - b.i; });
+    /* スタート部屋の中に3マス手前が落ちるもの（＝日記1より手前）は契約の対象外 */
+    var firstSound = null;
+    for (i = 0; i < sound.length; i++) {
+      var back3 = route[sound[i].i - 3];
+      if (!back3 || inHall(back3.col, back3.row)) continue;
+      firstSound = sound[i]; break;
+    }
+    if (t.ok(!!firstSound, 'P4.17 項目2: 進行路上に対象となる音の罠がある')) {
+      t.ok(firstSound.i === GATES[1].dist + 4,
+        'P4.17 項目2: 日記3 の先にあるのが最初の音の罠（' + firstSound.what + '）',
+        '罠 d=' + firstSound.i + ' / ゲート d=' + GATES[1].dist);
+      /* 「4マス手前」になっている理由＝3マス手前のマスには壁メモを貼る壁が無い */
+      var raw3 = route[firstSound.i - 3], nw = 0;
+      for (j = 0; j < 4; j++) {
+        if (map.tileAt(raw3.col + STORY_D4[j][0], raw3.row + STORY_D4[j][1]) === TILE.WALL) nw++;
+      }
+      t.ok(nw === 0, 'P4.17 項目2: 日記3 が4マス手前なのは3マス手前 (' + raw3.col + ',' + raw3.row +
+        ') に壁メモを貼る壁が無いから', '壁の数 ' + nw);
+    }
+
+    /* 日記4 = 進行路で最初に出会うロッカーの3マス手前。
+       ロッカーは solid なので「経路のマスに隣接した」時点の経路距離で測る。
+       番号順（日記3より奥）を満たさないものは対象外（契約の順序が優先）。 */
+    var lk = meta.lockers || [], lkOn = [];
+    for (j = 0; j < lk.length; j++) {
+      var bi = -1;
+      for (i = 0; i < 4; i++) {
+        var li = routeIdx[(lk[j].col + STORY_D4[i][0]) + ',' + (lk[j].row + STORY_D4[i][1])];
+        if (li !== undefined && (bi < 0 || li < bi)) bi = li;
+      }
+      if (bi >= 0) lkOn.push({ i: bi, col: lk[j].col, row: lk[j].row });
+    }
+    lkOn.sort(function (a, b) { return a.i - b.i; });
+    var firstLocker = null;
+    for (i = 0; i < lkOn.length; i++) {
+      if (lkOn[i].i - 3 <= GATES[1].dist) continue;      /* 日記3より手前に来るものは番号順に反する */
+      firstLocker = lkOn[i]; break;
+    }
+    if (t.ok(!!firstLocker, 'P4.17 項目2: 進行路上に対象となるロッカーがある')) {
+      t.ok(firstLocker.i - 3 === GATES[2].dist,
+        'P4.17 項目2: 日記4 が最初のロッカー (' + firstLocker.col + ',' + firstLocker.row + ') の3マス手前',
+        'ロッカー d=' + firstLocker.i + ' / ゲート d=' + GATES[2].dist);
+    }
+
+    /* ---------- 壁メモ（読み返し）が既存の壁メモと同じ造形・同じ「調べる」経路に乗る ---------- */
+    g.reset();
+    try { global.localStorage.removeItem(SAVE_KEY); } catch (e0) { /* 無効環境は対象外 */ }
+    pr.diaryAuto = false;                     /* ここは壁メモの検証。自動表示は下で見る */
+    var nl = map.meta.notes || [];
+    for (i = 0; i < 3; i++) {
+      gt = GATES[i];
+      var wall = null;
+      for (j = 0; j < nl.length; j++) if (nl[j].id === gt.id) wall = nl[j];
+      if (!t.ok(!!wall, 'P4.17 項目2: ' + gt.id + ' の壁メモが meta.notes に焼かれている')) continue;
+      t.ok(wall.col === gt.wall.col && wall.row === gt.wall.row && wall.dir === gt.wall.dir,
+        'P4.17 項目2: ' + gt.id + ' の壁メモが宣言どおりの壁', wall.col + ',' + wall.row + ' ' + wall.dir);
+      t.ok(map.tileAt(wall.col, wall.row) === TILE.NOTE,
+        'P4.17 項目2: ' + gt.id + ' の壁メモのタイルが NOTE（既存の壁メモと同じ造形に乗る）');
+      t.ok(Math.abs(wall.col - gt.col) + Math.abs(wall.row - gt.row) === 1,
+        'P4.17 項目2: ' + gt.id + ' の壁メモが同じ地点の隣接壁にある');
+      var ap = adjacentTo(map, wall.col, wall.row);
+      if (!t.ok(!!ap, 'P4.17 項目2: ' + gt.id + ' の壁メモに「調べる」が届く隣接マスがある')) continue;
+      place(g, ap.col, ap.row, ap.yawDeg);
+      var hit = pr.onInteract();
+      t.ok(hit === true && pr.modal === 'memo' && pr.memoId === gt.id,
+        'P4.17 項目2: ' + gt.id + ' を壁メモから読み返せる', pr.memoId);
+      t.ok(pr.dom.memoBody.textContent === BODIES[gt.id],
+        'P4.17 項目2: ' + gt.id + ' の壁メモの本文も正文と一致する');
+      pr.onCloseTap();
+      t.ok(pr.modal === null, 'P4.17 項目2: ' + gt.id + ' の壁メモを閉じられる');
+    }
+
+    /* ---------- 自動表示: マスに入った最初のフレームで開く ---------- */
+    for (i = 0; i < 3; i++) {
+      gt = GATES[i];
+      g.reset();
+      try { global.localStorage.removeItem(SAVE_KEY); } catch (e1) { /* 無視 */ }
+      pr.diaryAuto = true;
+      pr.diaryRead = true;                    /* 日記1の自動表示は本スイートの対象外。先に既読にしておく */
+      /* ゲートの1マス手前から歩いて入る（「入った最初のフレーム」を実経路で作る） */
+      var app = null;
+      for (j = 0; j < 4; j++) {
+        var pc = gt.col + STORY_D4[j][0], prw = gt.row + STORY_D4[j][1];
+        if (g.map.isWalkable(pc, prw)) { app = { col: pc, row: prw }; break; }
+      }
+      if (!t.ok(!!app, 'P4.17 項目2: ' + gt.id + ' の手前のマスがある')) continue;
+      place(g, app.col, app.row, 0);
+      sim(g, 2);
+      t.ok(pr.modal === null, 'P4.17 項目2: ' + gt.id + ' の手前ではまだ開かない', pr.modal);
+      var before = pr.storyGateRead(gt.id);
+      t.ok(before === false, 'P4.17 項目2: ' + gt.id + ' は未読から始まる');
+      walkUntilModal(g, [{ col: gt.col, row: gt.row }]);
+      t.ok(g.player.col() === gt.col && g.player.row() === gt.row,
+        'P4.17 項目2: ' + gt.id + ' のマスに入った',
+        g.player.col() + ',' + g.player.row());
+      if (!t.ok(pr.modal === 'memo' && pr.memoId === gt.id,
+        'P4.17 項目2: ' + gt.id + ' がマスに入った最初のフレームで自動で開く',
+        pr.modal + '/' + pr.memoId)) continue;
+      t.ok(pr.dom.memoOverlay.classList.contains('show') === true,
+        'P4.17 項目2: ' + gt.id + ' のメモUIが実際に画面へ出ている');
+      t.ok(pr.dom.memoTitle.textContent === '研究員の日記' &&
+        pr.dom.memoBody.textContent === BODIES[gt.id],
+        'P4.17 項目2: ' + gt.id + ' の自動表示の中身が正文どおり');
+      t.ok(pr.storyRead[gt.id] === true, 'P4.17 項目2: ' + gt.id + ' が自動表示で既読になる');
+
+      /* 閉じるまで移動不可 → 閉じれば進める */
+      var x0 = g.player.x, z0 = g.player.z, yaw0 = g.player.yaw;
+      g.input.moveY = 1; g.input.lookDX = 600;
+      sim(g, 20);
+      g.input.reset();
+      t.ok(g.player.x === x0 && g.player.z === z0 && g.player.yaw === yaw0,
+        'P4.17 項目2: ' + gt.id + ' を閉じるまで移動できない');
+      pr.onCloseTap();
+      t.ok(pr.modal === null, 'P4.17 項目2: ' + gt.id + ' を閉じられる');
+      g.input.moveY = 1;
+      sim(g, 20);
+      g.input.reset();
+      t.ok(Math.hypot(g.player.x - x0, g.player.z - z0) > 0.2,
+        'P4.17 項目2: ' + gt.id + ' を閉じるとゲームが進む',
+        Math.hypot(g.player.x - x0, g.player.z - z0).toFixed(2) + 'm');
+
+      /* 既読後は同じマスへ入り直しても開かない */
+      place(g, app.col, app.row, 0);
+      sim(g, 2);
+      place(g, gt.col, gt.row, 0);
+      sim(g, 3);
+      t.ok(pr.modal === null, 'P4.17 項目2: ' + gt.id + ' は既読後は入り直しても開かない', pr.modal);
+
+      /* save → load で既読が残る */
+      try {
+        pr.save();
+        var raw = global.localStorage.getItem(SAVE_KEY);
+        if (t.ok(!!raw, 'P4.17 項目2: ' + gt.id + ' セーブが書き込まれている（前提）')) {
+          var sr = JSON.parse(raw).storyRead || [];
+          t.ok(sr.indexOf(gt.id) >= 0, 'P4.17 項目2: ' + gt.id + ' の既読がセーブ内容に入る',
+            JSON.stringify(sr));
+        }
+        pr.reset(); g.rope.reset(); g.minimap.reset();
+        pr.diaryAuto = true;
+        t.ok(pr.storyGateRead(gt.id) === false, 'P4.17 項目2: ' + gt.id + ' reset() で未読へ戻る（前提）');
+        pr.load();
+        t.ok(pr.storyGateRead(gt.id) === true,
+          'P4.17 項目2: ' + gt.id + ' の既読が load() で復元される（セーブに永続）');
+        pr.diaryRead = true;
+        place(g, app.col, app.row, 0);
+        sim(g, 2);
+        place(g, gt.col, gt.row, 0);
+        sim(g, 3);
+        t.ok(pr.modal === null, 'P4.17 項目2: ' + gt.id + ' は復元後も自動では開かない', pr.modal);
+        global.localStorage.removeItem(SAVE_KEY);
+      } catch (e3) { /* localStorage無効環境は対象外 */ }
+    }
+
+    /* ---------- 保留: タイトル/捕獲演出/他モーダル中は開かず、開ける最初の機会に開く ----------
+       保留の条件そのもの（_diaryHeld）は日記1と共用で testP416Diary 側の作りに乗っているので、
+       ここでは「保留されている間はマスを通り過ぎても取りこぼさない」という本項目固有の挙動を見る。 */
+    (function () {
+      var gh = GATES[0];
+      g.reset();
+      try { global.localStorage.removeItem(SAVE_KEY); } catch (e6) { /* 無視 */ }
+      pr.diaryAuto = true;
+      pr.diaryRead = true;
+      var heldWas = pr._diaryHeld;
+      pr._diaryHeld = function () { return true; };      /* タイトル/捕獲演出中に相当 */
+      var pre = null;
+      for (var k = 0; k < 4; k++) {
+        var pc2 = gh.col + STORY_D4[k][0], pr2 = gh.row + STORY_D4[k][1];
+        if (g.map.isWalkable(pc2, pr2)) { pre = { col: pc2, row: pr2 }; break; }
+      }
+      if (!pre) { pr._diaryHeld = heldWas; return; }
+      place(g, pre.col, pre.row, 0);
+      sim(g, 2);
+      walkUntilModal(g, [{ col: gh.col, row: gh.row }]);
+      t.ok(pr.modal === null, 'P4.17 項目2: 保留中（タイトル/捕獲/他モーダル）は日記が開かない', pr.modal);
+      t.ok(pr._storyQueue.length === 1 && pr._storyQueue[0] === gh.id,
+        'P4.17 項目2: 保留中に入ったぶんは待ち行列に残る', JSON.stringify(pr._storyQueue));
+      /* 保留中にマスを通り過ぎても落とさない */
+      place(g, pre.col, pre.row, 0);
+      sim(g, 2);
+      t.ok(pr._storyQueue.length === 1,
+        'P4.17 項目2: 保留中にマスを離れても取りこぼさない', JSON.stringify(pr._storyQueue));
+      pr._diaryHeld = heldWas;                           /* 保留が解ける */
+      sim(g, 2);
+      t.ok(pr.modal === 'memo' && pr.memoId === gh.id,
+        'P4.17 項目2: 保留が解けた最初の機会に開く', pr.modal + '/' + pr.memoId);
+      pr.onCloseTap();
+    })();
+
+    /* 旧セーブ（storyRead 無し）で壊れないこと＝未読のまま読み込める */
+    try {
+      g.reset();
+      pr.save();
+      var raw2 = JSON.parse(global.localStorage.getItem(SAVE_KEY));
+      delete raw2.storyRead;
+      global.localStorage.setItem(SAVE_KEY, JSON.stringify(raw2));
+      pr.reset();
+      pr.load();
+      t.ok(pr.storyGateRead('a1_diary2') === false && pr.storyGateRead('a1_diary4') === false,
+        'P4.17 項目2: 旧セーブ（storyRead 無し）は未読のまま壊れずに読める');
+      global.localStorage.removeItem(SAVE_KEY);
+    } catch (e4) { /* 無効環境は対象外 */ }
+
+    pr.diaryAuto = autoWas;
+    g.reset();
+    try { global.localStorage.removeItem(SAVE_KEY); } catch (e5) { /* 無視 */ }
+  }
+
   function testP416Title(t, g) {
     var T = ESCAPE.Title, C = ESCAPE.TITLE_CONST;
     if (!t.ok(!!T, 'P4.16 項目4: タイトル画面のモジュールが結線されている')) return;
@@ -4971,7 +5343,9 @@
       /* P4.11 レーンB: ロープ緩和・地図の踏破記録・ヘッドライトの形・ミニマップ */
       testP411RopeRelax, testP411FogTruth, testP411MapPixels, testP411MinimapUi, testP411Headlight,
       /* P4.16 レーンB: タイトル画面 Escape ／ 研究員の日記の自動表示 */
-      testP416Diary, testP416Title
+      testP416Diary, testP416Title,
+      /* P4.17 レーンB: 物語形式の強制メモ4枚（日記2〜4を進行路上で自動表示・壁メモで読み返し） */
+      testP417StoryGates
     ];
     /* 他モジュールが登録した追加スイート（P4.10a の敵2体・絶叫・地図リセット等）も runAll に乗せる */
     if (ESCAPE.__extraSuites && ESCAPE.__extraSuites.length) suites = suites.concat(ESCAPE.__extraSuites);
