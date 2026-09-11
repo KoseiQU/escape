@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>ESCAPE P4.17 段階2 — 質感と光（品質段階の比較）</title>
+<style>
+  body { margin:0; background:#0b0d11; color:#cfd8e3; font:14px/1.6 system-ui, sans-serif; padding:24px; }
+  h1 { font-size:20px; letter-spacing:.06em; margin:0 0 4px; }
+  h2 { font-size:16px; margin:28px 0 8px; border-left:3px solid #4a6b8a; padding-left:8px; }
+  p.note { color:#8fa3b8; margin:4px 0 16px; }
+  table { border-collapse:collapse; margin:8px 0 20px; font-size:13px; }
+  th, td { border:1px solid #263241; padding:4px 9px; text-align:right; }
+  th { background:#131922; color:#9fb4c8; font-weight:600; }
+  td.l, th.l { text-align:left; }
+  tr.base td { color:#8fa3b8; }
+  .ng { color:#ff8b7a; }
+  .grid { display:grid; grid-template-columns:repeat(3, 1fr); gap:10px; }
+  figure { margin:0; }
+  figure img { width:100%; display:block; border:1px solid #263241; }
+  figcaption { color:#8fa3b8; font-size:12px; padding:4px 2px 12px; }
+  code { color:#a9c8e6; }
+</style>
+</head>
+<body>
+<h1>ESCAPE P4.17 段階2 — 質感と光（系統Y 本採用）</h1>
+<p class="note">
+  1280x720 / 解像度倍率1.0 / ヘッドレス Chromium（Apple Silicon Mac）。
+  視点1=スタート部屋正面（掲示板）、視点2=区画Bの通路、視点3=暗所帯 dz_B の入口（ヘッドライト点灯）。
+  <code>?q=high|mobile|fallback|off</code> で段階を強制、<code>?cam=1|2|3</code> <code>?stats=1</code> <code>?bench=1</code> が監査用。
+  <code>off</code> は P4.16 までの見た目（比較の基準）。
+</p>
+
+<h2>実測（段階 × 視点）</h2>
+<table>
+  <tr>
+    <th class="l">段階</th><th class="l">視点</th>
+    <th>暗部&lt;40<br>(35〜65%)</th><th>中間40-120<br>(≥20%)</th><th>白飛&gt;200<br>(&lt;3%)</th>
+    <th>burst ms</th><th>fps</th><th>描画コール</th><th>三角形/frame</th>
+    <th>GPU増分MB</th><th>world三角形</th><th>build ms</th>
+  </tr>
+  <tr class="base"><td class="l" rowspan="3">off（P4.16）</td><td class="l">視点1</td><td>37.4</td><td>61.1</td><td>0.00</td><td>2.90</td><td>345</td><td>281</td><td>68,322</td><td rowspan="3">0</td><td rowspan="3">466,972</td><td rowspan="3">799</td></tr>
+  <tr class="base"><td class="l">視点2</td><td class="ng">68.6</td><td>31.4</td><td>0.00</td><td>4.25</td><td>235</td><td>425</td><td>177,264</td></tr>
+  <tr class="base"><td class="l">視点3</td><td>52.0</td><td>48.0</td><td>0.00</td><td>2.80</td><td>357</td><td>378</td><td>122,906</td></tr>
+
+  <tr><td class="l" rowspan="3">high（Y＋Z・6灯）</td><td class="l">視点1</td><td>42.3</td><td>48.2</td><td>2.00</td><td>4.94</td><td>202</td><td>281+1</td><td>68,322</td><td rowspan="3">32.7</td><td rowspan="3">466,972</td><td rowspan="3">1,018</td></tr>
+  <tr><td class="l">視点2</td><td>61.2</td><td>37.2</td><td>0.07</td><td>6.74</td><td>148</td><td>425+1</td><td>177,264</td></tr>
+  <tr><td class="l">視点3</td><td>47.6</td><td>48.4</td><td>0.07</td><td>5.93</td><td>169</td><td>378+1</td><td>122,906</td></tr>
+
+  <tr><td class="l" rowspan="3">mobile（Y＋Z・4灯・法線1/4）</td><td class="l">視点1</td><td>50.8</td><td>45.1</td><td>1.83</td><td>4.60</td><td>217</td><td>281+1</td><td>68,322</td><td rowspan="3">13.7</td><td rowspan="3">466,972</td><td rowspan="3">933</td></tr>
+  <tr><td class="l">視点2</td><td>63.2</td><td>35.0</td><td>0.07</td><td>6.00</td><td>167</td><td>425+1</td><td>177,264</td></tr>
+  <tr><td class="l">視点3</td><td>44.8</td><td>52.0</td><td>0.07</td><td>5.21</td><td>192</td><td>378+1</td><td>122,906</td></tr>
+
+  <tr><td class="l" rowspan="3">fallback（X＋Z）</td><td class="l">視点1</td><td>36.0</td><td>55.8</td><td>0.44</td><td>3.17</td><td>315</td><td>281+1</td><td>63,936</td><td rowspan="3">39.1</td><td rowspan="3">277,140</td><td rowspan="3">2,755</td></tr>
+  <tr><td class="l">視点2</td><td>64.4</td><td>32.6</td><td>0.04</td><td>4.73</td><td>212</td><td>425+1</td><td>138,834</td></tr>
+  <tr><td class="l">視点3</td><td>41.1</td><td>56.8</td><td>0.00</td><td>4.06</td><td>247</td><td>378+1</td><td>101,926</td></tr>
+</table>
+<p class="note">
+  burst ms＝毎フレーム 1px の readPixels で GPU の完了を待たせた「1フレームの実コスト」。fps はその逆数。<br>
+  GPU増分＝法線・粗さマップ（high 32.1MB／mobile 13.1MB）＋後処理のレンダーターゲット（0.6MB）／
+  fallback はライトマップ 31.7MB＋テクスチャ。基礎テクスチャ 87.9MB は全段階で共通。<br>
+  描画コールの「+1」は後処理のフルスクリーン1枚。三角形とコールは high/mobile で現行と同数（+10%以内の契約を満たす）。<br>
+  赤字＝§3 の数値ゲートを外れている値（現行 off は視点2で 68.6% と既に外れており、Y＋Z はここを満たす側に入った）。
+</p>
+
+<h2>視点1 — スタート部屋正面（掲示板）</h2>
+<div class="grid">
+  <figure><img src="off_cam1.png" alt="off"><figcaption>off（P4.16まで）</figcaption></figure>
+  <figure><img src="high_cam1.png" alt="high"><figcaption>high（Y＋Z）</figcaption></figure>
+  <figure><img src="mobile_cam1.png" alt="mobile"><figcaption>mobile（Y＋Z・4灯）</figcaption></figure>
+</div>
+<div class="grid">
+  <figure><img src="fallback_cam1.png" alt="fallback"><figcaption>fallback（X＋Z）</figcaption></figure>
+</div>
+
+<h2>視点2 — 区画Bの通路</h2>
+<div class="grid">
+  <figure><img src="off_cam2.png" alt="off"><figcaption>off（P4.16まで）</figcaption></figure>
+  <figure><img src="high_cam2.png" alt="high"><figcaption>high（Y＋Z）</figcaption></figure>
+  <figure><img src="mobile_cam2.png" alt="mobile"><figcaption>mobile（Y＋Z・4灯）</figcaption></figure>
+</div>
+<div class="grid">
+  <figure><img src="fallback_cam2.png" alt="fallback"><figcaption>fallback（X＋Z）</figcaption></figure>
+</div>
+
+<h2>視点3 — 暗所帯 dz_B の入口（ヘッドライト点灯）</h2>
+<div class="grid">
+  <figure><img src="off_cam3.png" alt="off"><figcaption>off（P4.16まで）</figcaption></figure>
+  <figure><img src="high_cam3.png" alt="high"><figcaption>high（Y＋Z）</figcaption></figure>
+  <figure><img src="mobile_cam3.png" alt="mobile"><figcaption>mobile（Y＋Z・4灯）</figcaption></figure>
+</div>
+<div class="grid">
+  <figure><img src="fallback_cam3.png" alt="fallback"><figcaption>fallback（X＋Z）</figcaption></figure>
+</div>
+</body>
+</html>

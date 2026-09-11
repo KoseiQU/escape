@@ -3170,7 +3170,9 @@
       d.flash.style.opacity = fl.toFixed(3);
       v.fl = fl;
     }
-    var ns = clamp(fx.noise, 0, 1);
+    /* P4.17 段階2: 後処理（系統Z）が動いている間は DOM の粒子ノイズを止める。
+       発見スティングのノイズは後処理の粒子（uGrain）が引き取る＝二重にしない。 */
+    var ns = (ESCAPE.RQ && ESCAPE.RQ.post) ? 0 : clamp(fx.noise, 0, 1);
     if (d.noise && (force || Math.abs((v.ns || 0) - ns) > 0.004)) {
       d.noise.style.opacity = (ns * 0.55).toFixed(3);
       v.ns = ns;

@@ -273,8 +273,10 @@
     global.__pump(5);
     t.ok(g.frameCount - f0 === 5, '__pump(5) で5ステップ更新される', g.frameCount - f0);
     t.ok(g.renderCount - r0 === 5, '__pump(5) で5回描画される', g.renderCount - r0);
-    t.ok(g.renderer.info.render.frame - d0 === 5, '__pump(5) でWebGL描画が5回走る',
-      g.renderer.info.render.frame - d0);
+    /* P4.17 段階2: 後処理（系統Z）がある間は「本編＋フルスクリーン1枚」で2回描く */
+    var perFrame = (ESCAPE.RQ && ESCAPE.RQ.post) ? 2 : 1;
+    t.ok(g.renderer.info.render.frame - d0 === 5 * perFrame, '__pump(5) でWebGL描画が5回走る',
+      (g.renderer.info.render.frame - d0) + ' / 1フレームあたり' + perFrame);
     t.near(g.simTime, 5 * ESCAPE.FIXED_DT, 1e-9, '__pump のシミュレーション時間');
 
     // 入力→__pump→移動 の実経路（入力オブジェクト経由）
@@ -5281,6 +5283,359 @@
     g.reset();
   }
 
+  /* ================================================================
+   * P4.17 段階2「質感と光」: 品質段階・自動退避・近傍灯・輝度ゲート
+   * 契約 DESIGN.md「P4.17 再プレイ差し戻し」項目3 段階2（1〜5）。
+   * ============================================================== */
+
+  /* P4.16 までの実測（?q=off の焼き込み専用ビルド・area1）。
+     high は「現行+10%以内」に収めるのが契約 段階2-5。 */
+  var P417_BASE = { triangles: 466972, drawGroups: 780 };
+
+  /** 監査用の固定視点（レーンCの段階1と同じ3点） */
+  var P417_CAMS = [
+    { col: 4, row: 74, yawDeg: 180, light: false, name: 'スタート部屋正面' },
+    { col: 37, row: 47, yawDeg: 180, light: false, name: '区画Bの通路' },
+    { col: 63, row: 48, yawDeg: -90, light: true, name: '暗所帯の入口（ライト点灯）' }
+  ];
+
+  /** 今の画面の輝度ヒストグラム（§3 の数値ゲート）。2画素に1つ拾う */
+  function lumaGate(g) {
+    var gl = g.renderer.getContext();
+    g.render();
+    var w = gl.drawingBufferWidth, h = gl.drawingBufferHeight;
+    var buf = new Uint8Array(w * h * 4);
+    gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, buf);
+    var dark = 0, mid = 0, hot = 0, n = 0;
+    for (var i = 0; i < w * h; i += 2) {
+      var o = i * 4;
+      var l = 0.2126 * buf[o] + 0.7152 * buf[o + 1] + 0.0722 * buf[o + 2];
+      n++;
+      if (l < 40) dark++; else if (l <= 120) mid++;
+      if (l > 200) hot++;
+    }
+    return { dark: dark / n * 100, mid: mid / n * 100, hot: hot / n * 100 };
+  }
+
+  /** 視点を置いて1枚描く（ロープの線と鼓動の縁は比較の邪魔なので伏せる） */
+  function p417Place(g, c) {
+    place(g, c.col, c.row, c.yawDeg);
+    g.player.y = g.map.floorYAt(g.player.x, g.player.z);
+    g.player.speed = 0;
+    g.syncCamera();
+    if (g.rope && g.rope.group) g.rope.group.visible = false;
+    if (g.headlight) {
+      g.headlight.on = !!c.light;
+      g.headlight.level = c.light ? 1 : 0;
+      if (g.headlight._place) g.headlight._place();
+      if (g.headlight._apply) g.headlight._apply();
+    }
+    if (ESCAPE.RQ && ESCAPE.RQ.snapLights) ESCAPE.RQ.snapLights();
+  }
+
+  /** 3視点の輝度ゲートを確かめる（label は段階の名前） */
+  function p417GateAll(t, g, label) {
+    for (var i = 0; i < P417_CAMS.length; i++) {
+      p417Place(g, P417_CAMS[i]);
+      var q = lumaGate(g);
+      t.ok(q.dark >= 35 && q.dark <= 65,
+        '輝度ゲート(' + label + ' 視点' + (i + 1) + '): 暗部35〜65%', q.dark.toFixed(1) + '%');
+      t.ok(q.mid >= 20,
+        '輝度ゲート(' + label + ' 視点' + (i + 1) + '): 中間調20%以上', q.mid.toFixed(1) + '%');
+      t.ok(q.hot < 3,
+        '輝度ゲート(' + label + ' 視点' + (i + 1) + '): 白飛び3%未満', q.hot.toFixed(2) + '%');
+    }
+    if (g.rope && g.rope.group) g.rope.group.visible = true;
+    if (g.headlight) g.headlight.reset();
+  }
+
+  function testP417Tiers(t, g) {
+    var R = ESCAPE.RQ;
+    if (!t.ok(!!R, 'P4.17: 描画品質モジュール ESCAPE.RQ がある')) return;
+
+    /* 1) 段階の表（契約 段階2-1 の数値そのもの） */
+    var T = R.TIERS;
+    t.ok(T.high.y && !T.high.x && T.high.post && T.high.lights === 6 &&
+      T.high.normalDiv === 2 && T.high.dpr === 2,
+      'high: Y＋Z・近傍6灯・法線1/2・解像度倍率上限2', JSON.stringify(T.high));
+    t.ok(T.mobile.y && T.mobile.post && T.mobile.lights === 4 &&
+      T.mobile.normalDiv === 4 && T.mobile.dpr <= 1.5 && T.mobile.dpr >= 1.0,
+      'mobile: Y＋Z・近傍4灯・法線1/4・解像度倍率1.0〜1.5', JSON.stringify(T.mobile));
+    t.ok(T.fallback.x && !T.fallback.y && T.fallback.post && T.fallback.lights === 0,
+      'fallback: 系統X（ライトマップ）＋Z・動的ライト無し', JSON.stringify(T.fallback));
+
+    /* 2) 端末判定（純関数に値を入れて確かめる） */
+    var IPHONE = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15';
+    var MAC = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/126';
+    var ANDROID = 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 Chrome/126';
+    t.ok(R.decideTier({ ua: IPHONE, touch: true, screenMin: 393, webgl2: true, memory: 0, cores: 6 }) === 'mobile',
+      '端末判定: iPhone は mobile');
+    t.ok(R.decideTier({ ua: ANDROID, touch: true, screenMin: 412, webgl2: true, memory: 8, cores: 8 }) === 'mobile',
+      '端末判定: Android は mobile');
+    t.ok(R.decideTier({ ua: MAC, touch: false, screenMin: 1080, webgl2: true, memory: 8, cores: 10 }) === 'high',
+      '端末判定: PC は high');
+    t.ok(R.decideTier({ ua: MAC, touch: true, screenMin: 834, webgl2: true, memory: 8, cores: 8 }) === 'mobile',
+      '端末判定: タッチの iPad（Macintosh を名乗る）は mobile');
+    t.ok(R.decideTier({ ua: MAC, touch: false, screenMin: 1080, webgl2: false, memory: 8, cores: 8 }) === 'fallback',
+      '端末判定: WebGL2 が無ければ fallback');
+    t.ok(R.decideTier({ ua: ANDROID, touch: true, screenMin: 360, webgl2: true, memory: 2, cores: 8 }) === 'fallback',
+      '端末判定: メモリ2GB以下は fallback');
+    t.ok(R.decideTier({ ua: MAC, touch: false, screenMin: 1080, webgl2: true, memory: 8, cores: 2 }) === 'fallback',
+      '端末判定: 2コア以下は fallback');
+    /* 強制（?q=）は判定より優先される。この場は実際の起動値で確かめる */
+    t.ok(!R.forced || R.tier === R.bootTier, '?q= の強制が段階として効いている', R.tier);
+    t.ok(R.forced || R.bootTier === R.detected, '?q= が無ければ判定どおりの段階で起動する',
+      R.bootTier + ' / ' + R.detected);
+
+    /* 3) 解像度倍率の上限 */
+    var dpr = global.devicePixelRatio || 1;
+    var want = Math.min(dpr, T[R.tier].dpr);
+    t.near(R.pixelRatio(), want, 1e-9, '解像度倍率は段階の上限で頭打ちになる');
+    t.near(g.renderer.getPixelRatio(), want, 1e-9, 'レンダラに段階の解像度倍率が入っている');
+  }
+
+  function testP417Degrade(t, g) {
+    var R = ESCAPE.RQ;
+    if (!R) return;
+
+    /* 1) 監視の発動条件（副作用の無い純ロジックへ注入する） */
+    t.ok(R.WATCH.window === 5000 && R.WATCH.limit === 20 && R.WATCH.strikes === 2,
+      '自動退避: 直近5秒の中央値20ms超を2回連続', JSON.stringify(R.WATCH));
+    /** 窓がちょうど1つ閉じるまで ms 間隔のフレーム時間を流し込む */
+    function feed(w, ms, t0) {
+      var now = t0, fired = false, w0 = w.windows;
+      while (w.windows === w0 && now - t0 < 60000) { now += ms; fired = w.push(ms, now) || fired; }
+      return { fired: fired, now: now };
+    }
+    var w1 = new R.Watch();
+    var r1 = feed(w1, 25, 0);
+    t.ok(!r1.fired && w1.strikes === 1 && w1.windows === 1,
+      '退避: 25msの窓1つ目では発動しない', w1.strikes);
+    var r2 = feed(w1, 25, r1.now);
+    t.ok(r2.fired && w1.fired, '退避: 25msの窓が2回連続で発動する');
+
+    var w2 = new R.Watch(), r3 = { now: 0, fired: false };
+    for (var q2 = 0; q2 < 5; q2++) r3 = feed(w2, 19, r3.now);
+    t.ok(!r3.fired && w2.windows === 5 && w2.strikes === 0,
+      '退避: 19ms（20ms以下）では何窓来ても発動しない', w2.windows + '窓/' + w2.strikes);
+
+    var w3 = new R.Watch();
+    var a = feed(w3, 25, 0);
+    t.ok(w3.strikes === 1, '退避: 悪い窓で黒星1つ', w3.strikes);
+    var b = feed(w3, 12, a.now);
+    t.ok(w3.strikes === 0 && !b.fired, '退避: 間に良い窓が入ると黒星は0に戻る', w3.strikes);
+    var c = feed(w3, 25, b.now);
+    t.ok(!c.fired && w3.strikes === 1, '退避: 黒星が途切れたら1回目から数え直す', w3.strikes);
+    var d2 = feed(w3, 25, c.now);
+    t.ok(d2.fired, '退避: 数え直した後も2回連続で発動する');
+
+    /* 2) 実際に落とす → 素材・ライト・通知・輝度ゲートを確かめる → 戻す */
+    var wasTier = R.tier, wasDeg = R.degraded;
+    if (!wasDeg) {
+      var bigName = null, i;
+      for (i = 0; i < g.world.group.children.length; i++) {
+        var m0 = g.world.group.children[i];
+        if (g.world._bigMats && g.world._bigMats.dynamic[m0.name]) { bigName = m0.name; break; }
+      }
+      var before = bigName ? g.world.group.children[i].material.type : null;
+      var lit = g.world.lightingMode;
+      R.degrade('機械テスト');
+      t.ok(R.degraded && R.tier === 'fallback', '退避: 段階が fallback になる', R.tier);
+      t.ok(R.rig === null || R.rig === undefined, '退避: 近傍灯が消えている');
+      t.ok(g.world.lightingMode === 'baked', '退避: 大面が焼き込み専用へ戻る', g.world.lightingMode);
+      t.near(R.uBakedMix.value, 1, 1e-9, '退避: 焼き込みを全量使う');
+      var el = document.getElementById('rq-notice');
+      t.ok(!!el && el.textContent === '描画を軽量モードに切り替えた',
+        '退避: HUD の通知が正文どおり', el ? el.textContent : '(要素なし)');
+      t.ok(el && el.classList.contains('show'), '退避: 通知が表示状態になる');
+      if (bigName) {
+        t.ok(g.world.group.children[i].material.type === 'MeshBasicMaterial',
+          '退避: 大面の素材が MeshBasicMaterial へ差し替わる（' + before + ' から）',
+          g.world.group.children[i].material.type);
+      }
+      /* 退避後も真っ暗・真っ白にならない（§3 の輝度ゲート） */
+      p417GateAll(t, g, '退避後');
+      /* 一度きり: 二度目の退避は何もしない */
+      t.ok(R.degrade('二度目') === false, '退避: 二度目は起きない（セッション内固定）');
+      R.__restore();
+      t.ok(!R.degraded && R.tier === wasTier, '退避の巻き戻し（機械テスト専用）で元の段階へ戻る', R.tier);
+      t.ok(g.world.lightingMode === (R.isY() ? 'dynamic' : 'baked'),
+        '巻き戻し: 大面の照明が元の方式に戻る', g.world.lightingMode);
+    }
+  }
+
+  function testP417Lights(t, g) {
+    var R = ESCAPE.RQ;
+    if (!R || !R.rig) { t.ok(true, 'P4.17: 近傍灯なしの段階なのでフェード検査は省略'); return; }
+    var rig = R.rig;
+    t.ok(rig.slots.length === R.TIERS[R.tier].lights,
+      '近傍灯: 段階どおりの本数がシーンにある', rig.slots.length);
+
+    p417Place(g, P417_CAMS[0]);
+    rig.snap();
+    var s = null, i;
+    for (i = 0; i < rig.slots.length; i++) if (rig.slots[i].f) { s = rig.slots[i]; break; }
+    if (!t.ok(!!s, '近傍灯: スタート部屋で灯が拾えている')) return;
+    t.near(s.k, 1, 1e-6, '近傍灯: 選ばれた灯は全開', s.k);
+    t.ok(s.L.intensity > 0 && s.L.decay === 2 && s.L.distance === s.f.R,
+      '近傍灯: 二乗則（decay=2）で器具の到達半径まで', s.L.intensity.toFixed(2));
+
+    /* 遠くへ跳ぶ＝灯の入れ替え。今ついている灯は0.3秒かけて落ちる
+       （1フレームで消すと黒く抜ける＝段階1で挙がった弱点②） */
+    var old = [];
+    for (i = 0; i < rig.slots.length; i++) if (rig.slots[i].f) old.push(rig.slots[i].f);
+    function oldMaxK() {
+      var m = 0;
+      for (var j = 0; j < rig.slots.length; j++) {
+        var sl = rig.slots[j];
+        if (sl.f && old.indexOf(sl.f) >= 0 && sl.k > m) m = sl.k;
+      }
+      return m;
+    }
+    var c2 = P417_CAMS[1];
+    place(g, c2.col, c2.row, c2.yawDeg);
+    g.player.y = g.map.floorYAt(g.player.x, g.player.z);
+    g.syncCamera();
+    var seq = [];
+    for (i = 0; i < 7; i++) { rig.update(0.05); seq.push(oldMaxK()); }
+    t.ok(seq[0] > 0.7 && seq[0] < 1,
+      '近傍灯: 入れ替えは1フレーム（0.05秒）では終わらない', seq[0].toFixed(3));
+    var mono = true;
+    for (i = 1; i < seq.length; i++) if (seq[i] > seq[i - 1] + 1e-9) mono = false;
+    t.ok(mono, '近傍灯: フェードは単調に下がる',
+      seq.map(function (v) { return v.toFixed(2); }).join(' '));
+    t.near(seq[5], 0, 1e-6, '近傍灯: 0.3秒で入れ替えが終わる', seq[5]);
+    /* 入れ替え先は補充され、こちらも0から立ち上がる */
+    rig.update(0.05);
+    var rising = 0, full2 = 0;
+    for (i = 0; i < rig.slots.length; i++) {
+      if (!rig.slots[i].f) continue;
+      if (rig.slots[i].k > 0 && rig.slots[i].k < 1) rising++;
+      if (rig.slots[i].k >= 1) full2++;
+    }
+    t.ok(rising > 0 && full2 === 0, '近傍灯: 新しい灯も0から0.3秒で立ち上がる',
+      rising + '本が点灯中 / 全開' + full2);
+    rig.snap();
+    var any = false;
+    for (i = 0; i < rig.slots.length; i++) if (rig.slots[i].k > 0.99) any = true;
+    t.ok(any, '近傍灯: 入れ替え後も灯は補充される');
+  }
+
+  function testP417Render(t, g) {
+    var R = ESCAPE.RQ;
+    if (!R) return;
+    var w = g.world;
+
+    /* 1) 三角形・描画コールの上限（契約 段階2-5: high で現行+10%以内） */
+    t.ok(w.stats.triangles <= P417_BASE.triangles * 1.1,
+      '描画予算: 世界の三角形が P4.16 比 +10%以内',
+      w.stats.triangles + ' / 上限' + Math.round(P417_BASE.triangles * 1.1));
+    t.ok(w.stats.drawGroups <= P417_BASE.drawGroups * 1.1,
+      '描画予算: 描画グループが P4.16 比 +10%以内',
+      w.stats.drawGroups + ' / 上限' + Math.round(P417_BASE.drawGroups * 1.1));
+    p417Place(g, P417_CAMS[1]);
+    g.render();
+    var calls = (R.post ? R.sceneCalls + 1 : g.renderer.info.render.calls);
+    t.ok(calls <= 700, '描画予算: 1フレームの描画コールが700以内', calls);
+    if (R.post) {
+      t.ok(calls === R.sceneCalls + 1, '後処理は本編の描画に1コール足すだけ', calls);
+    }
+
+    /* 2) 大面の頂点は「アルベド」と「焼き込み光」に分かれている（系統Y） */
+    if (R.isY()) {
+      var mesh = null;
+      for (var i = 0; i < w.group.children.length; i++) {
+        var m = w.group.children[i];
+        if (w._bigMats && w._bigMats.dynamic[m.name]) { mesh = m; break; }
+      }
+      if (t.ok(!!mesh, '系統Y: 大面のメッシュがある')) {
+        var at = mesh.geometry.attributes;
+        t.ok(!!at.bakedLight && at.bakedLight.count === at.position.count,
+          '系統Y: 大面が焼き込み光の属性を持つ', at.bakedLight ? at.bakedLight.count : 0);
+        t.ok(!!at.normal && at.normal.count === at.position.count,
+          '系統Y: 大面が法線を持つ（PBRに必須）');
+        var maxAlb = 0, bad = 0;
+        for (var k = 0; k < at.color.array.length; k++) {
+          if (at.color.array[k] > maxAlb) maxAlb = at.color.array[k];
+          if (at.color.array[k] > 1.0001) bad++;
+        }
+        t.ok(bad === 0, '系統Y: 頂点色はアルベド（1を超えない）', maxAlb.toFixed(3));
+        var nn = at.normal.array, unit = true;
+        for (var q = 0; q < nn.length; q += 3) {
+          var len = Math.hypot(nn[q], nn[q + 1], nn[q + 2]);
+          if (Math.abs(len - 1) > 1e-3) { unit = false; break; }
+        }
+        t.ok(unit, '系統Y: 法線が正規化されている（スムージング後も）');
+        t.ok(mesh.material.type === 'MeshStandardMaterial',
+          '系統Y: 大面が MeshStandardMaterial', mesh.material.type);
+        t.ok(mesh.material.normalMap && mesh.material.roughnessMap,
+          '系統Y: 法線マップ・粗さマップが張られている');
+        t.near(R.uBakedMix.value, R.tune.mix, 1e-9,
+          '系統Y: 焼き込みは一部だけ残す（残りは実ライト）', R.uBakedMix.value);
+      }
+      /* 法線マップは段階ごとの解像度で作る（mobile は半分） */
+      var mm = R.materialMaps('wall', R.normalDiv());
+      var src = ESCAPE.Textures.sizeOf('wall');
+      t.ok(mm && mm.w === Math.round(src.w / R.normalDiv()),
+        '系統Y: 法線マップの解像度が段階どおり', mm ? (mm.w + 'x' + mm.h) : 'なし');
+    }
+
+    /* 3) 後処理（系統Z）が動く間は DOM の粒子ノイズを止める（二重化しない） */
+    if (R.post && ESCAPE.audio) {
+      var noiseEl = document.getElementById('fx-noise');
+      var was = ESCAPE.audio.fx.noise;
+      ESCAPE.audio.fx.noise = 1;
+      ESCAPE.audio._applyFxDom(true);
+      t.ok(noiseEl && parseFloat(noiseEl.style.opacity || '0') === 0,
+        '系統Z: DOMの粒子ノイズは止まっている', noiseEl ? noiseEl.style.opacity : 'なし');
+      g.render();
+      t.ok(R.post.uni.uGrain.value > R.post.baseGrain,
+        '系統Z: 発見スティングのノイズは後処理の粒子が引き取る',
+        R.post.uni.uGrain.value.toFixed(3));
+      ESCAPE.audio.fx.noise = was;
+      ESCAPE.audio._applyFxDom(true);
+      g.render();
+    }
+
+    /* 4) 既定（Y＋Z）の輝度ゲート3視点 */
+    p417GateAll(t, g, R.tier);
+  }
+
+  function testP417Fallback(t, g) {
+    var R = ESCAPE.RQ;
+    if (!R) return;
+    /* fallback が系統X（テクセル・ライトマップ）の経路を通ることを、
+       小さなテスト迷路を1つ組んで確かめる（製品の世界には触らない）。 */
+    var was = R.tier;
+    R.tier = 'fallback';
+    var w2 = null, err = null;
+    try {
+      w2 = new ESCAPE.World(ESCAPE.Maps.load('test'));
+    } catch (e) { err = e && e.message; }
+    R.tier = was;
+    if (!t.ok(!!w2, 'fallback: 世界を組める', err)) return;
+    t.ok(w2.stats.lmBytes > 0 && w2.stats.lmTiles > 0,
+      'fallback: 面ごとのライトマップを焼いている',
+      w2.stats.lmTiles + '面 / ' + (w2.stats.lmBytes / 1e6).toFixed(1) + 'MB');
+    t.ok(w2._atlas && w2._atlas.overflow === 0,
+      'fallback: ライトマップのアトラスが溢れていない', w2._atlas ? w2._atlas.overflow : -1);
+    var big = null, hasUV1 = false;
+    for (var i = 0; i < w2.group.children.length; i++) {
+      var m = w2.group.children[i];
+      if (m.material.lightMap) { big = m; hasUV1 = !!m.geometry.attributes.uv1; break; }
+    }
+    t.ok(!!big, 'fallback: 大面に lightMap が張られている');
+    t.ok(hasUV1, 'fallback: ライトマップ用の uv1 を持っている');
+    if (big) {
+      t.ok(big.material.type === 'MeshBasicMaterial',
+        'fallback: 素材は MeshBasicMaterial のまま（動的ライト無し）', big.material.type);
+      t.near(big.material.lightMapIntensity, Math.PI, 1e-6,
+        'fallback: lightMapIntensity は π（three の 1/π を戻す）');
+    }
+    t.ok(w2.lightingMode === 'baked', 'fallback: 照明は焼き込み扱い', w2.lightingMode);
+    w2.dispose();
+  }
+
   function runAll(opts) {
     var g = ESCAPE.game;
     var t = new Runner();
@@ -5345,7 +5700,9 @@
       /* P4.16 レーンB: タイトル画面 Escape ／ 研究員の日記の自動表示 */
       testP416Diary, testP416Title,
       /* P4.17 レーンB: 物語形式の強制メモ4枚（日記2〜4を進行路上で自動表示・壁メモで読み返し） */
-      testP417StoryGates
+      testP417StoryGates,
+      /* P4.17 段階2: 質感と光（品質段階・自動退避・近傍灯・輝度ゲート・退避先の系統X） */
+      testP417Tiers, testP417Degrade, testP417Lights, testP417Render, testP417Fallback
     ];
     /* 他モジュールが登録した追加スイート（P4.10a の敵2体・絶叫・地図リセット等）も runAll に乗せる */
     if (ESCAPE.__extraSuites && ESCAPE.__extraSuites.length) suites = suites.concat(ESCAPE.__extraSuites);
@@ -5476,6 +5833,20 @@
       t.ok(g.progress.diaryRead === false && g.progress._diaryArmed === false,
         '復帰: 日記が未読・未武装の初期状態',
         g.progress.diaryRead + '/' + g.progress._diaryArmed);
+    }
+
+    /* P4.17 段階2: 描画品質も製品初期状態（起動時に決めた段階）へ戻っていること */
+    if (ESCAPE.RQ) {
+      var RQ = ESCAPE.RQ;
+      t.ok(RQ.degraded === false && RQ.tier === RQ.bootTier,
+        '復帰: 描画品質が起動時の段階に戻っている', RQ.tier + ' / ' + RQ.bootTier);
+      t.ok(g.world.lightingMode === (RQ.isY() ? 'dynamic' : 'baked'),
+        '復帰: 大面の照明方式が製品どおり', g.world.lightingMode);
+      var rqEl = document.getElementById('rq-notice');
+      t.ok(!rqEl || !rqEl.classList.contains('show'),
+        '復帰: 退避の通知が画面に残っていない');
+      t.ok(!RQ.rig || RQ.rig.slots.length === RQ.TIERS[RQ.tier].lights,
+        '復帰: 近傍灯の本数が段階どおり', RQ.rig ? RQ.rig.slots.length : 0);
     }
 
     /* P4.16 項目4: 最後にタイトルへ戻す＝製品初期状態（起動直後と同じ画面）へ完全復帰 */

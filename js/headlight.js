@@ -278,7 +278,11 @@
   };
 
   Headlight.prototype._apply = function () {
-    var lv = this.level, T = this.T;
+    var T = this.T;
+    /* P4.17 段階2: 後処理（系統Z）は線形空間で露出を掛けてから ACES を通す。
+       加算合成のライトはそのままだと白飛びするので、後処理がある間だけ
+       露出ぶんを打ち消して見た目を現行に揃える（形・広がりは一切変えない）。 */
+    var lv = this.level * ((ESCAPE.RQ && ESCAPE.RQ.post) ? ESCAPE.RQ.addLightScale() : 1);
     var cf = this.conePitchFade();
     this._coneMat.opacity = lv * T.coneGain * cf;
     this._beamMat.opacity = lv * T.beamGain;

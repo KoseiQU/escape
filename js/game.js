@@ -28,7 +28,9 @@
     this.canvas = document.getElementById('view');
 
     this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: false, powerPreference: 'high-performance' });
-    this.renderer.setPixelRatio(Math.min(global.devicePixelRatio || 1, 2));
+    /* P4.17 段階2: 解像度倍率は品質段階が決める（high=2 / mobile=1.0〜1.5 / 退避=1.25） */
+    if (ESCAPE.RQ) ESCAPE.RQ.applyRenderer(this.renderer);
+    else this.renderer.setPixelRatio(Math.min(global.devicePixelRatio || 1, 2));
     /* テクスチャの異方性はGPU上限内で控えめに（スマホ優先） */
     if (ESCAPE.Textures) {
       ESCAPE.Textures.setAnisotropy(Math.min(8, this.renderer.capabilities.getMaxAnisotropy()));
@@ -71,6 +73,9 @@
 
     this.input = new ESCAPE.Input({ dom: this.dom, canvas: this.canvas });
 
+    /* P4.17 段階2: 近傍灯・後処理・自動退避の監視を結線する（scene と world の後） */
+    if (ESCAPE.RQ) ESCAPE.RQ.attach(this);
+
     global.addEventListener('resize', function () { self.resize(); });
     global.addEventListener('orientationchange', function () { self.resize(); });
     this.resize();
@@ -97,6 +102,7 @@
     /* updateStyle=true が必須。canvas は置換要素なので inset:0 だけでは
        CSSサイズが決まらず、devicePixelRatio>1 の端末で描画面が画面より大きくなる。 */
     this.renderer.setSize(w, h, true);
+    if (ESCAPE.RQ) ESCAPE.RQ.resize(w, h);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
     this.updateChrome();
@@ -120,6 +126,8 @@
     if (!isFinite(dt) || dt < 0) dt = 0;
     if (dt > MAX_FRAME) dt = MAX_FRAME;
     this._accum += dt;
+    /* P4.17 段階2-2: 実フレーム時間の監視（5秒の中央値が20ms超を2回連続で退避） */
+    if (ESCAPE.RQ) ESCAPE.RQ.sampleFrame(dt * 1000, now);
     var guard = 0;
     while (this._accum >= FIXED_DT && guard++ < 8) {
       this.stepFrame(FIXED_DT);
@@ -235,7 +243,10 @@
   Game.prototype.render = function () {
     this.updateChrome();
     this.updateDebug();
-    this.renderer.render(this.scene, this.camera);
+    /* P4.17 段階2: 近傍灯の更新 → 後処理があればそちらが描く（無ければ直接描く） */
+    var rq = ESCAPE.RQ;
+    if (rq) rq.beforeRender(this);
+    if (!(rq && rq.renderScene(this))) this.renderer.render(this.scene, this.camera);
     this.renderCount++;
   };
 
@@ -286,6 +297,7 @@
     /* P3b/P4: 進行状態・音イベント・ステルス・敵AI も製品初期状態へ戻す
        （progress → stealth → ai の順。ai.reset は新しい map/world を参照する） */
     /* P4.8: ロープ・地図・ヘッドライトも新しい map を掴み直して初期状態へ */
+    if (ESCAPE.RQ) ESCAPE.RQ.onWorldRebuilt();
     if (this.rope) this.rope.reset();
     if (this.minimap) this.minimap.reset();
     if (this.headlight) this.headlight.reset();

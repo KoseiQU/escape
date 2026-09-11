@@ -131,6 +131,16 @@
       rgba(255,226,226,.62) 0%, rgba(178,44,44,.42) 48%, rgba(40,0,0,.10) 100%);
     mix-blend-mode:screen;
   }
+  /* P4.17 段階2-2: 描画の自動退避の通知。短く出て消える */
+  #rq-notice {
+    position:fixed; left:50%; top:12%; transform:translateX(-50%);
+    z-index:36; pointer-events:none; opacity:0;
+    padding:8px 16px; border-radius:4px;
+    background:rgba(10,14,18,.72); border:1px solid rgba(150,175,200,.22);
+    color:#cfe0ee; font-size:14px; letter-spacing:.06em; white-space:nowrap;
+    transition:opacity .4s ease;
+  }
+  #rq-notice.show { opacity:1; }
   /* 発見スティングのノイズ。背景画像はCanvasから生成する（外部素材禁止） */
   #fx-noise {
     position:fixed; inset:-12px; z-index:31; pointer-events:none; opacity:0;
@@ -395,6 +405,8 @@
 
   <div id="fx-vignette"></div>
   <div id="fx-noise"></div>
+  <!-- P4.17 段階2-2: 自動退避の通知（一度だけ・短く） -->
+  <div id="rq-notice"></div>
   <div id="fx-flash"></div>
   <div id="fx-dark"></div>
   <div id="blackout"></div>
@@ -452,6 +464,8 @@
   </div>
 
   <script src="js/three.min.js"></script>
+  <!-- P4.17 段階2: 描画品質の段階（?q=high|mobile|fallback|off）。world.js より前に読む -->
+  <script src="js/render_quality.js"></script>
   <script src="js/map.js"></script>
   <script src="js/maps/test.js"></script>
   <script src="js/maps/area1.js"></script>

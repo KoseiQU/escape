@@ -201,8 +201,61 @@
   var Y_BIAS = 0;
   function setYBias(v) { Y_BIAS = v; }
 
-  function Builder() {
+  /* ================================================================
+   * P4.17 段階2「質感と光」— js/render_quality.js（ESCAPE.RQ）との連絡
+   *   Y（既定）: 大面（床・壁・天井）を MeshStandardMaterial にし、
+   *              頂点色＝アルベド／焼き込み光＝bakedLight 属性に分けて持つ。
+   *              焼き込み光は uBakedMix 倍だけ残し、残りを近傍灯の実ライトが載せる。
+   *   X（退避）: 大面にテクセル・ライトマップ（uv1）を張る。素材は Basic のまま。
+   *   off      : P4.16 までと同じ（頂点色＝アルベド×焼き込み光）。
+   * ============================================================== */
+  var Y_ON = false;          /* 系統Y（大面を PBR にする） */
+  var X_ON = false;          /* 系統X（テクセル・ライトマップ） */
+  var Y_MIX = 1;             /* 焼き込みに残す割合（残りは実ライト） */
+  var Y_PB = 2.70;           /* 二乗則側の基準（灯と同じ減衰形の強さ） */
+  var X_AMB = 0;             /* 系統X: ライトマップへ足す環境光の底上げ */
+  /* 大面＝Y で PBR・X でライトマップを張る素材キー */
+  var BIG_TEX = {
+    floor: 1, floorTile: 1, floorWet: 1, floorMetal: 1, ceil: 1,
+    wall: 1, wall2: 1, wall3: 1, wallPaint: 1, wallMetal: 1
+  };
+  /**
+   * shade() が「アルベド」と「焼き込み光」を分けて渡すための一時領域。
+   * 大面のビルダーだけがこれを読む。書かない shade（＝既に最終色を返す造形）は
+   * on=false のままなので、従来どおり戻り値をそのまま頂点色にする。
+   */
+  var SPLIT = { on: false, want: false, a: [0, 0, 0], l: [1, 1, 1] };
+  function splitSet(tint, ao, light) {
+    SPLIT.on = true;
+    for (var i = 0; i < 3; i++) {
+      var t = tint[i];
+      /* アルベドは1を超えさせない。1超ぶんは光側へ回す＝積は元のまま */
+      SPLIT.a[i] = (t > 1 ? 1 : t) * ao;
+      SPLIT.l[i] = light[i] * (t > 1 ? t : 1);
+    }
+  }
+
+  /* 系統X: ライトマップの uv1 割り当て。LM が張られている面はその矩形へ、
+   * それ以外の面は「白タイル」を指す（白＝1.0＝lightMap が何も変えない）。 */
+  var LM_ON = false;
+  var LM = null;
+  var LM_WHITE_U = 0, LM_WHITE_V = 0;
+  function lmWhiteShade() { return [1, 1, 1]; }
+
+  /** u x v の正規化（面の表向き。cross(u,v) が法線と同じ向きに渡す規約） */
+  function crossN(u, v) {
+    var x = u[1] * v[2] - u[2] * v[1];
+    var y = u[2] * v[0] - u[0] * v[2];
+    var z = u[0] * v[1] - u[1] * v[0];
+    var l = Math.hypot(x, y, z) || 1;
+    return [x / l, y / l, z / l];
+  }
+
+  function Builder(big) {
     this.pos = []; this.uv = []; this.col = []; this.idx = []; this.n = 0;
+    /* big=true のときだけ余分に持つ（アルベドと焼き込み光の分離・法線・uv1） */
+    this.big = !!big;
+    this.bake = []; this.uv1 = []; this.blocks = [];
   }
   Builder.prototype.isEmpty = function () { return this.n === 0; };
 
@@ -238,11 +291,28 @@
         this.pos.push(x, y, z);
         if (uvf) { var q = uvf(s, t); this.uv.push(q[0] * uRep, q[1] * vRep); }
         else this.uv.push(s * uRep, t * vRep);
+        if (LM_ON) {
+          if (LM) this.uv1.push(LM.u0 + LM.du * s, LM.v0 + LM.dv * t);
+          else this.uv1.push(LM_WHITE_U, LM_WHITE_V);
+        }
+        SPLIT.on = false; SPLIT.want = this.big;
         var c = shade(x, y, z);
-        this.col.push(c[0], c[1], c[2]);
+        if (this.big) {
+          if (SPLIT.on) {
+            this.col.push(SPLIT.a[0], SPLIT.a[1], SPLIT.a[2]);
+            this.bake.push(SPLIT.l[0], SPLIT.l[1], SPLIT.l[2]);
+          } else {
+            /* 分離を書かない造形（既に最終色）は「アルベド＝その色・光＝1」とする */
+            this.col.push(c[0], c[1], c[2]);
+            this.bake.push(1, 1, 1);
+          }
+        } else {
+          this.col.push(c[0], c[1], c[2]);
+        }
         this.n++;
       }
     }
+    if (this.big) this.blocks.push({ b: base, w: nu + 1, h: nv + 1, n: crossN(u, v) });
     var w = nu + 1;
     for (var jj = 0; jj < nv; jj++) {
       for (var ii = 0; ii < nu; ii++) {
@@ -290,7 +360,9 @@
         var pz = (e ? p1[2] : p0[2]) + nz * r;
         py += Y_BIAS;
         this.pos.push(px, py, pz);
+        if (LM_ON) this.uv1.push(LM_WHITE_U, LM_WHITE_V);
         this.uv.push(k / seg * 2, e * len * 0.5);
+        SPLIT.on = false; SPLIT.want = false;
         var c = shade(px, py, pz, nx, ny, nz);
         this.col.push(c[0], c[1], c[2]);
         this.n++;
@@ -302,11 +374,84 @@
     }
   };
 
+  /**
+   * P4.17 段階2-3 ③「大面の法線スムージング」。
+   * 1) 面ごとの格子の**中心差分**で法線を出す（三角形分割に依らない＝
+   *    斜路やたわみでも面ごとのフラット陰影にならない）。
+   * 2) 同じ位置に重なる頂点（＝隣のマスとの継ぎ目）の法線を、
+   *    向きが60度以内のものだけ平均する（壁と床の直角は丸めない）。
+   */
+  var SMOOTH_COS = 0.5;          /* 60度 */
+  Builder.prototype.finishNormals = function () {
+    var n = this.n, P = this.pos;
+    var N = new Float32Array(n * 3);
+    var bl = this.blocks, k, i, j;
+    for (k = 0; k < bl.length; k++) {
+      var B0 = bl[k], b = B0.b, w = B0.w, h = B0.h, fn = B0.n;
+      for (j = 0; j < h; j++) {
+        for (i = 0; i < w; i++) {
+          var i0 = (i > 0 ? i - 1 : i), i1 = (i < w - 1 ? i + 1 : i);
+          var j0 = (j > 0 ? j - 1 : j), j1 = (j < h - 1 ? j + 1 : j);
+          var a = (b + j * w + i1) * 3, c = (b + j * w + i0) * 3;
+          var d = (b + j1 * w + i) * 3, e = (b + j0 * w + i) * 3;
+          var ux = P[a] - P[c], uy = P[a + 1] - P[c + 1], uz = P[a + 2] - P[c + 2];
+          var vx = P[d] - P[e], vy = P[d + 1] - P[e + 1], vz = P[d + 2] - P[e + 2];
+          var nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+          var len = Math.hypot(nx, ny, nz);
+          if (len < 1e-9) { nx = fn[0]; ny = fn[1]; nz = fn[2]; }
+          else {
+            nx /= len; ny /= len; nz /= len;
+            if (nx * fn[0] + ny * fn[1] + nz * fn[2] < 0) { nx = -nx; ny = -ny; nz = -nz; }
+          }
+          var o = (b + j * w + i) * 3;
+          N[o] = nx; N[o + 1] = ny; N[o + 2] = nz;
+        }
+      }
+    }
+    /* 継ぎ目のスムージング（5mm 格子で同一位置とみなす） */
+    var map = new Map(), key;
+    var Q = 200;   /* 1m を 200 分割＝5mm */
+    for (i = 0; i < n; i++) {
+      var p = i * 3;
+      key = (Math.round(P[p] * Q) * 32768 + Math.round(P[p + 1] * Q)) * 32768 + Math.round(P[p + 2] * Q);
+      var lst = map.get(key);
+      if (lst) lst.push(i); else map.set(key, [i]);
+    }
+    var out = new Float32Array(N.length);
+    map.forEach(function (lst) {
+      if (lst.length === 1) {
+        var s = lst[0] * 3;
+        out[s] = N[s]; out[s + 1] = N[s + 1]; out[s + 2] = N[s + 2];
+        return;
+      }
+      for (var q = 0; q < lst.length; q++) {
+        var oi = lst[q] * 3;
+        var sx = 0, sy = 0, sz = 0;
+        for (var r = 0; r < lst.length; r++) {
+          var ri = lst[r] * 3;
+          if (N[oi] * N[ri] + N[oi + 1] * N[ri + 1] + N[oi + 2] * N[ri + 2] < SMOOTH_COS) continue;
+          sx += N[ri]; sy += N[ri + 1]; sz += N[ri + 2];
+        }
+        var l2 = Math.hypot(sx, sy, sz);
+        if (l2 < 1e-9) { out[oi] = N[oi]; out[oi + 1] = N[oi + 1]; out[oi + 2] = N[oi + 2]; }
+        else { out[oi] = sx / l2; out[oi + 1] = sy / l2; out[oi + 2] = sz / l2; }
+      }
+    });
+    return out;
+  };
+
   function buildMesh(b, material) {
     var geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(b.pos), 3));
     geo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(b.uv), 2));
     geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(b.col), 3));
+    if (b.uv1.length === b.n * 2) {
+      geo.setAttribute('uv1', new THREE.BufferAttribute(new Float32Array(b.uv1), 2));
+    }
+    if (b.big && b.bake.length === b.n * 3) {
+      geo.setAttribute('bakedLight', new THREE.BufferAttribute(new Float32Array(b.bake), 3));
+      geo.setAttribute('normal', new THREE.BufferAttribute(b.finishNormals(), 3));
+    }
     geo.setIndex(b.idx);
     geo.computeBoundingSphere();
     return new THREE.Mesh(geo, material);
@@ -322,7 +467,8 @@
     this.flickers = [];
     this.sensorLamps = [];                  /* P4.13: 点滅する表示灯（InstancedMesh 1体） */
     this.saveLamps = [];                    /* P4.14: 記録端末の緑ランプ（InstancedMesh 1体） */
-    this.stats = { triangles: 0, drawGroups: 0, fixtures: 0, buildMs: 0 };
+    this.stats = { triangles: 0, drawGroups: 0, fixtures: 0, buildMs: 0,
+      lmBytes: 0, lmBakeMs: 0, lmTiles: 0 };
     this._build();
   }
 
@@ -587,7 +733,10 @@
    * ＝マス単位の二値判定にすると影の境界がマス目に沿って角張るのを防ぐ。
    */
   World.prototype._bakeVisibility = function (f) {
-    var S = VIS_STEP, pad = f.R + S;
+    /* 系統X: 遮蔽格子を 0.5m に詰め、ぼかしを 5x5 に広げて影の縁に半影を作る
+     * （テクセル単位の焼き込みでしか見えない差） */
+    var fine = X_ON;
+    var S = fine ? (VIS_STEP * 0.5) : VIS_STEP, pad = f.R + S;
     var x0 = Math.floor((f.x - pad) / S) * S, z0 = Math.floor((f.z - pad) / S) * S;
     var w = Math.ceil((pad * 2) / S) + 1, h = w;
     var raw = new Float32Array(w * h);
@@ -598,25 +747,26 @@
       }
     }
     var vis = new Float32Array(w * h);
+    var K = fine ? 2 : 1;
     for (var jj = 0; jj < h; jj++) {
       for (var ii = 0; ii < w; ii++) {
         var sum = 0, n = 0;
-        for (var dj = -1; dj <= 1; dj++) {
-          for (var di = -1; di <= 1; di++) {
+        for (var dj = -K; dj <= K; dj++) {
+          for (var di = -K; di <= K; di++) {
             var a = ii + di, b = jj + dj;
             if (a < 0 || b < 0 || a >= w || b >= h) continue;
-            var wgt = (di === 0 && dj === 0) ? 2 : 1;
+            var wgt = fine ? (1 / (1 + di * di + dj * dj)) : ((di === 0 && dj === 0) ? 2 : 1);
             sum += raw[b * w + a] * wgt; n += wgt;
           }
         }
         vis[jj * w + ii] = sum / n;
       }
     }
-    f.vis = vis; f.vx0 = x0; f.vz0 = z0; f.vw = w; f.vh = h;
+    f.vis = vis; f.vx0 = x0; f.vz0 = z0; f.vw = w; f.vh = h; f.vs = S;
   };
 
   World.prototype._visAt = function (f, x, z) {
-    var S = VIS_STEP;
+    var S = f.vs || VIS_STEP;
     var fx = (x - f.vx0) / S, fz = (z - f.vz0) / S;
     var i = Math.floor(fx), j = Math.floor(fz);
     if (i < 0 || j < 0 || i >= f.vw - 1 || j >= f.vh - 1) return 0;
@@ -673,7 +823,26 @@
    * skipIdx を渡すとその器具を除外（チラつき分の分離に使う）。
    * onlyIdx を渡すとその器具だけ（＝加算メッシュ用）。
    */
-  World.prototype._shade = function (px, py, pz, nx, ny, nz, ownerKey, onlyIdx, out) {
+  /** 従来の減衰（光溜まりの縁を早く落とす） */
+  function classicFall(d, R) {
+    var f = 1 - d / R;
+    return f * f * (0.35 + 0.65 * f);
+  }
+  /**
+   * P4.17 段階2: 近傍灯（PointLight decay=2・distance=R）と同じ形の減衰。
+   * 窓は three.js の getDistanceAttenuation と同式にする＝
+   * 実ライトと焼き込みで光の広がりが食い違わない（弱点①の「明るさ二重」対策）。
+   */
+  function pointFall(d, R) {
+    var q = d / R;
+    q = 1 - q * q * q * q;
+    if (q < 0) q = 0;
+    var dd = d * d;
+    if (dd < 0.0625) dd = 0.0625;
+    return Y_PB * q * q / dd;
+  }
+
+  World.prototype._shade = function (px, py, pz, nx, ny, nz, ownerKey, onlyIdx, out, classicOnly) {
     var lights = this.lightIndex[ownerKey];
     var r, g, b;
     if (onlyIdx === undefined) {
@@ -681,6 +850,7 @@
       var up = (ny + 1) * 0.5;
       var amb = 0.62 + 0.5 * up;
       r = AMBIENT.r * amb; g = AMBIENT.g * amb; b = AMBIENT.b * amb;
+      if (X_AMB > 0) { r += X_AMB * 0.82; g += X_AMB * 0.94; b += X_AMB * 1.18; }
     } else {
       r = g = b = 0;
     }
@@ -697,8 +867,8 @@
         if (ndl < 0) ndl = 0;
         var vis = this._visAt(f, px, pz);
         if (vis <= 0.001) continue;
-        var fall = 1 - d / f.R;
-        fall = fall * fall * (0.35 + 0.65 * fall);   /* 光溜まりの縁を早く落とす */
+        var fall = classicFall(d, f.R);
+        if (Y_ON && !classicOnly) fall = Y_MIX * fall + (1 - Y_MIX) * pointFall(d, f.R);
         var k = fall * vis * (LIGHT_WRAP + (1 - LIGHT_WRAP) * ndl) * f.gain;
         if (f.state === 'flicker') {
           k *= (onlyIdx === undefined) ? FLICKER_BAKE : (1 - FLICKER_BAKE);
@@ -750,11 +920,64 @@
     var TILE = ESCAPE.TILE;
     var self = this;
 
+    /* ---- P4.17 段階2: 描画品質の段階を読む（既定＝Y＋Z） ---- */
+    var RQ = ESCAPE.RQ;
+    Y_ON = !!(RQ && RQ.isY());
+    X_ON = !!(RQ && RQ.isX());
+    Y_MIX = RQ ? RQ.bakeMix() : 1;
+    Y_PB = RQ ? RQ.tune.pointBase : Y_PB;
+    X_AMB = (X_ON && RQ) ? RQ.tune.xamb : 0;
+    /* 明滅の加算メッシュも焼き込みと同じ割合に落とす（実ライト側が残りを出す） */
+    this.flickScale = (Y_ON ? Y_MIX : 1) * (RQ ? RQ.addLightScale() : 1);
+    this.lightingMode = Y_ON ? 'dynamic' : 'baked';
+    LM_ON = false; LM = null;
+
     this._bakeAO();
     this.fixtures = this._placeFixtures();
     this._assignFlickerGroups();
     this.lightIndex = this._buildLightIndex();
     this.stats.fixtures = this.fixtures.length;
+
+    /* ---- 系統X（退避先）: 面ごとの小さなライトマップを1枚のアトラスへ敷き詰める ---- */
+    var atlas = null, LMR = 0, LMRW = 0;
+    var lmJobs = [];
+    if (X_ON) {
+      LMR = RQ.lmRes;
+      LMRW = Math.round(LMR * (map.wallHeight / T));
+      var nFC = 0, nW = 0;
+      for (var rz0 = 0; rz0 < map.height; rz0++) {
+        for (var cz0 = 0; cz0 < map.width; cz0++) {
+          if (map.isWalkable(cz0, rz0)) nFC += 2;
+          if (!map.isSolid(cz0, rz0)) continue;
+          if (map.isWalkable(cz0 + 1, rz0)) nW++;
+          if (map.isWalkable(cz0 - 1, rz0)) nW++;
+          if (map.isWalkable(cz0, rz0 + 1)) nW++;
+          if (map.isWalkable(cz0, rz0 - 1)) nW++;
+        }
+      }
+      var area = nFC * (LMR + 2) * (LMR + 2) + nW * (LMR + 2) * (LMRW + 2);
+      var side = Math.ceil(Math.sqrt(area * 1.22) / 64) * 64;
+      if (side > 4096) side = 4096;
+      atlas = new RQ.LightmapAtlas(side);
+      LM_ON = true; LM = null;
+      LM_WHITE_U = atlas.whiteU; LM_WHITE_V = atlas.whiteV;
+      this._atlas = atlas;
+    }
+    /** ライトマップのタイルを確保して uv1 を張る（面の直前に呼ぶ） */
+    function lmBegin(w2, h2) {
+      if (!atlas) return null;
+      var r2 = atlas.alloc(w2, h2);
+      if (!r2) { LM = null; return null; }
+      LM = { u0: r2.x / atlas.size, v0: r2.y / atlas.size, du: r2.w / atlas.size, dv: r2.h / atlas.size };
+      return r2;
+    }
+    function lmEnd() { LM = null; }
+    /** 焼き込みは面を全部積んでから一括で行う（build の山を分ける） */
+    function lmJob(r2, o2, u2, v2, deform2, shadeFn) {
+      if (r2) lmJobs.push({ r: r2, o: o2, u: u2, v: v2, d: deform2, s: shadeFn });
+    }
+    self._lmBegin = lmBegin; self._lmEnd = lmEnd; self._lmJob = lmJob;
+    self._lmRes = function () { return { r: LMR, rw: LMRW, on: !!atlas }; };
 
     /* --- 空間チャンク × 素材 でメッシュを分ける（P4.9・80x80対応） ---
      * 80x80 を CHUNK マス角に切り、チャンクごとにマージ済みメッシュを作る。
@@ -776,7 +999,7 @@
     self._bset = bset;
     function bag(texKey) {
       var g2 = chunkBags[curChunk] || (chunkBags[curChunk] = Object.create(null));
-      return g2[texKey] || (g2[texKey] = new Builder());
+      return g2[texKey] || (g2[texKey] = new Builder(Y_ON && !!BIG_TEX[texKey]));
     }
     var B = {};
     Object.defineProperty(B, 'floor', { get: function () { return bag((ZONE_TEX[curZone] || DEFAULT_TEX).floor); } });
@@ -811,11 +1034,19 @@
       if (k < 0) k = 0;
       return 0.42 + 0.58 * k;
     }
+    /* 大面（Y で PBR にする面）の焼き込みは「近傍灯が載せるぶんを含まない素の焼き」
+     * ＝ classicOnly。素材側の uBakedMix で残す割合を掛ける。
+     * 小道具・什器・デカールは焼き込みのままだが、減衰を灯と同じ形に混ぜて
+     * 明るさの系統を壁床に揃える（契約 段階2-3 ①）。 */
     /** shade関数を作る（tint × 接地AO） */
     function shader(ownerKey, tint, only) {
       return function (x, y, z, nx, ny, nz) {
-        self._shade(x, y, z, nx, ny, nz, ownerKey, only, scratch);
         var a = propAO(y);
+        if (Y_ON && SPLIT.want) {
+          self._shade(x, y, z, nx, ny, nz, ownerKey, only, scratch, true);
+          splitSet(tint, a, scratch);
+        }
+        self._shade(x, y, z, nx, ny, nz, ownerKey, only, scratch);
         return [scratch[0] * tint[0] * a, scratch[1] * tint[1] * a, scratch[2] * tint[2] * a];
       };
     }
@@ -830,23 +1061,34 @@
     function floorShader(ownerKey, tint, n, only) {
       var lv = (n[1] > 0) ? FLOOR_LEVEL : 1;
       return function (x, y, z) {
+        var ao = self._aoFloor(x, z);
+        var a = ao * lv;
+        if (Y_ON && SPLIT.want) {
+          self._shade(x, y, z, n[0], n[1], n[2], ownerKey, only, scratch, true);
+          scratch[0] *= lv; scratch[1] *= lv; scratch[2] *= lv;
+          splitSet(tint, ao, scratch);
+        }
         self._shade(x, y, z, n[0], n[1], n[2], ownerKey, only, scratch);
-        var a = self._aoFloor(x, z) * lv;
         return [scratch[0] * tint[0] * a, scratch[1] * tint[1] * a, scratch[2] * tint[2] * a];
       };
     }
     /** 壁面用（隅と床際・天井際のAOを焼き込む）。fyFn はそのマスの床高さ */
     function wallShader(ownerKey, tint, n, only, fyBase, chLocal) {
       return function (x, y, z) {
-        self._shade(x, y, z, n[0], n[1], n[2], ownerKey, only, scratch);
         var fy = (typeof fyBase === 'function') ? fyBase(x, z) : (fyBase || 0);
         var a = self._aoWall(x, y, z, n[0], n[2], fy, chLocal);
+        if (Y_ON && SPLIT.want) {
+          self._shade(x, y, z, n[0], n[1], n[2], ownerKey, only, scratch, true);
+          splitSet(tint, a, scratch);
+        }
+        self._shade(x, y, z, n[0], n[1], n[2], ownerKey, only, scratch);
         return [scratch[0] * tint[0] * a, scratch[1] * tint[1] * a, scratch[2] * tint[2] * a];
       };
     }
     /* 端に細かい行を入れた分割（接地の暗がりを1マス内で解像する） */
     var FDIV = [0, 0.15, 0.5, 0.85, 1];
     var CDIV = [0, 0.15, 0.85, 1];
+    var XDIV = [0, 0.5, 1];      /* 系統X: AOはテクセル側で出るので粗くてよい */
     var ADIV = [0, 0.5, 1];      /* 加算合成の光溜まりは粗くてよい */
 
     /** その器具が (col,row) を照らしているか（加算メッシュを張る範囲の判定） */
@@ -889,11 +1131,29 @@
 
       var uvF = uvVariant(hash2(c + 41, r + 7));
       var uvC = uvVariant(hash2(c + 71, r + 23));
-      B.floor.gridP([x0, 0, z1], [T, 0, 0], [0, 0, -T], FDIV, FDIV, 1, 1,
-        floorShader(key, ft, [0, 1, 0]), uvF, defFloor);
       var ct = this._tintAt(c, r).w;
-      B.ceil.gridP([x0, 0, z0], [T, 0, 0], [0, 0, T], CDIV, CDIV, 1, 1,
-        floorShader(key, ct, [0, -1, 0]), uvC, defCeil(ch));
+      if (atlas) {
+        /* 系統X: 照明はテクセルへ移るので、頂点分割は接地AOのために細かくしなくてよい
+         * （＝三角形が減る。床16→4・天井9→4 クアッド） */
+        var shF = floorShader(key, ft, [0, 1, 0]);
+        var rF = lmBegin(LMR, LMR);
+        B.floor.gridP([x0, 0, z1], [T, 0, 0], [0, 0, -T], XDIV, XDIV, 1, 1,
+          lmWhiteShade, uvF, defFloor);
+        lmEnd();
+        lmJob(rF, [x0, 0, z1], [T, 0, 0], [0, 0, -T], defFloor, shF);
+        var shC = floorShader(key, ct, [0, -1, 0]);
+        var dC = defCeil(ch);
+        var rC = lmBegin(LMR, LMR);
+        B.ceil.gridP([x0, 0, z0], [T, 0, 0], [0, 0, T], XDIV, XDIV, 1, 1,
+          lmWhiteShade, uvC, dC);
+        lmEnd();
+        lmJob(rC, [x0, 0, z0], [T, 0, 0], [0, 0, T], dC, shC);
+      } else {
+        B.floor.gridP([x0, 0, z1], [T, 0, 0], [0, 0, -T], FDIV, FDIV, 1, 1,
+          floorShader(key, ft, [0, 1, 0]), uvF, defFloor);
+        B.ceil.gridP([x0, 0, z0], [T, 0, 0], [0, 0, T], CDIV, CDIV, 1, 1,
+          floorShader(key, ct, [0, -1, 0]), uvC, defCeil(ch));
+      }
 
       var ff = flickerNear(c, r);
       if (ff >= 0 && litBy(c, r, ff)) {
@@ -1005,9 +1265,69 @@
     this._regionSigns(B, shader, planeShader);
     this._ceilKit(B, shader);
 
+    /* ---- 系統X: ライトマップを焼く（面を全部積んでから一括） ---- */
+    var lmTex = null;
+    if (atlas) {
+      var tb0 = (global.performance ? performance.now() : Date.now());
+      for (var lj = 0; lj < lmJobs.length; lj++) {
+        (function (jb) {
+          var o3 = jb.o, u3 = jb.u, v3 = jb.v, df = jb.d, sf = jb.s;
+          atlas.bake(jb.r, function (s3, t3, out3) {
+            var x3 = o3[0] + u3[0] * s3 + v3[0] * t3;
+            var y3 = o3[1] + u3[1] * s3 + v3[1] * t3;
+            var z3 = o3[2] + u3[2] * s3 + v3[2] * t3;
+            if (df) y3 = df(x3, z3, t3, s3);
+            var c3 = sf(x3, y3, z3);
+            out3[0] = c3[0]; out3[1] = c3[1]; out3[2] = c3[2];
+          });
+        })(lmJobs[lj]);
+      }
+      this.stats.lmBakeMs = (global.performance ? performance.now() : Date.now()) - tb0;
+      lmTex = atlas.texture();
+      this._track(lmTex);
+      this.stats.lmTiles = atlas.count;
+      this.stats.lmBytes = atlas.size * atlas.size * 4;
+    }
+
     /* ---- メッシュ化 ---- */
     var TX = ESCAPE.Textures;
-    function opaque(tex, extra) {
+    var bigMats = this._bigMats = { dynamic: Object.create(null), baked: Object.create(null) };
+    /**
+     * 大面の素材。
+     *   Y: MeshStandardMaterial（法線・粗さ・金属度）＋焼き込み光を足すシェーダ改造。
+     *      退避用に「焼き込みだけの Basic」も同じテクスチャで作っておき、
+     *      setLightingMode('baked') で即座に差し替えられるようにする。
+     *   X: MeshBasicMaterial ＋ lightMap（uv1）。
+     */
+    function bigMaterial(tex, key) {
+      var o = { map: TX.get(tex), vertexColors: true, fog: true };
+      /* three の Basic は lightMap を BRDF_Lambert（= 1/π）で受けるので π を掛けて戻す
+       * ＝ライトマップに焼いた値がそのまま画面の明るさになる（off と同じ露出） */
+      if (lmTex) { o.lightMap = lmTex; o.lightMapIntensity = Math.PI; }
+      if (Y_ON) {
+        var mm = ESCAPE.RQ.materialMaps(tex, ESCAPE.RQ.normalDiv());
+        var basic = ESCAPE.RQ.patchBasic(new THREE.MeshBasicMaterial(
+          { map: TX.get(tex), vertexColors: true, fog: true }));
+        bigMats.baked[key] = basic;
+        if (mm) {
+          var so = { map: o.map, vertexColors: true, fog: true };
+          so.normalMap = mm.normalMap;
+          so.normalScale = new THREE.Vector2(1.0, 1.0);
+          so.roughnessMap = mm.roughnessMap;
+          so.roughness = 1.0;
+          so.metalness = mm.profile.metal;
+          var std = ESCAPE.RQ.patchStandard(new THREE.MeshStandardMaterial(so));
+          bigMats.dynamic[key] = std;
+          return std;
+        }
+        var b2 = ESCAPE.RQ.patchBasic(new THREE.MeshBasicMaterial(o));
+        bigMats.dynamic[key] = b2;
+        return b2;
+      }
+      return new THREE.MeshBasicMaterial(o);
+    }
+    function opaque(tex, extra, key) {
+      if (key && BIG_TEX[key]) return bigMaterial(tex, key);
       var o = { map: TX.get(tex), vertexColors: true, fog: true };
       if (extra) for (var k in extra) o[k] = extra[k];
       return new THREE.MeshBasicMaterial(o);
@@ -1019,11 +1339,12 @@
       });
     }
     var MATS = {
-      floor: opaque('floor'), floorTile: opaque('floorTile'),
-      floorWet: opaque('floorWet'), floorMetal: opaque('floorMetal'),
-      ceil: opaque('ceiling'),
-      wall: opaque('wall'), wall2: opaque('wall2'), wall3: opaque('wall3'),
-      wallPaint: opaque('wallPaint'), wallMetal: opaque('wallMetal'),
+      floor: opaque('floor', null, 'floor'), floorTile: opaque('floorTile', null, 'floorTile'),
+      floorWet: opaque('floorWet', null, 'floorWet'), floorMetal: opaque('floorMetal', null, 'floorMetal'),
+      ceil: opaque('ceiling', null, 'ceil'),
+      wall: opaque('wall', null, 'wall'), wall2: opaque('wall2', null, 'wall2'),
+      wall3: opaque('wall3', null, 'wall3'),
+      wallPaint: opaque('wallPaint', null, 'wallPaint'), wallMetal: opaque('wallMetal', null, 'wallMetal'),
       litter: decal('litter'), poster: decal('poster'), sign: decal('sign'), zonesign: decal('zonesign'),
       metal: opaque('metal'), dark: opaque('metal'), lamp: opaque('lamp'),
       screen: opaque('screen'), paper: opaque('paper'), sheet: opaque('sheet'),
@@ -1059,7 +1380,14 @@
       }
     }
     /* 未使用の素材は破棄しておく（テクスチャは Textures 側のキャッシュが持つ） */
-    for (var mk in MATS) if (!matCache[mk]) MATS[mk].dispose();
+    for (var mk in MATS) {
+      if (matCache[mk]) continue;
+      MATS[mk].dispose();
+      if (bigMats.baked[mk]) { bigMats.baked[mk].dispose(); delete bigMats.baked[mk]; }
+      delete bigMats.dynamic[mk];
+    }
+    /* 退避用の素材も World が持つ（dispose で確実に消す） */
+    for (var bk in bigMats.baked) this._track(bigMats.baked[bk]);
     this.stats.chunks = chunkKeys.length;
 
     /* チラつき灯: 加算合成の光溜まり */
@@ -1074,7 +1402,9 @@
         if (bb.isEmpty()) continue;
         var fm = this._track(new THREE.MeshBasicMaterial({
           map: sub[s][1] ? TX.get(sub[s][1]) : null, vertexColors: true, fog: true,
-          blending: THREE.AdditiveBlending, depthWrite: false, transparent: true
+          blending: THREE.AdditiveBlending, depthWrite: false, transparent: true,
+          /* 系統Y は明滅の残りを実ライトが出すので、加算メッシュ側は同じ割合まで落とす */
+          color: new THREE.Color(this.flickScale, this.flickScale, this.flickScale)
         }));
         var fmesh = buildMesh(bb, fm);
         this._track(fmesh.geometry);
@@ -1127,7 +1457,18 @@
       /* 壁テクスチャは2種を混ぜる（1種だと欠けタイルの位置が反復して目立つ） */
       var wpick = hash2(cc * 17 + 3, rr * 23 + 11);
       var wb = (wpick < 0.34) ? B.wall : ((wpick < 0.67) ? B.wall2 : B.wall3);
-      wb.gridP(o, u, v, WDIV_S, WDIV_T, 1, 1, wallShader(key, wt, dir.n, undefined, fyAt, H), uvW, defWall);
+      var lmr = this._lmRes ? this._lmRes() : { on: false };
+      if (lmr.on) {
+        /* 系統X: 壁1面 = ライトマップ1タイル。頂点分割は2クアッドに落とす */
+        var shW = wallShader(key, wt, dir.n, undefined, fyAt, H);
+        var rW = this._lmBegin(lmr.r, lmr.rw);
+        wb.gridP(o, u, v, [0, 0.5, 1], [0, 1], 1, 1, lmWhiteShade, uvW, defWall);
+        this._lmEnd();
+        this._lmJob(rW, o, u, v, defWall, shW);
+      } else {
+        wb.gridP(o, u, v, WDIV_S, WDIV_T, 1, 1,
+          wallShader(key, wt, dir.n, undefined, fyAt, H), uvW, defWall);
+      }
       var ff = flickerNear(nc, nr);
       if (ff >= 0 && litBy(nc, nr, ff)) {
         var eo = [o[0] + dir.n[0] * 0.01, o[1], o[2] + dir.n[2] * 0.01];
@@ -2904,10 +3245,32 @@
     this.group.add(mesh);
   };
 
+  /**
+   * P4.17 段階2: 大面の照明の出し方を切り替える。
+   *   'dynamic' 近傍灯＋焼き込みの残り（系統Y の既定）
+   *   'baked'   焼き込みだけ（自動退避の行き先。世界は組み直さない＝止まらない）
+   * 退避では明滅の加算メッシュも元の強さへ戻す（実ライトが居なくなるため）。
+   */
+  World.prototype.setLightingMode = function (mode) {
+    var mats = this._bigMats;
+    if (!mats) return false;
+    var baked = (mode === 'baked');
+    var table = baked ? mats.baked : mats.dynamic;
+    for (var i = 0; i < this.group.children.length; i++) {
+      var m = this.group.children[i];
+      var want = table[m.name];
+      if (want && m.material !== want) m.material = want;
+    }
+    var RQ2 = ESCAPE.RQ;
+    this.flickScale = (baked ? 1 : (Y_ON ? Y_MIX : 1)) * (RQ2 ? RQ2.addLightScale() : 1);
+    this.lightingMode = baked ? 'baked' : 'dynamic';
+    return true;
+  };
+
   World.prototype.update = function (t) {
     for (var i = 0; i < this.flickers.length; i++) {
       var e = this.flickers[i];
-      var lvl = flickerLevel(e.pattern, e.phase, t);
+      var lvl = flickerLevel(e.pattern, e.phase, t) * (this.flickScale || 1);
       for (var m = 0; m < e.mats.length; m++) e.mats[m].color.setScalar(lvl);
     }
     /* P4.13: センサー表示灯の点滅（約1.25Hz、点灯55%）。位相はマスごとにずらす */
