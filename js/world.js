@@ -2441,24 +2441,28 @@
       if (lampStyle) {
         /* P5c: 下水道の灯具。鋳鉄の笠は**暗く**（白い蛍光灯箱に見せない）、
            発光するのはレンズだけ。'cage' ケージ付き / 'bulb' 裸電球（旧坑）。 */
-        var shIron = shader(key, [0.30, 0.29, 0.28]);
-        var shCage = shader(key, [0.22, 0.22, 0.21]);
+        /* 器具の筐体は**灯の真下でなく灯の位置そのもの**にあるので、
+           焼き込み照明で拾うと距離ゼロで白飛びする（＝白い蛍光灯箱に見えた原因）。
+           鋳鉄の笠は自前の固定色で塗り、光るのはレンズだけにする。 */
+        var shIron = flat([0.105, 0.102, 0.098]);
+        var shCage = flat([0.11, 0.11, 0.105]);
         if (lampStyle === 'bulb') {
           /* 裸電球: 天井からコード1本で下がる。ソケットは暗く、球だけ光る */
           B.dark.tube([f.x, topY - 0.02, f.z], [f.x, f.y + 0.12, f.z], 0.018, 4, shCage);
           B.dark.box(f.x, f.y + 0.10, f.z, 0.09, 0.12, 0.09, 2, shIron);
           B.lamp.box(f.x, f.y - 0.02, f.z, 0.15, 0.17, 0.15, 2, function () { return lampCol; });
         } else {
-          /* ケージ付き壁灯（bulkhead）: 背板 → 鋳鉄の笠 → レンズ → 金網3本 */
-          B.dark.box(f.x, topY - 0.07, f.z, 0.40, 0.14, 0.40, 1.6, shIron);
-          B.dark.box(f.x, topY - 0.20, f.z, 0.46, 0.16, 0.46, 1.6, shIron);
-          lo = [f.x - 0.16, f.y + 0.02, f.z - 0.16]; lu = [0.32, 0, 0]; lv = [0, 0, 0.32];
-          B.lamp.grid(lo, lu, lv, 1, 1, 1, 1, function () { return lampCol; });
-          /* 笠の側面（4枚の暗い板）でレンズを囲む＝「裸の発光面」に見せない */
-          for (var sv2 = 0; sv2 < 2; sv2++) {
-            var so2 = (sv2 ? 1 : -1) * 0.20;
-            B.dark.box(f.x + so2, f.y + 0.06, f.z, 0.05, 0.16, 0.44, 2, shIron);
-            B.dark.box(f.x, f.y + 0.06, f.z + so2, 0.44, 0.16, 0.05, 2, shIron);
+          /* ケージ付き灯（bulkhead）: 鋳鉄の笠 → **四方から見えるレンズ帯** → 金網3本。
+             笠だけだと暗い箱にしか見えないので、側面に光る帯を作って「灯」だと分かるようにする。 */
+          B.dark.box(f.x, topY - 0.06, f.z, 0.42, 0.12, 0.42, 1.6, shIron);
+          B.dark.box(f.x, topY - 0.17, f.z, 0.48, 0.12, 0.48, 1.6, shIron);
+          B.lamp.box(f.x, f.y + 0.06, f.z, 0.38, 0.16, 0.38, 1.6, function () { return lampCol; });
+          B.dark.box(f.x, f.y - 0.05, f.z, 0.44, 0.05, 0.44, 2, shIron);
+          /* 笠の側面の縦桟（レンズを4分割して「裸の発光面」に見せない） */
+          for (var sv2 = 0; sv2 < 4; sv2++) {
+            var sa2 = sv2 / 4 * Math.PI * 2 + Math.PI / 4;
+            B.dark.box(f.x + Math.cos(sa2) * 0.19, f.y + 0.06, f.z + Math.sin(sa2) * 0.19,
+              0.07, 0.18, 0.07, 2, shIron);
           }
           if (f.state !== 'off') {
             for (var cg = 0; cg < 3; cg++) {
@@ -2504,7 +2508,7 @@
          （area1 の平板トレイは近距離で銀色の大きな板に見えるため） */
       var sewerPipe = (map.meta && map.meta.ceilPipes === 'sewer');
       if (sewerPipe) {
-        var shR2 = shader(key2, [0.74, 0.62, 0.50]);
+        var shR2 = shader(key2, [1.50, 1.28, 1.04]);
         if (ns) {
           B.pipe.tube([cx - 0.66, py, z0], [cx - 0.66, py, z0 + T], 0.075, 5, shR2);
           if (hash2(c, r + 17) < 0.34) B.pipe.tube([cx + 0.68, py2, z0], [cx + 0.68, py2, z0 + T], 0.045, 4, shR2);
@@ -3389,36 +3393,108 @@
     var cells = map.walkableCells();
     var dripSites = [];
 
-    /* ---- ① 天井隅の大径配管とバルブ（幹線に連続）---- */
+    /* ---- ① 天井隅の大径配管とバルブ（幹線に連続）----
+     * P5c 再ゲート①: 以前はマス単位に1本ずつ積んでいたので、条件が切れると
+     * **短い断片が宙に浮いて散らばる**絵になっていた。ここでは
+     *   1) マスごとに「どちらの壁に沿うか」を決めて盤面に焼き
+     *   2) 同じ側が続く**極大の連なり**を1本の管として通し
+     *   3) 端は壁へ入るエルボか、床へ降りる立管で必ず終わらせる
+     * ＝ 途中で切れた管が浮かない。 */
     if (kit.pipes !== false) {
       var pch = kit.pipeCeil || 4.3;
+      var sideH = Object.create(null), sideV = Object.create(null);
       for (var i = 0; i < cells.length; i++) {
         var c = cells[i].col, r = cells[i].row;
-        var ch = map.ceilHAt(c, r);
-        if (ch < pch) continue;
-        var fy = map.cellFloorY(c, r);
-        var py = fy + ch - SEWER.pipeDrop;
+        if (map.ceilHAt(c, r) < pch) continue;
         var hx = walk(c - 1, r) && walk(c + 1, r);
         var hz = walk(c, r - 1) && walk(c, r + 1);
-        bset(c, r);
-        setYBias(0);
-        var key = this._ownerOf(c, r);
-        var sh = shader(key, [0.86, 0.80, 0.74]);
-        var cx = c * T + T / 2, cz = r * T + T / 2;
         if (hx && !hz) {
           var sd = solid(c, r - 1) ? -1 : (solid(c, r + 1) ? 1 : 0);
-          if (!sd) continue;
-          var pz = cz + sd * (T * 0.5 - SEWER.pipeInset);
-          B.pipe.tube([c * T, py, pz], [(c + 1) * T, py, pz], SEWER.pipeR, SEWER.pipeSeg, sh);
-          if (c % SEWER.valveEvery === 1) this._sewerValve(B, cx, py, pz, 'x', sh, shader(key, [1.10, 0.72, 0.34]));
-          if ((c * 7 + r * 3) % 7 === 0) dripSites.push({ x: cx, z: pz, y: py - SEWER.pipeR, col: c, row: r });
+          if (sd) sideH[c + ',' + r] = sd;
         } else if (hz && !hx) {
           var sd2 = solid(c - 1, r) ? -1 : (solid(c + 1, r) ? 1 : 0);
-          if (!sd2) continue;
-          var px = cx + sd2 * (T * 0.5 - SEWER.pipeInset);
-          B.pipe.tube([px, py, r * T], [px, py, (r + 1) * T], SEWER.pipeR, SEWER.pipeSeg, sh);
-          if (r % SEWER.valveEvery === 1) this._sewerValve(B, px, py, cz, 'z', sh, shader(key, [1.10, 0.72, 0.34]));
-          if ((c * 3 + r * 7) % 7 === 0) dripSites.push({ x: px, z: cz, y: py - SEWER.pipeR, col: c, row: r });
+          if (sd2) sideV[c + ',' + r] = sd2;
+        }
+      }
+      var MINRUN = 3;
+      /** 1本の管を通す。ax='x' なら (a0..a1, b) の行、'z' なら (b, a0..a1) の列 */
+      var self2 = this;
+      function pipeRun(ax, b0, a0, a1, side) {
+        var n = a1 - a0 + 1;
+        if (n < MINRUN) return;
+        var midC = (ax === 'x') ? ((a0 + a1) >> 1) : b0;
+        var midR = (ax === 'x') ? b0 : ((a0 + a1) >> 1);
+        bset(midC, midR); setYBias(0);
+        var key = self2._ownerOf(midC, midR);
+        var sh = shader(key, [1.62, 1.54, 1.44]);
+        var shB = shader(key, [1.90, 1.28, 0.58]);
+        var fy = map.cellFloorY(midC, midR);
+        var py = fy + map.ceilHAt(midC, midR) - SEWER.pipeDrop;
+        var off = (T * 0.5 - SEWER.pipeInset) * side;
+        var x0, x1, z0, z1, ex, ez;
+        if (ax === 'x') {
+          x0 = a0 * T; x1 = (a1 + 1) * T;
+          z0 = z1 = (b0 + 0.5) * T + off;
+          B.pipe.tube([x0, py, z0], [x1, py, z1], SEWER.pipeR, SEWER.pipeSeg, sh);
+          ex = [x0, x1]; ez = [z0, z0];
+        } else {
+          z0 = a0 * T; z1 = (a1 + 1) * T;
+          x0 = x1 = (b0 + 0.5) * T + off;
+          B.pipe.tube([x0, py, z0], [x1, py, z1], SEWER.pipeR, SEWER.pipeSeg, sh);
+          ex = [x0, x0]; ez = [z0, z1];
+        }
+        /* バルブ（間隔 valveEvery マス） */
+        for (var v = a0; v <= a1; v++) {
+          if (v % SEWER.valveEvery !== 1) continue;
+          var vx = (ax === 'x') ? (v + 0.5) * T : x0;
+          var vz = (ax === 'x') ? z0 : (v + 0.5) * T;
+          self2._sewerValve(B, vx, py, vz, ax, sh, shB);
+        }
+        /* 端の始末: 隣が実体ならエルボ（壁へ差し込む）、そうでなければ立管で床へ降ろす */
+        for (var e = 0; e < 2; e++) {
+          var ea = e ? a1 + 1 : a0 - 1;                /* 連なりの外側のマス */
+          var ec = (ax === 'x') ? ea : b0, er = (ax === 'x') ? b0 : ea;
+          var px = ex[e], pz = ez[e];
+          var dirs = e ? 1 : -1;
+          if (solid(ec, er)) {
+            /* エルボ: 壁の中へ 0.55m 差し込む（＝管が空中で終わらない） */
+            if (ax === 'x') B.pipe.tube([px, py, pz], [px + dirs * 0.55, py, pz], SEWER.pipeR * 0.98, SEWER.pipeSeg, sh);
+            else B.pipe.tube([px, py, pz], [px, py, pz + dirs * 0.55], SEWER.pipeR * 0.98, SEWER.pipeSeg, sh);
+            B.pipe.box(px + (ax === 'x' ? dirs * 0.06 : 0), py, pz + (ax === 'x' ? 0 : dirs * 0.06),
+              (ax === 'x') ? 0.10 : 0.72, 0.72, (ax === 'x') ? 0.72 : 0.10, 1.4, sh);
+          } else {
+            /* 隣が通路のとき: 立管を床へ降ろすと通路の真ん中に柱が立つ（＝移動の障害に
+               見える）。天井へ抜けるエルボ＋フランジで終わらせる。 */
+            var ech = map.cellFloorY(ec, er) + map.ceilHAt(ec, er);
+            B.pipe.tube([px, py, pz], [px, ech + 0.05, pz], SEWER.pipeR * 0.88, SEWER.pipeSeg, sh);
+            B.pipe.box(px, py, pz, 0.66, 0.66, 0.66, 1.4, sh);
+            B.pipe.box(px, ech - 0.14, pz, 0.78, 0.14, 0.78, 1.4, sh);
+          }
+        }
+        /* 滴りの発生源（管の下） */
+        dripSites.push({ x: (ax === 'x') ? (midC + 0.5) * T : x0, z: (ax === 'x') ? z0 : (midR + 0.5) * T,
+          y: py - SEWER.pipeR, col: midC, row: midR });
+      }
+      /* 行方向の極大連なり */
+      for (var rr0 = 0; rr0 < map.height; rr0++) {
+        var st = -1, sside = 0;
+        for (var cc0 = 0; cc0 <= map.width; cc0++) {
+          var sv = sideH[cc0 + ',' + rr0] || 0;
+          if (sv !== sside) {
+            if (sside && st >= 0) pipeRun('x', rr0, st, cc0 - 1, sside);
+            st = sv ? cc0 : -1; sside = sv;
+          }
+        }
+      }
+      /* 列方向の極大連なり */
+      for (var cc1 = 0; cc1 < map.width; cc1++) {
+        var st2 = -1, sside2 = 0;
+        for (var rr1 = 0; rr1 <= map.height; rr1++) {
+          var sv2 = sideV[cc1 + ',' + rr1] || 0;
+          if (sv2 !== sside2) {
+            if (sside2 && st2 >= 0) pipeRun('z', cc1, st2, rr1 - 1, sside2);
+            st2 = sv2 ? rr1 : -1; sside2 = sv2;
+          }
         }
       }
     }
@@ -3494,7 +3570,7 @@
           }
           /* 山に突き刺さった支保工の折れた木材（壁に立てかける） */
           if (hm > 0.55) {
-            var shTL = this.propShader(nc, nr, [1.00, 0.80, 0.54], 0.55);
+            var shTL = this.propShader(nc, nr, [1.10, 0.88, 0.58], 0.55);
             var lx0 = q.o[0] + q.u[0] * (mc + 0.12) + q.n[0] * 0.06;
             var lz0 = q.o[2] + q.u[2] * (mc + 0.12) + q.n[2] * 0.06;
             var lx1 = lx0 + q.n[0] * 0.26, lz1 = lz0 + q.n[2] * 0.26;
@@ -3566,7 +3642,10 @@
     for (var gi = 0; gi < grates.length; gi++) this._sewerGrate(B, grates[gi], shader, planeShader);
 
     /* ---- ⑤ 滴り（落下する雫＋水面の波紋）と回転灯 ---- */
-    this._sewerFx = { drips: [], beacons: [] };
+    /* _wallKit（回転灯）と _furniture（警告灯）は _sewerKit より先に走るので、
+       ここで作り直すと登録済みの演出が消える。既存を引き継ぐ。 */
+    var fx0 = this._sewerFx || {};
+    this._sewerFx = { drips: [], beacons: fx0.beacons || [], warns: fx0.warns || [] };
     var sites = (meta.dripSites || []).concat(dripSites);
     var want = Math.min(SEWER.dripMax, kit.drips === undefined ? 160 : kit.drips);
     var step = Math.max(1, Math.floor(sites.length / Math.max(1, want)));
@@ -3677,12 +3756,34 @@
       var bc = fx.beacons[b];
       bc.mesh.rotation.y = t * bc.speed;
     }
+    /* 黄色い警告灯の点滅（約1.1Hz・点灯45%） */
+    var wl = fx.warns || [];
+    for (var wi = 0; wi < wl.length; wi++) {
+      var on = ((t * 1.1 + wl[wi].phase) % 1) < 0.45;
+      wl[wi].mat.color.setRGB(on ? 1.6 : 0.22, on ? 1.25 : 0.17, on ? 0.24 : 0.04);
+    }
   };
   var DRIP_M4 = new THREE.Matrix4();
 
+  /** P5c: 1基だけの黄色い警告灯（点滅）。別メッシュ1つ＝ドローコール+1 */
+  World.prototype._addWarnLamp = function (x, y, z) {
+    if (!this._sewerFx) this._sewerFx = { drips: [], beacons: [], warns: [] };
+    if (!this._sewerFx.warns) this._sewerFx.warns = [];
+    var bld = new Builder(false);
+    bld.box(x, y, z, 0.18, 0.20, 0.18, 2, flat([1, 1, 1]));
+    var mat = this._track(new THREE.MeshBasicMaterial(
+      { map: ESCAPE.Textures.get('lamp'), vertexColors: true, fog: true, color: new THREE.Color(1.4, 1.1, 0.2) }));
+    var mesh = buildMesh(bld, mat);
+    this._track(mesh.geometry);
+    mesh.name = 'sewerWarn';
+    this.group.add(mesh);
+    this._sewerFx.warns.push({ mat: mat, phase: 0 });
+  };
+
   /** 回転灯の回る反射鏡（別メッシュ・毎フレーム y 回転） */
   World.prototype._addBeacon = function (x, y, z) {
-    if (!this._sewerFx) this._sewerFx = { drips: [], beacons: [] };
+    if (!this._sewerFx) this._sewerFx = { drips: [], beacons: [], warns: [] };
+    if (!this._sewerFx.beacons) this._sewerFx.beacons = [];
     var bld = new Builder(false);
     bld.box(x, y, z, 0.10, 0.20, 0.26, 2, flat([2.60, 0.42, 0.26]));
     bld.box(x, y, z, 0.26, 0.20, 0.10, 2, flat([0.60, 0.10, 0.08]));
@@ -3859,14 +3960,14 @@
    * 背の高い什器は天井(3.0m)を突き抜けないよう基壇を低くする。 */
   var PLINTH_H = { specTank: 0.14, cageStack: 0.20, machine: 0.20, tank: 0.20, incubator: 0.24,
     /* P5c: 巨大ポンプは胴が見えないと何の部屋か分からない＝基壇を低くする */
-    sewerPump: 0.12, pumpPipe: 0.10 };
+    sewerPump: 0.02, pumpPipe: 0.04 };
   var PLINTH_DEFAULT = 0.30;
   /** 通路側に見せる仕切り板の高さ(m)。腰高＝跨げないと一目で分かる高さ。
    *  背の低い什器（寝台・机・端末台）は什器そのものが隠れないよう少し低くする。 */
   var BAY_H = 1.16;
   var BAY_LOW = { gurney: 0.90, desk: 0.90, console: 0.90, crate: 0.90, benchIsland: 0.90, opTable: 0.90,
     /* P5c: ポンプの胴（高さ 1.3m）を隠さない高さ */
-    sewerPump: 0.52, pumpPipe: 0.52 };
+    sewerPump: 0.30, pumpPipe: 0.40 };
 
   /** 什器マスの基壇と仕切り板。什器本体より先に積む（本体は基壇の上へ乗る） */
   World.prototype._furnBase = function (B, f, shader, ph) {
@@ -3991,7 +4092,7 @@
       }
       case 'pumpPipe': {
         /* P5c: 吸込管の立ち上がり（太い縦管3本＋横継手＋バルブ） */
-        var shP = shader(key, [0.72, 0.62, 0.52]);
+        var shP = shader(key, [1.55, 1.34, 1.12]);
         B.dark.box(cx, 0.10, cz, 1.30, 0.20, 1.30, 1.2, shP);
         for (var pp = 0; pp < 3; pp++) {
           var pox = (pp - 1) * 0.42;
@@ -4003,26 +4104,74 @@
         break;
       }
       case 'sewerPump': {
-        /* P5c: 巨大ポンプ（渦巻ポンプの胴＋電動機＋吐出管）。什器マスの中に収める。
-           橙の警告灯の下で木箱に見えないよう、鋼の冷たい色味で塗る。 */
-        var shSteel = shader(key, [0.66, 0.72, 0.80]);
-        var shSteelD = shader(key, [0.40, 0.44, 0.50]);
-        var pw = L(1.66, 1.10), pd = L(1.10, 1.66);
-        B.metal.box(cx, 0.62, cz, pw, 1.14, pd, 0.7, shSteel);
-        B.dark.box(cx, 0.08, cz, pw + 0.10, 0.16, pd + 0.10, 1.2, shSteelD);
-        /* 渦巻の胴（横に寝た太い筒） */
-        var pa = ew ? [1, 0, 0] : [0, 0, 1];
-        B.metal.tube([cx - pa[0] * 0.52, 1.32, cz - pa[2] * 0.52],
-          [cx + pa[0] * 0.52, 1.32, cz + pa[2] * 0.52], 0.52, 12, shSteel);
-        /* 電動機 */
-        B.dark.box(cx + (ew ? 0 : 0.42), 1.98, cz + (ew ? 0.42 : 0), 0.62, 0.62, 0.62, 1.2, shSteelD);
-        /* 吐出管（天井へ抜ける） */
-        B.metal.tube([cx - pa[0] * 0.46, 1.84, cz - pa[2] * 0.46],
-          [cx - pa[0] * 0.46, 3.20, cz - pa[2] * 0.46], 0.21, 8, shSteel);
-        /* 橙の運転表示灯（機関区画の記号）と銘板 */
-        B.lamp.box(cx + (ew ? 0 : 0.34), 2.34, cz + (ew ? 0.34 : 0), 0.14, 0.14, 0.14, 2,
-          flat([1.20, 0.52, 0.14]));
-        B.screen.box(cx + (ew ? 0.30 : 0), 1.02, cz + (ew ? 0 : 0.30), 0.30, 0.20, 0.30, 2, shSteel);
+        /* P5c 再ゲート②: 巨大ポンプ＝**暗い鋳鉄の横置き円筒**（渦巻ケーシング）。
+         *   コンクリの基礎 → 横置きの胴（Φ1.3 x 長2.0）→ 両端フランジ＋ボルト列 →
+         *   上部の電動機（小さい円筒）→ 吸込管は床へ・吐出管は天井へ → 橙の運転表示灯。
+         * 胴は pipeRust（鋳鉄）で張る＝配管と同じ材質に見える（木箱に見せない）。 */
+        var shIron = shader(key, [1.90, 1.92, 2.00]);
+        var shIronD = shader(key, [1.05, 1.06, 1.12]);
+        var shBolt = shader(key, [2.40, 2.36, 2.24]);
+        var shCon = shader(key, [1.00, 1.00, 0.98]);
+        var ax2 = ew ? [1, 0, 0] : [0, 0, 1];          /* 胴の軸 */
+        var pv = ew ? [0, 0, 1] : [1, 0, 0];           /* 軸に直交（横） */
+        var LEN = 1.00, RAD = 0.64;                     /* 半長 / 半径 */
+        /* コンクリの基礎（マスいっぱい・低い） */
+        B.wall.box(cx, 0.13, cz, 1.86, 0.26, 1.86, 1.0, shCon);
+        B.wall.box(cx, 0.31, cz, 1.40, 0.14, 1.40, 1.0, shCon);
+        /* 渦巻ケーシング（横置きの太い円筒） */
+        var cy2 = 0.38 + RAD;
+        B.pipe.tube([cx - ax2[0] * LEN, cy2, cz - ax2[2] * LEN],
+          [cx + ax2[0] * LEN, cy2, cz + ax2[2] * LEN], RAD, 14, shIron);
+        /* 両端のフランジ＋ボルト列 */
+        for (var fe = 0; fe < 2; fe++) {
+          var sgn = fe ? 1 : -1;
+          var fx2 = cx + ax2[0] * LEN * sgn, fz2 = cz + ax2[2] * LEN * sgn;
+          B.pipe.tube([fx2 - ax2[0] * 0.07, cy2, fz2 - ax2[2] * 0.07],
+            [fx2 + ax2[0] * 0.07, cy2, fz2 + ax2[2] * 0.07], RAD + 0.11, 14, shIronD);
+          for (var bo = 0; bo < 10; bo++) {
+            var ba2 = bo / 10 * Math.PI * 2;
+            var bh2 = Math.cos(ba2) * (RAD + 0.05), bv2 = Math.sin(ba2) * (RAD + 0.05);
+            B.pipe.box(fx2 + pv[0] * bh2 + ax2[0] * 0.10 * sgn, cy2 + bv2,
+              fz2 + pv[2] * bh2 + ax2[2] * 0.10 * sgn, 0.09, 0.09, 0.09, 2, shBolt);
+          }
+        }
+        /* 胴の合わせ目（上下2分割のボルト） */
+        for (var sp2 = 0; sp2 < 6; sp2++) {
+          var so3 = (sp2 / 5 - 0.5) * LEN * 1.7;
+          B.pipe.box(cx + ax2[0] * so3 + pv[0] * RAD, cy2, cz + ax2[2] * so3 + pv[2] * RAD,
+            0.09, 0.09, 0.09, 2, shBolt);
+          B.pipe.box(cx + ax2[0] * so3 - pv[0] * RAD, cy2, cz + ax2[2] * so3 - pv[2] * RAD,
+            0.09, 0.09, 0.09, 2, shBolt);
+        }
+        /* 上部の電動機（小さい円筒）＋架台＋冷却フィン */
+        var my2 = cy2 + RAD + 0.34;
+        B.pipe.box(cx, cy2 + RAD + 0.08, cz, 0.72, 0.14, 0.72, 1.4, shIronD);
+        B.pipe.tube([cx - ax2[0] * 0.42, my2, cz - ax2[2] * 0.42],
+          [cx + ax2[0] * 0.42, my2, cz + ax2[2] * 0.42], 0.29, 10, shIron);
+        for (var fn = 0; fn < 5; fn++) {
+          var fo2 = (fn / 4 - 0.5) * 0.72;
+          B.pipe.tube([cx + ax2[0] * fo2, my2, cz + ax2[2] * fo2],
+            [cx + ax2[0] * (fo2 + 0.02), my2, cz + ax2[2] * (fo2 + 0.02)], 0.33, 10, shIronD);
+        }
+        /* 吸込管（床へ）と吐出管（天井へ） */
+        var sx3 = cx - pv[0] * 0.52, sz3 = cz - pv[2] * 0.52;
+        B.pipe.tube([sx3, cy2, sz3], [sx3, 0.34, sz3], 0.24, 9, shIron);
+        B.pipe.box(sx3, 0.40, sz3, 0.72, 0.12, 0.72, 1.4, shIronD);
+        var dx3 = cx + pv[0] * 0.52, dz3 = cz + pv[2] * 0.52;
+        B.pipe.tube([dx3, cy2 + RAD * 0.4, dz3], [dx3, 3.30, dz3], 0.24, 9, shIron);
+        B.pipe.box(dx3, cy2 + RAD * 0.4 + 0.12, dz3, 0.70, 0.12, 0.70, 1.4, shIronD);
+        /* 橙の運転表示灯（全基）と、1基だけ黄色い警告灯（点滅は _updateSewerFx） */
+        var ly2 = my2 + 0.46;
+        B.pipe.box(cx + pv[0] * 0.30, ly2 - 0.14, cz + pv[2] * 0.30, 0.10, 0.28, 0.10, 2, shIronD);
+        B.lamp.box(cx + pv[0] * 0.30, ly2, cz + pv[2] * 0.30, 0.16, 0.16, 0.16, 2,
+          flat([1.35, 0.56, 0.14]));
+        if (f.warn) {
+          /* Y_BIAS（基壇の高さ）が Builder 側で足されるので、ここは局所座標で渡す */
+          this._addWarnLamp(cx - pv[0] * 0.30, ly2 + 0.06, cz - pv[2] * 0.30);
+          B.pipe.box(cx - pv[0] * 0.30, ly2 - 0.16, cz - pv[2] * 0.30, 0.12, 0.32, 0.12, 2, shIronD);
+        }
+        /* 銘板 */
+        B.screen.box(cx + pv[0] * 0.30, 0.86, cz + pv[2] * 0.30, 0.30, 0.20, 0.30, 2, shIron);
         break;
       }
       case 'machine': {

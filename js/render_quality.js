@@ -237,7 +237,9 @@
     waterSewer: { height: 1.2, grain: 0.12, rough: [0.06, 0.30], metal: 0.10 },
     /* 格子: 桟の角が立つ＝法線を最も強く。抜けた穴は黒＝深い凹みとして出る */
     metalGrate: { height: 3.4, grain: 0.35, rough: [0.32, 0.86], metal: 0.55 },
-    pipeRust: { height: 2.4, grain: 0.50, rough: [0.34, 0.93], metal: 0.42 },
+    /* P5c 再ゲート①: 鋳鉄の配管に作り直した（暗い灰黒＋あばた＋細い錆）。
+       鋳肌のあばたが主な凹凸なので height を下げ grain を上げ、金属度を上げる。 */
+    pipeRust: { height: 1.5, grain: 0.72, rough: [0.36, 0.88], metal: 0.66 },
     /* ぬめりは濡れて光る。凹凸は浅い */
     slime: { height: 1.2, grain: 0.55, rough: [0.22, 0.72], metal: 0.02 }
   };

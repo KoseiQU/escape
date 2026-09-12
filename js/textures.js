@@ -3180,66 +3180,73 @@
 
   /** 配管: 錆と塗装の剥げ（円周方向にタイル可。溶接のリングは横帯） */
   function texPipeRust() {
+    /* P5c 再ゲート①: 鋳鉄の配管。旧版は「暗い緑灰の地＋170px ごとの溶接リング＋
+       大きな橙の斑」で、tube の UV（v が 2m で1周）と重なって**竹**に見えた。
+       作り直し: ①地は暗い灰黒の鋳鉄 ②管軸に直交する太い帯は作らない
+       ③錆は小さな斑と細い垂れだけ ④緑はぬめりとしてごく薄い筋に限る。 */
     var W = 512, H = 512, T2 = makeTex(W, H), c = T2.c, ctx = T2.ctx;
     var rand = rng(773310);
-    ctx.fillStyle = '#38403c'; ctx.fillRect(0, 0, W, H);       /* 工業用の暗い緑灰の塗装 */
-    speckle(ctx, W, H, 16000, rand, 'rgba(52,62,58,0.40)');
-    speckle(ctx, W, H, 6000, rand, 'rgba(78,90,86,0.28)');
-    /* 溶接リング（管軸に直交＝横帯）。継ぎ手のふくらみ */
-    for (var y = 0; y < H; y += 170) {
-      var wg = ctx.createLinearGradient(0, y - 12, 0, y + 14);
-      wg.addColorStop(0, 'rgba(18,22,20,0.55)');
-      wg.addColorStop(0.45, 'rgba(126,132,126,0.45)');
-      wg.addColorStop(1, 'rgba(18,22,20,0.55)');
-      ctx.fillStyle = wg; ctx.fillRect(0, y - 12, W, 26);
-      /* ビードの粒 */
-      for (var b = 0; b < 120; b++) {
-        ctx.fillStyle = 'rgba(' + (110 + rand() * 60 | 0) + ',' + (104 + rand() * 52 | 0) + ',' + (94 + rand() * 44 | 0) + ',0.5)';
-        ctx.beginPath(); ctx.arc(rand() * W, y + (rand() - 0.5) * 16, 1.5 + rand() * 3.5, 0, Math.PI * 2); ctx.fill();
-      }
+    /* 地: 暗い灰黒（鋳鉄）。縦方向のわずかな明暗で円筒の鋳肌を出す */
+    ctx.fillStyle = '#26282b'; ctx.fillRect(0, 0, W, H);
+    for (var g0 = 0; g0 < 40; g0++) {
+      var gx = rand() * W, gw2 = 8 + rand() * 40;
+      ctx.fillStyle = 'rgba(' + (44 + rand() * 20 | 0) + ',' + (46 + rand() * 20 | 0) + ',' + (50 + rand() * 20 | 0) + ',0.22)';
+      ctx.fillRect(gx, 0, gw2, H);
     }
-    /* 広い錆のにじみ（塗装の下で進む腐食。低周波の茶） */
-    for (var b3 = 0; b3 < 26; b3++) {
-      blot(ctx, rand() * W, rand() * H, 30 + rand() * 96,
-        'rgba(' + (86 + rand() * 26 | 0) + ',' + (62 + rand() * 20 | 0) + ',' + (40 + rand() * 14 | 0) + ',0.26)');
+    speckle(ctx, W, H, 26000, rand, 'rgba(16,17,19,0.42)');
+    speckle(ctx, W, H, 9000, rand, 'rgba(68,72,78,0.22)');
+    /* 鋳肌のあばた（小さな窪み） */
+    for (var pk = 0; pk < 420; pk++) {
+      var kx = rand() * W, ky = rand() * H, kr = 1 + rand() * 3.2;
+      ctx.fillStyle = 'rgba(12,13,15,0.45)';
+      ctx.beginPath(); ctx.arc(kx, ky, kr, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = 'rgba(96,100,106,0.20)';
+      ctx.beginPath(); ctx.arc(kx - kr * 0.3, ky - kr * 0.3, kr * 0.6, 0, Math.PI * 2); ctx.fill();
     }
-    /* 塗装の剥げ＝下地の錆が出る（小さく・多く。大きな斑は迷彩に見える） */
-    for (var p = 0; p < 54; p++) {
-      var px = rand() * W, py = rand() * H, pr = 6 + rand() * 17;
-      peel(ctx, px, py, pr, rand,
-        'rgba(' + (98 + rand() * 24 | 0) + ',' + (68 + rand() * 20 | 0) + ',' + (42 + rand() * 14 | 0) + ',0.72)',
-        'rgba(30,34,31,0.55)');
-      /* 剥げの下から流れる錆（管軸方向＝縦） */
-      rustRun(ctx, px, py + pr * 0.6, 4 + rand() * 8, 22 + rand() * 80, rand, 0.55);
-    }
-    /* 錆の粒（塗装の上に点々と噴き出す） */
-    for (var r2 = 0; r2 < 900; r2++) {
-      ctx.fillStyle = 'rgba(' + (104 + rand() * 44 | 0) + ',' + (64 + rand() * 30 | 0) + ',' + (30 + rand() * 16 | 0) + ',' + (0.2 + rand() * 0.5).toFixed(2) + ')';
-      ctx.beginPath(); ctx.arc(rand() * W, rand() * H, 1 + rand() * 3, 0, Math.PI * 2); ctx.fill();
-    }
-    /* 結露と黒い汚れの筋 */
-    for (var s2 = 0; s2 < 16; s2++) {
-      ctx.strokeStyle = 'rgba(16,20,18,' + (0.14 + rand() * 0.24).toFixed(2) + ')';
-      ctx.lineWidth = 3 + rand() * 10;
+    /* 錆: 小さな不定形の斑（塗装の剥げでなく鋳鉄の腐食）。大きな斑は作らない */
+    for (var p2 = 0; p2 < 130; p2++) {
+      var rx = rand() * W, ry = rand() * H, rr = 4 + rand() * 13;
       ctx.beginPath();
-      var sx = rand() * W;
-      ctx.moveTo(sx, -8);
-      ctx.bezierCurveTo(sx + (rand() - 0.5) * 40, H * 0.4, sx + (rand() - 0.5) * 50, H * 0.7, sx + (rand() - 0.5) * 30, H + 8);
+      for (var k2 = 0; k2 <= 9; k2++) {
+        var a2 = k2 / 9 * Math.PI * 2, ra = rr * (0.55 + rand() * 0.65);
+        var qx = rx + Math.cos(a2) * ra, qy = ry + Math.sin(a2) * ra;
+        if (k2 === 0) ctx.moveTo(qx, qy); else ctx.lineTo(qx, qy);
+      }
+      ctx.closePath();
+      ctx.fillStyle = 'rgba(' + (92 + rand() * 34 | 0) + ',' + (52 + rand() * 22 | 0) + ',' + (26 + rand() * 14 | 0) + ',' + (0.28 + rand() * 0.34).toFixed(2) + ')';
+      ctx.fill();
+      /* 斑から下へ細く垂れる（管軸方向＝v） */
+      if (rand() < 0.55) rustRun(ctx, rx, ry + rr * 0.5, 2 + rand() * 4, 16 + rand() * 54, rand, 0.42);
+    }
+    /* 錆の粒 */
+    for (var r2 = 0; r2 < 700; r2++) {
+      ctx.fillStyle = 'rgba(' + (98 + rand() * 40 | 0) + ',' + (58 + rand() * 26 | 0) + ',' + (26 + rand() * 14 | 0) + ',' + (0.14 + rand() * 0.30).toFixed(2) + ')';
+      ctx.beginPath(); ctx.arc(rand() * W, rand() * H, 0.8 + rand() * 2.0, 0, Math.PI * 2); ctx.fill();
+    }
+    /* ぬめり（緑）はごく薄い細い筋だけ。地の色にはしない */
+    for (var sl = 0; sl < 10; sl++) {
+      ctx.strokeStyle = 'rgba(64,86,52,' + (0.07 + rand() * 0.10).toFixed(2) + ')';
+      ctx.lineWidth = 2 + rand() * 7;
+      ctx.beginPath();
+      var slx = rand() * W;
+      ctx.moveTo(slx, -8);
+      ctx.bezierCurveTo(slx + (rand() - 0.5) * 26, H * 0.4, slx + (rand() - 0.5) * 30, H * 0.75, slx + (rand() - 0.5) * 18, H + 8);
       ctx.stroke();
     }
-    moss(ctx, W, H, rand, 20, false, 0.18);
-    /* 円筒の陰影は付けない（法線と近傍灯が作る）。粒だけ足す */
-    scuff(ctx, 1200, rand, 'rgba(22,26,24,0.18)', 1.5708, 44);
-    fineGrit(ctx, 26000, rand, 'rgba(24,28,26,0.24)');
-    fineGrit(ctx, 8000, rand, 'rgba(170,164,150,0.10)');
-    grain(ctx, c.width, c.height, 8, rand);
+    /* 黒い汚れの筋（結露の跡） */
+    for (var s2 = 0; s2 < 14; s2++) {
+      ctx.strokeStyle = 'rgba(10,11,12,' + (0.12 + rand() * 0.20).toFixed(2) + ')';
+      ctx.lineWidth = 2 + rand() * 8;
+      ctx.beginPath();
+      var sx2 = rand() * W;
+      ctx.moveTo(sx2, -8);
+      ctx.bezierCurveTo(sx2 + (rand() - 0.5) * 30, H * 0.45, sx2 + (rand() - 0.5) * 36, H * 0.72, sx2 + (rand() - 0.5) * 22, H + 8);
+      ctx.stroke();
+    }
+    grain(ctx, W, H, 12, rand);
     return c;
   }
 
-  /**
-   * ぬめり帯（アルファ）。水位線に沿って横に長く貼る帯。
-   * 上下端は alpha でぼかし、帯の下側に垂れを付ける。
-   */
   function texSlime() {
     var W = 512, H = 128, c = makeCanvas(W, H), ctx = c.getContext('2d');
     var rand = rng(214477);

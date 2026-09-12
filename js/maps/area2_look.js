@@ -162,7 +162,9 @@
     { c0: 65, r0: 39, c1: 66, r1: 40, depth: 0.62, inlet: true, rgb: [0.46, 1.02, 1.36] },  /* 東＝冷たい青 */
     { c0: 13, r0: 65, c1: 14, r1: 66, depth: 0.62, inlet: true, rgb: [1.30, 0.58, 0.58] },  /* 南西＝血の赤 */
     { c0: 39, r0: 65, c1: 40, r1: 66, depth: 0.62, inlet: true, rgb: [1.02, 0.76, 1.34] },  /* 南＝藤 */
-    { c0: 65, r0: 65, c1: 66, r1: 66, depth: 0.62, inlet: true, rgb: [0.80, 1.20, 0.66] }   /* 南東＝苔 */
+    { c0: 65, r0: 65, c1: 66, r1: 66, depth: 0.62, inlet: true, rgb: [0.80, 1.20, 0.66] },  /* 南東＝苔 */
+    /* ポンプ室の油膜の黒い水たまり（(50,48) は北ランプの正面の実体マス＝見通しも切る） */
+    { c0: 50, r0: 48, c1: 50, r1: 48, depth: 0.40, rgb: [0.30, 0.29, 0.32] }
   ];
 
   /* 床の格子（下に暗い水面）。歩ける床マスの上に置く＝薄物なので通行の邪魔にならない */
@@ -195,23 +197,20 @@
     { col: 5, row: 5, type: 'shaftGrate' }     /* 流入縦坑の天端の格子（上からの青白い光） */
   ];
 
-  /* 巨大ポンプ（実体マス＝什器。通路は一切塞がない） */
   /* 巨大ポンプ（契約 追補2②）。柱列を撤去した 13x13 の広間に 6 基を一列に並べる。
      実体マス（什器）なので通路は塞がない。open:true で四方の壁面を落とし独立機械にする。 */
   var furniture = [
     { col: 46, row: 52, dir: 'n', type: 'sewerPump', open: true },
     { col: 48, row: 52, dir: 's', type: 'sewerPump', open: true },
     { col: 50, row: 52, dir: 'n', type: 'sewerPump', open: true },
-    { col: 52, row: 52, dir: 's', type: 'sewerPump', open: true },
+    { col: 52, row: 52, dir: 's', type: 'sewerPump', open: true, warn: true },
     { col: 54, row: 52, dir: 'n', type: 'sewerPump', open: true },
     { col: 56, row: 52, dir: 's', type: 'sewerPump', open: true },
     /* 吸込管の立ち上がり（ポンプ列の北側。row 50 の見通しを切る役も持つ） */
-    { col: 52, row: 50, dir: 'n', type: 'pumpPipe', open: true },
-    /* ランプの正面に残る実体マス（見通しを切る岩盤）も機械にして「柱」に見せない */
-    { col: 50, row: 48, dir: 's', type: 'pumpPipe', open: true }
+    /* (50,48) は油溜まり（basins）にしたので什器は置かない＝北ランプから広間が見通せる */
+    { col: 52, row: 50, dir: 'n', type: 'pumpPipe', open: true }
   ];
 
-  /* 器具以外の光源（槽の発光・警告灯・縦坑の落光）。明滅比率の母数には数えない */
   /* 合流槽9室の集水枡の発光（水が緑〜琥珀に光る＝9室の色味が全部違う「錨」になる）。
      basins の rgb と対にする。 */
   var jnGlow = (function () {
@@ -246,6 +245,11 @@
     { col: 48, row: 55, rgb: [1.00, 0.52, 0.16], y: 2.8, R: 10.0, gain: 0.56 },
     { col: 56, row: 49, rgb: [1.00, 0.52, 0.16], y: 2.8, R: 10.0, gain: 0.56 },
     { col: 51, row: 51, rgb: [1.00, 0.54, 0.18], y: 3.4, R: 12.0, gain: 0.52 },
+    /* ポンプ列（row 52）の真上の投光器。機械の形が読めるだけの明るさを確保する */
+    { col: 47, row: 51, rgb: [1.00, 0.78, 0.52], y: 2.9, R: 9.0, gain: 0.95 },
+    { col: 51, row: 53, rgb: [1.00, 0.78, 0.52], y: 2.9, R: 9.0, gain: 0.95 },
+    { col: 55, row: 51, rgb: [1.00, 0.78, 0.52], y: 2.9, R: 9.0, gain: 0.95 },
+    { col: 57, row: 53, rgb: [1.00, 0.74, 0.46], y: 2.9, R: 9.0, gain: 0.75 },
     /* 天井まで届く灯（-2m の広間の天井が真っ黒にならないように） */
     { col: 49, row: 49, rgb: [1.00, 0.70, 0.40], y: 4.5, R: 13.0, gain: 0.42 },
     { col: 55, row: 55, rgb: [1.00, 0.70, 0.40], y: 4.5, R: 13.0, gain: 0.42 },
@@ -292,8 +296,8 @@
     { col: 55, row: 46, state: 'on', gain: 1.55, reach: 1.35 },
     { col: 46, row: 52, state: 'on', gain: 1.45, reach: 1.30 },
     { col: 58, row: 52, state: 'on', gain: 1.45, reach: 1.30 },
-    { col: 49, row: 52, state: 'on', gain: 1.75, reach: 1.45 },
-    { col: 55, row: 52, state: 'on', gain: 1.75, reach: 1.45 },
+    { col: 49, row: 52, state: 'on', gain: 2.10, reach: 1.60 },
+    { col: 55, row: 52, state: 'on', gain: 2.10, reach: 1.60 },
     { col: 49, row: 58, state: 'on', gain: 1.55, reach: 1.35 },
     { col: 55, row: 58, state: 'on', gain: 1.55, reach: 1.35 },
     { col: 55, row: 57, state: 'on', gain: 1.10 },
