@@ -253,8 +253,9 @@
       memoTitle: document.getElementById('memo-title'),
       memoBody: document.getElementById('memo-body'),
       endingOverlay: document.getElementById('ending-overlay'),
-      dark: document.getElementById('fx-dark'),
-      eraseBtn: document.getElementById('btn-erase')
+      dark: document.getElementById('fx-dark')
+      /* 【P4.18 項目3 失効】eraseBtn（プレイ画面の `データ全消去`）。
+         データ消去はタイトル画面の `データを消す` へ移設（js/menu.js）。DOMも削除済み。 */
     };
     /* 近接したメモの縁の淡い光（本物のメモの見分け・契約 §4「メモの見分け」） */
     this.fx = new THREE.Group();
@@ -1192,13 +1193,8 @@
     var self = this;
     bindTap(this.dom.memoOverlay, function () { self.onCloseTap(); });
 
-    if (this.dom.eraseBtn) {
-      bindTap(this.dom.eraseBtn, function () {
-        var ok = true;
-        try { ok = global.confirm('セーブデータを全て消去します。よろしいですか？'); } catch (e) { ok = true; }
-        if (ok) self.eraseAllData();
-      });
-    }
+    /* 【P4.18 項目3 失効】プレイ画面の `データ全消去` の結線（window.confirm 経由）。
+       消去はタイトルの `データを消す` → 既存モーダル様式の確認 → eraseAllData()（js/menu.js）。 */
 
     global.addEventListener('keydown', function (e) {
       if (e.code === 'Escape') self.onCloseTap();

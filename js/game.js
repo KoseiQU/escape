@@ -140,11 +140,18 @@
    *  ここが唯一のゲート＝rAFループも __pump も同じように止まる。描画は続くので
    *  画面は生きたまま、simTime も frameCount も進まない（＝声・鼓動・環境音が鳴らない）。 */
   Game.prototype.titleBlocked = function () {
-    return !!(ESCAPE.Title && ESCAPE.Title.blocking && ESCAPE.Title.blocking());
+    if (ESCAPE.Title && ESCAPE.Title.blocking && ESCAPE.Title.blocking()) return true;
+    /* P4.18 項目4: 目覚めの演出もタイトルと同じゲートで止める
+       ＝演出中に敵AI・鼓動・声は動かない（演出自身は stepFrame の先頭で専用に回る）。 */
+    if (ESCAPE.Wake && ESCAPE.Wake.blocking && ESCAPE.Wake.blocking()) return true;
+    return false;
   };
 
   /** 1論理ステップ。__pump もrAFループもここを通る */
   Game.prototype.stepFrame = function (dt) {
+    /* P4.18 項目4: 起床演出の専用更新。ゲートより前に置く＝この演出だけが進む。
+       固定ステップで積むので __pump 駆動のスクショでも同じ絵になる。 */
+    if (ESCAPE.Wake && ESCAPE.Wake.step) ESCAPE.Wake.step(dt);
     /* P4.16 項目4: タイトル中・タイトルからの暗転中は一切更新しない */
     if (this.titleBlocked()) return;
     var input = this.input;
@@ -154,7 +161,9 @@
     var modal = this.progress && this.progress.modalOpen && this.progress.modalOpen();
     /* P4.6: 捕獲シネマティック中も同じ「中断安全」に乗せる＝視点・移動を止める。
        （演出カメラをプレイヤー追従が上書きしないよう、カメラ側も syncCamera の最後で握る） */
-    var frozen = modal || !!(this.cinematic && this.cinematic.blocksInput());
+    /* P4.18 項目3: 確認ダイアログ（メニューに戻る／データを消す）も同じ「中断安全」に乗せる */
+    var menuOpen = !!(ESCAPE.Menu && ESCAPE.Menu.isOpen && ESCAPE.Menu.isOpen());
+    var frozen = modal || menuOpen || !!(this.cinematic && this.cinematic.blocksInput());
 
     // 1) 視点
     var look = input.consumeLook();
@@ -282,6 +291,9 @@
 
   /** 製品初期状態へ完全復帰（runAll の後始末にも使う） */
   Game.prototype.reset = function () {
+    /* P4.18: 起床演出・確認ダイアログが開いたままなら畳んでから戻す（製品初期状態） */
+    if (ESCAPE.Wake && ESCAPE.Wake.cancel) ESCAPE.Wake.cancel();
+    if (ESCAPE.Menu && ESCAPE.Menu.forceClose) ESCAPE.Menu.forceClose();
     this.map = ESCAPE.Maps.load(this.mapId);
     if (this.world) this.world.dispose();
     this.world = new ESCAPE.World(this.map);

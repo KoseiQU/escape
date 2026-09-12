@@ -1,7 +1,9 @@
 /* ESCAPE — 入力（スマホ: 仮想スティック＋スワイプ視点＋ボタン3つ / PC: WASD＋マウス）
  * 契約 DESIGN.md §4:
  *   スマホ = 左半分スティック（タッチ位置起点のフローティング式）／右半分スワイプ視点／
- *            ボタン3つ（走る=押下中・しゃがむ=トグル・調べる）
+ *            ボタン3つ（走る=トグル・しゃがむ=トグル・調べる）
+ *            【P4.18 項目2で改訂】走るは「押下中」から「タップで切替」へ（iPhone実機評2:
+ *            長押しはスマホで操作しにくい）。PCの Shift 長押しは現行どおり。
  *   PC     = WASD＋Shift走り＋Ctrlしゃがみ＋E調べる＋ポインタロック視点。キー判定は e.code 方式で統一。
  */
 (function (global) {
@@ -22,6 +24,13 @@
     this.moveY = 0;      // -1..1 前
     this.runHeld = false;
     this.crouchOn = false;
+    /* P4.18 項目2: スマホの走る＝トグル。移動をやめても保持し、もう一度タップで解除。
+       捕獲・ロッカー・ゲームオーバー・タイトルへ戻る の4条件で releaseRun() が落とす。 */
+    this.runToggle = false;
+    this.releases = 0;          /* 自動解除の回数（機械テスト用） */
+    this.releasedBy = '';       /* 直近の解除理由 */
+    /* P4.18 項目4: 起床演出の間は入力を一切受けない（タップで短縮できない） */
+    this.locked = false;
     this.lookDX = 0;     // 未消費の視点デルタ(px)
     this.lookDY = 0;
     this.interactQueued = 0;
@@ -59,9 +68,45 @@
     return n;
   };
 
-  /** 走り入力（キー or ボタン） */
+  /** 走り入力（PC: Shift 押下中 / スマホ: 走るトグル） */
   Input.prototype.isRunning = function () {
-    return this._keyRun || this._btnRunTouchId !== null || this._btnRunMouse === true;
+    return this._keyRun || this.runToggle === true;
+  };
+
+  /** P4.18 項目2: 走るトグルの切替（引数省略で反転）。点灯表示はボタンの .on */
+  Input.prototype.toggleRun = function (on) {
+    var next = (on === undefined) ? !this.runToggle : !!on;
+    this.runToggle = next;
+    /* しゃがみとの優先関係は現行踏襲（＝両立しない）。契約 §4「P4.18」項目2:
+       しゃがみ中に走るを入れたらしゃがみを解除する。 */
+    if (next && this.crouchOn) this.crouchOn = false;
+    this._syncButtonVisual();
+    return this.runToggle;
+  };
+
+  /** P4.18 項目2: 走るトグルの自動解除。
+   *  why: 'capture' 捕獲 / 'locker' ロッカーに入る / 'gameover' / 'title' タイトルへ戻る */
+  Input.prototype.releaseRun = function (why) {
+    this.releasedBy = why || '';
+    if (!this.runToggle) return false;
+    this.runToggle = false;
+    this.releases++;
+    this._syncButtonVisual();
+    return true;
+  };
+
+  /** P4.18 項目4: 入力の受理を止める／戻す（起床演出だけが使う） */
+  Input.prototype.setLocked = function (on) {
+    this.locked = !!on;
+    if (this.locked) {
+      this.moveX = 0; this.moveY = 0;
+      this.lookDX = 0; this.lookDY = 0;
+      this.interactQueued = 0;
+      this._touchStickId = null;
+      this._touchLookId = null;
+      this._updateStickVisual(false, 0, 0);
+    }
+    return this.locked;
   };
 
   /** 「調べる」の押しっぱなし（牢の格子の長押しこじ開けに使う） */
@@ -74,6 +119,7 @@
     this.moveX = 0; this.moveY = 0;
     this.runHeld = false;
     this.crouchOn = false;
+    this.runToggle = false;
     this.lookDX = 0; this.lookDY = 0;
     this.interactQueued = 0;
     this._keys = Object.create(null);
@@ -93,6 +139,7 @@
   Input.prototype._onKeyDown = function (e) {
     var code = e.code;
     if (!code) return;
+    if (this.locked) return;   /* P4.18 項目4: 起床演出中 */
     this._keys[code] = true;
     if (code === 'ShiftLeft' || code === 'ShiftRight') this._keyRun = true;
     if ((code === 'ControlLeft' || code === 'ControlRight') && !e.repeat) {
@@ -107,6 +154,7 @@
   Input.prototype._onKeyUp = function (e) {
     var code = e.code;
     if (!code) return;
+    if (this.locked) return;
     this._keys[code] = false;
     if (code === 'ShiftLeft' || code === 'ShiftRight') {
       this._keyRun = !!(this._keys.ShiftLeft || this._keys.ShiftRight);
@@ -147,6 +195,7 @@
   };
 
   Input.prototype._onMouseMove = function (e) {
+    if (this.locked) return;
     if (this.pointerLocked) {
       this.lookDX += (e.movementX || 0) * (MOUSE_SENS / LOOK_SENS);
       this.lookDY += (e.movementY || 0) * (MOUSE_SENS / LOOK_SENS);
@@ -169,6 +218,7 @@
 
   Input.prototype._onTouchStart = function (e) {
     if (!isControlButton(e.target)) e.preventDefault();
+    if (this.locked) return;
     this.touchSeen = true;
     var half = (global.innerWidth || 1) * 0.5;
     for (var i = 0; i < e.changedTouches.length; i++) {
@@ -193,6 +243,7 @@
 
   Input.prototype._onTouchMove = function (e) {
     if (!isControlButton(e.target)) e.preventDefault();
+    if (this.locked) return;
     for (var i = 0; i < e.changedTouches.length; i++) {
       var t = e.changedTouches[i];
       if (t.identifier === this._touchStickId) {
@@ -279,47 +330,40 @@
     document.addEventListener('touchend', function (e) { self._onTouchEnd(e); }, { passive: false });
     document.addEventListener('touchcancel', function (e) { self._onTouchEnd(e); }, { passive: false });
 
-    // ボタン3つ
-    function bindHold(el, onDown, onUp) {
-      if (!el) return;
-      el.addEventListener('touchstart', function (e) {
-        e.preventDefault(); e.stopPropagation();
-        self.touchSeen = true;
-        self._btnRunTouchId = e.changedTouches[0].identifier;
-        onDown();
-      }, { passive: false });
-      el.addEventListener('touchend', function (e) {
-        e.preventDefault(); e.stopPropagation();
-        self._btnRunTouchId = null;
-        onUp();
-      }, { passive: false });
-      el.addEventListener('touchcancel', function () { self._btnRunTouchId = null; onUp(); });
-      el.addEventListener('mousedown', function (e) { e.preventDefault(); e.stopPropagation(); onDown(); });
-      document.addEventListener('mouseup', function () { onUp(); });
-    }
-
-    bindHold(d.btnRun,
-      function () { self._btnRunMouse = true; self._syncButtonVisual(); },
-      function () { self._btnRunMouse = false; self._btnRunTouchId = null; self._syncButtonVisual(); });
-
+    /* ボタン3つ。
+       【P4.18 項目2で失効】走るの「押下中（bindHold）」結線。タップで切替へ差し替えた。 */
     function bindTap(el, fn) {
       if (!el) return;
       el.addEventListener('touchstart', function (e) {
-        e.preventDefault(); e.stopPropagation(); self.touchSeen = true; fn();
+        e.preventDefault(); e.stopPropagation();
+        if (self.locked) return;
+        self.touchSeen = true; fn();
       }, { passive: false });
       el.addEventListener('touchend', function (e) { e.preventDefault(); e.stopPropagation(); }, { passive: false });
-      el.addEventListener('mousedown', function (e) { e.preventDefault(); e.stopPropagation(); fn(); });
+      el.addEventListener('mousedown', function (e) {
+        e.preventDefault(); e.stopPropagation();
+        if (self.locked) return;
+        fn();
+      });
     }
 
+    /* P4.18 項目2: 走る＝タップで切替（点灯表示＝走行中）。移動をやめても保持する。 */
+    bindTap(d.btnRun, function () { self.toggleRun(); });
     bindTap(d.btnCrouch, function () { self.crouchOn = !self.crouchOn; self._syncButtonVisual(); });
     bindTap(d.btnInteract, function () { self.interactQueued++; });
 
     /* 「調べる」の押しっぱなし判定（長押しでの牢脱出。押下回数はbindTapが担う） */
     if (d.btnInteract) {
-      d.btnInteract.addEventListener('touchstart', function () { self._interactHeld = true; }, { passive: false });
+      d.btnInteract.addEventListener('touchstart', function () {
+        if (self.locked) return;
+        self._interactHeld = true;
+      }, { passive: false });
       d.btnInteract.addEventListener('touchend', function () { self._interactHeld = false; }, { passive: false });
       d.btnInteract.addEventListener('touchcancel', function () { self._interactHeld = false; });
-      d.btnInteract.addEventListener('mousedown', function () { self._interactHeld = true; });
+      d.btnInteract.addEventListener('mousedown', function () {
+        if (self.locked) return;
+        self._interactHeld = true;
+      });
       document.addEventListener('mouseup', function () { self._interactHeld = false; });
     }
   };

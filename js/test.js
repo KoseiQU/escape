@@ -4318,15 +4318,19 @@
     var wrap = document.getElementById('minimap-wrap');
     if (!t.ok(!!wrap, 'P4.11 項目6: ミニマップの枠が結線されている')) return;
 
-    /* --- 幅は画面の32%（横持ちで画面を覆わないよう 62vh でだけ頭を押さえる） --- */
+    /* --- 幅: PC（短辺600px以上）は P4.11 の min(32vw, 62vh)。
+           スマホ（短辺600px未満）は P4.18 項目1 で画面幅の20%へ縮小した。
+           期待値はレイアウト関数（js/minimap.js の唯一の真実）から取る。 --- */
     var cs = global.getComputedStyle(wrap);
     var vw = global.innerWidth, vh = global.innerHeight;
-    var want = Math.max(118, Math.min(vw * 0.32, vh * 0.62));
+    var lay = ESCAPE.MINIMAP_CONST.layout(vw, vh);
+    var want = lay.width;
     var got = parseFloat(cs.width);
-    t.near(got, want, 1.5, 'P4.11 項目6: ミニマップ幅 = min(32vw, 62vh)',
-      got.toFixed(1) + 'px / 画面 ' + vw + 'x' + vh + ' → ' + (got / vw * 100).toFixed(1) + '%');
-    t.ok(got / vw >= 0.28 || vw * 0.32 > vh * 0.62,
-      'P4.11 項目6: 画面幅の32%相当（縦持ちでは 32vw がそのまま効く）',
+    t.near(got, want, 1.5, 'P4.11/P4.18 項目1: ミニマップ幅がレイアウト関数どおり',
+      got.toFixed(1) + 'px / 画面 ' + vw + 'x' + vh + ' → ' + (got / vw * 100).toFixed(1) + '%' +
+      (lay.small ? '（スマホ20%）' : '（PC min(32vw,62vh)）'));
+    t.ok(lay.small ? Math.abs(got / vw - 0.20) < 0.02 : (got / vw >= 0.28 || vw * 0.32 > vh * 0.62),
+      'P4.11/P4.18 項目1: 画面幅に対する比が契約どおり（PC 32% / スマホ 20%）',
       (got / vw * 100).toFixed(1) + '%');
     var box = wrap.getBoundingClientRect();
     /* 画面サイズが取れない環境（非表示のオフスクリーン等）では判定できないので
@@ -5206,6 +5210,12 @@
     t.ok(T.state === 'fading', 'P4.16 項目4: タップで暗転に入る', T.state);
     t.ok(T.blocking() === true, 'P4.16 項目4: 暗転の1秒間もまだ更新は止まっている');
     T.flush();
+    /* P4.18 項目4: 暗転の後は起床演出へ入る（入力を受けない）。ここは「タイトルが
+       止めていた更新が戻るか」を見る試験なので、演出は skip で飛ばす。
+       演出そのものは testP418Wake が実経路で検証する。 */
+    t.ok(ESCAPE.Wake.active() === true,
+      'P4.16/P4.18: 暗転のあとは起床演出に入る', ESCAPE.Wake.info().mode);
+    ESCAPE.Wake.skip();
     t.ok(T.state === 'playing', 'P4.16 項目4: 暗転が明けるとゲームへ入る', T.state);
     t.ok(T.visible() === false, 'P4.16 項目4: タイトルが画面から消える',
       JSON.stringify({ display: T.info().display, opacity: T.info().opacity }));
@@ -5241,6 +5251,7 @@
       t.ok(global.localStorage.getItem(SAVE_KEY) !== null,
         'P4.16 項目4: `続きから` ではセーブが残る');
       T.flush();
+      ESCAPE.Wake.skip();     /* P4.18 項目4: `続きから` の瞬き（1.2秒）を飛ばす */
       t.ok(T.state === 'playing', 'P4.16 項目4: `続きから` でゲームへ入る');
 
       /* `最初から`: セーブが消える */
@@ -5253,6 +5264,7 @@
         String(global.localStorage.getItem(SAVE_KEY)));
       t.ok(T.mode === 'new', 'P4.16 項目4: `最初から` として開始する', T.mode);
       T.flush();
+      ESCAPE.Wake.skip();     /* P4.18 項目4: `最初から` の起床演出を飛ばす */
       t.ok(g.progress.diaryRead === false && g.progress.gimmick.key === false,
         'P4.16 項目4: `最初から` は進行も製品初期状態へ戻す');
       /* セーブが消えたので、次にタイトルへ戻ると `タップして始める` に戻る */
@@ -5636,6 +5648,511 @@
     w2.dispose();
   }
 
+  /* ================================================================
+   * P4.18: iPhone 16 Pro 実機評4点（契約 DESIGN.md §4「P4.18 iPhone実機評」／
+   *        正文 docs/notes.md「P4.18追加（メニュー・地図・起床）」）
+   *   1 スマホの地図を小さく（短辺600px未満で幅20%・右上8px・タップは矩形内だけ）
+   *   2 走るをトグルに（点灯・保持・自動解除4条件）
+   *   3 データ消去はタイトルへ／プレイ画面は `メニューに戻る`（上部）
+   *   4 目覚めの演出（新規は約4秒・`続きから` は1.2秒の瞬き）
+   * ============================================================== */
+
+  /** 座標つきのタップ（tapEl は座標を持たないので地図の矩形判定には使えない） */
+  function tapAtEl(el, x, y) {
+    if (!el) return false;
+    el.dispatchEvent(new MouseEvent('mousedown', {
+      bubbles: true, cancelable: true, clientX: x, clientY: y
+    }));
+    return true;
+  }
+  /** キー入力。実ブラウザと同じ経路（body から発火 → window の capture → bubble の順）で
+   *  流す。window へ直送すると capture/bubble の区別が消え、Esc の担当分けを検証できない。 */
+  function sendKey(type, code) {
+    document.body.dispatchEvent(new KeyboardEvent(type, { code: code, bubbles: true, cancelable: true }));
+  }
+
+  function testP418MapLayout(t, g) {
+    g.reset();
+    var mm = g.minimap, C = ESCAPE.MINIMAP_CONST;
+    var L = C.layout;
+    var wrap = document.getElementById('minimap-wrap');
+    if (!t.ok(!!wrap && typeof L === 'function',
+      'P4.18 項目1: 地図のレイアウト関数が公開されている（値を注入して検証できる）')) return;
+
+    /* --- 値を注入しての判定（実行環境の画面サイズに依存しない） --- */
+    t.near(C.SMALL_SHORT, 600, 1e-9, 'P4.18 項目1: 短辺600pxが境目（契約）', C.SMALL_SHORT);
+    var ph = L(390, 844);                       /* iPhone 16 Pro 相当・縦持ち */
+    t.ok(ph.small === true, 'P4.18 項目1: 短辺600px未満はスマホ扱い', JSON.stringify(ph));
+    t.near(ph.width, 390 * 0.20, 1e-9, 'P4.18 項目1: スマホの地図幅は画面幅の20%', ph.width);
+    t.near(ph.right, 8, 1e-9, 'P4.18 項目1: 右上の余白は8px（右）', ph.right);
+    t.near(ph.top, 8, 1e-9, 'P4.18 項目1: 右上の余白は8px（上）', ph.top);
+    t.ok(ph.minWidth === 0, 'P4.18 項目1: スマホでは最小幅118pxに押し戻されない', ph.minWidth);
+    t.ok(ph.width < Math.min(390 * 0.32, 844 * 0.62),
+      'P4.18 項目1: 現行（32%）より確実に小さい＝視界を遮らない',
+      ph.width.toFixed(1) + ' < ' + Math.min(390 * 0.32, 844 * 0.62).toFixed(1));
+    var land = L(844, 390);                     /* 同・横持ち（実プレイの向き） */
+    t.ok(land.small === true && Math.abs(land.width - 844 * 0.20) < 1e-9,
+      'P4.18 項目1: 横持ちでも短辺が600px未満ならスマホ扱い（幅20%）', land.width);
+    var pc = L(1280, 800);
+    t.ok(pc.small === false, 'P4.18 項目1: PC（短辺600px以上）は現行のまま');
+    t.near(pc.width, Math.min(1280 * 0.32, 800 * 0.62), 1e-9,
+      'P4.18 項目1: PCは P4.11 の min(32vw, 62vh) のまま', pc.width);
+    t.ok(L(600, 900).small === false, 'P4.18 項目1: 短辺ちょうど600pxはPC扱い（「未満」が境目）');
+    t.ok(L(599, 900).small === true, 'P4.18 項目1: 短辺599pxはスマホ扱い');
+    t.near(L(320, 640).width, 64, 1e-9, 'P4.18 項目1: 小さな端末でも20%のまま（下限で膨らまない）');
+
+    /* --- 実画面のCSSがレイアウト関数と一致している（CSSは写しでしかない） --- */
+    var vw = global.innerWidth, vh = global.innerHeight;
+    var want = L(vw, vh);
+    var cs = global.getComputedStyle(wrap);
+    t.near(parseFloat(cs.width), want.width, 1.5,
+      'P4.18 項目1: 実画面のCSS幅がレイアウト関数と一致', parseFloat(cs.width) + ' / ' + want.width);
+    t.near(parseFloat(cs.right), want.right, 0.6,
+      'P4.18 項目1: 実画面の右余白が一致', cs.right);
+    t.near(parseFloat(cs.top), want.top, 0.6,
+      'P4.18 項目1: 実画面の上余白が一致', cs.top);
+
+    /* --- タップ判定は地図の矩形内だけ --- */
+    var box = wrap.getBoundingClientRect();
+    var cx = box.left + box.width / 2, cy = box.top + box.height / 2;
+    t.ok(mm.hitTest(cx, cy) === true, 'P4.18 項目1: 地図の中はタップ判定に入る');
+    t.ok(mm.hitTest(box.left - 20, cy) === false, 'P4.18 項目1: 地図の左外はタップ判定に入らない');
+    t.ok(mm.hitTest(cx, box.bottom + 40) === false, 'P4.18 項目1: 地図の下外はタップ判定に入らない');
+
+    var ig0 = mm.tapsIgnored;
+    t.ok(mm.tapAt(box.left - 20, cy) === false && mm.full === false,
+      'P4.18 項目1: 矩形外のタップでは全画面地図が開かない');
+    t.ok(mm.tapsIgnored === ig0 + 1, 'P4.18 項目1: 矩形外のタップは無視として数える');
+    /* 実DOM経路（座標つき mousedown）でも同じ */
+    tapAtEl(wrap, box.left - 20, cy);
+    t.ok(mm.full === false, 'P4.18 項目1: DOM経路でも矩形外なら開かない');
+    tapAtEl(wrap, cx, cy);
+    t.ok(mm.full === true, 'P4.18 項目1: 地図の矩形内をタップすると全画面になる');
+
+    /* --- 全画面地図: どこをタップしても閉じる＋大きい `閉じる` --- */
+    var fb = wrap.getBoundingClientRect();
+    t.ok(fb.width >= Math.min(vw, vh) * 0.90,
+      'P4.18 項目1: 全画面地図は画面いっぱい（短辺の90%以上）', fb.width.toFixed(0));
+    var cb = document.getElementById('map-close');
+    if (t.ok(!!cb, 'P4.18 項目1: `閉じる` ボタンがある')) {
+      t.ok(cb.textContent === '閉じる', 'P4.18 項目1: 文言が正文どおり', cb.textContent);
+      var ccs = global.getComputedStyle(cb);
+      t.ok(ccs.display !== 'none' && ccs.visibility !== 'hidden',
+        'P4.18 項目1: 全画面のときだけ `閉じる` が出る', ccs.display);
+      var cbox = cb.getBoundingClientRect();
+      t.ok(cbox.width >= 88 && cbox.height >= 44,
+        'P4.18 項目1: `閉じる` は大きめ（44px以上の指の的）',
+        cbox.width.toFixed(0) + 'x' + cbox.height.toFixed(0));
+      t.ok(cbox.right <= fb.right + 1 && cbox.top <= fb.top + fb.height * 0.2,
+        'P4.18 項目1: `閉じる` は地図の右上にある',
+        cbox.right.toFixed(0) + ',' + cbox.top.toFixed(0) + ' / ' + fb.right.toFixed(0) + ',' + fb.top.toFixed(0));
+    }
+    /* 地図のどこ（隅）をタップしても閉じる */
+    t.ok(mm.tapAt(fb.left + 10, fb.bottom - 10) === true && mm.full === false,
+      'P4.18 項目1: 全画面地図は地図のどこをタップしても閉じる');
+    t.ok(global.getComputedStyle(cb).display === 'none',
+      'P4.18 項目1: 閉じたら `閉じる` も消える');
+    /* `閉じる` ボタンからも閉じる（地図側のタップと二重にトグルしない） */
+    mm.toggle();
+    t.ok(mm.full === true, 'P4.18 項目1: もう一度開く（前提）');
+    tapEl(cb);
+    t.ok(mm.full === false, 'P4.18 項目1: `閉じる` ボタンで閉じる（二重トグルしない）');
+    t.ok(document.body.classList.contains('map-full') === false,
+      'P4.18 項目1: 閉じたら `メニューに戻る` が戻る');
+    g.reset();
+  }
+
+  function testP418RunToggle(t, g) {
+    g.reset();
+    var inp = g.input, btn = document.getElementById('btn-run');
+    if (!t.ok(!!btn, 'P4.18 項目2: 走るボタンが結線されている')) return;
+    t.ok(btn.textContent === '走る', 'P4.18 項目2: ラベルは `走る` のまま（正文）', btn.textContent);
+    t.ok(inp.isRunning() === false && inp.runToggle === false,
+      'P4.18 項目2: 初期状態は走っていない');
+
+    /* --- タップで切替・点灯 --- */
+    tapEl(btn);
+    t.ok(inp.runToggle === true && inp.isRunning() === true,
+      'P4.18 項目2: タップで走行に切り替わる（長押しではない）');
+    t.ok(btn.classList.contains('on'), 'P4.18 項目2: 走行中はボタンが点灯する');
+
+    /* --- 移動をやめても保持する --- */
+    inp.moveY = 1;
+    sim(g, 20);
+    t.ok(g.player.mode === 'run', 'P4.18 項目2: トグル中は走りで動く', g.player.mode);
+    inp.moveY = 0;
+    sim(g, 20);
+    t.ok(inp.runToggle === true && inp.isRunning() === true,
+      'P4.18 項目2: 移動をやめても走行状態を保持する');
+    t.ok(btn.classList.contains('on'), 'P4.18 項目2: 止まっている間も点灯を保つ');
+    inp.moveY = 1;
+    sim(g, 10);
+    t.ok(g.player.mode === 'run', 'P4.18 項目2: 再び動き出すとそのまま走る', g.player.mode);
+    inp.moveY = 0;
+
+    /* --- もう一度タップで解除 --- */
+    tapEl(btn);
+    t.ok(inp.runToggle === false && inp.isRunning() === false,
+      'P4.18 項目2: もう一度タップで解除される');
+    t.ok(!btn.classList.contains('on'), 'P4.18 項目2: 解除すると消灯する');
+    inp.moveY = 1; sim(g, 10); inp.moveY = 0;
+    t.ok(g.player.mode === 'walk', 'P4.18 項目2: 解除後は歩きに戻る', g.player.mode);
+
+    /* --- しゃがみとの優先関係（現行踏襲）: 走るを入れたらしゃがみ解除 --- */
+    inp.crouchOn = true;
+    inp.toggleRun(true);
+    t.ok(inp.crouchOn === false && inp.runToggle === true,
+      'P4.18 項目2: しゃがみ中に走るを入れるとしゃがみが解除される');
+    inp.releaseRun('test');
+
+    /* --- PC の Shift は現行どおり「押下中」 --- */
+    sendKey('keydown', 'ShiftLeft');
+    t.ok(inp.isRunning() === true, 'P4.18 項目2: PCの Shift 長押しは現行どおり走る');
+    t.ok(inp.runToggle === false, 'P4.18 項目2: Shift はトグルの状態に干渉しない');
+    sendKey('keyup', 'ShiftLeft');
+    t.ok(inp.isRunning() === false, 'P4.18 項目2: Shift を離すと走りが止まる（PCはトグルではない）');
+
+    /* --- 自動解除 その1: 捕獲 --- */
+    var rel0 = inp.releases;
+    g.reset();
+    inp.toggleRun(true);
+    t.ok(g.stealth.capture(g.ai) === true, 'P4.18 項目2: 捕獲が成立する（前提）');
+    t.ok(inp.runToggle === false && inp.releasedBy === 'capture',
+      'P4.18 項目2: 捕獲で走るトグルが自動解除される', inp.releasedBy);
+    g.reset();
+
+    /* --- 自動解除 その2: ロッカーに入る --- */
+    var D4 = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+    var lockers = (g.map.meta.lockers || []), lk = null, side = null;
+    for (var li = 0; li < lockers.length && !lk; li++) {
+      for (var d = 0; d < 4; d++) {
+        var nc = lockers[li].col + D4[d][0], nr = lockers[li].row + D4[d][1];
+        if (g.map.isWalkable(nc, nr)) { lk = lockers[li]; side = { col: nc, row: nr }; break; }
+      }
+    }
+    if (t.ok(!!lk, 'P4.18 項目2: 検証に使えるロッカーがある（前提）')) {
+      place(g, side.col, side.row, 0);
+      inp.toggleRun(true);
+      g.stealth.enterLocker(lk.col, lk.row);
+      t.ok(inp.runToggle === false && inp.releasedBy === 'locker',
+        'P4.18 項目2: ロッカーに入ると走るトグルが自動解除される', inp.releasedBy);
+      g.stealth.exitLocker();
+    }
+    g.reset();
+
+    /* --- 自動解除 その3: ゲームオーバー（3回目の捕獲） --- */
+    var TU = ESCAPE.ENEMY_TUNING;
+    if (t.ok(startCapture(g, TU.captureLimit - 1), 'P4.18 項目2: 3回目の捕獲が始まる（前提）')) {
+      inp.toggleRun(true);
+      var n = simUntil(g, function () { return g.stealth.jail.phase === 'over'; }, 1500);
+      t.ok(n >= 0, 'P4.18 項目2: ゲームオーバーまで進む（前提）', n);
+      t.ok(inp.runToggle === false && inp.releasedBy === 'gameover',
+        'P4.18 項目2: ゲームオーバーで走るトグルが自動解除される', inp.releasedBy);
+      g.stealth.onInteract();
+      simUntil(g, function () { return g.stealth.jail.phase === 'none'; }, 600);
+    }
+    g.reset();
+
+    /* --- 自動解除 その4: タイトルへ戻る --- */
+    inp.toggleRun(true);
+    ESCAPE.Title.show();
+    t.ok(inp.runToggle === false && inp.releasedBy === 'title',
+      'P4.18 項目2: タイトルへ戻ると走るトグルが自動解除される', inp.releasedBy);
+    ESCAPE.Title.skip();
+    t.ok(inp.releases - rel0 >= 4,
+      'P4.18 項目2: 自動解除の4条件（捕獲・ロッカー・ゲームオーバー・タイトル）が全て働いた',
+      (inp.releases - rel0) + '回');
+    g.reset();
+    try { localStorage.removeItem(SAVE_KEY); } catch (e) { /* 無効環境は対象外 */ }
+  }
+
+  function testP418Menu(t, g) {
+    g.reset();
+    ESCAPE.Title.skip();
+    var M = ESCAPE.Menu, T = ESCAPE.Title;
+    if (!t.ok(!!M, 'P4.18 項目3: メニューが結線されている')) return;
+    var yes = document.getElementById('confirm-yes'), no = document.getElementById('confirm-no');
+
+    /* --- 失効: プレイ画面の `データ全消去` --- */
+    t.ok(document.getElementById('btn-erase') === null,
+      'P4.18 項目3: プレイ画面の `データ全消去` は失効（DOMごと削除）');
+
+    /* --- プレイ画面は `メニューに戻る` だけ・画面上部 --- */
+    var bm = document.getElementById('btn-menu');
+    if (!t.ok(!!bm, 'P4.18 項目3: `メニューに戻る` がある')) return;
+    t.ok(bm.textContent === 'メニューに戻る', 'P4.18 項目3: 文言が正文どおり', bm.textContent);
+    var vh = global.innerHeight || 800, vw = global.innerWidth || 1280;
+    var bx = bm.getBoundingClientRect();
+    t.ok(bx.top < vh * 0.25, 'P4.18 項目3: 画面の上部にある（下部は誤タップが多い）',
+      bx.top.toFixed(0) + ' / ' + vh);
+    t.ok(bx.left < vw * 0.5, 'P4.18 項目3: 左上にある', bx.left.toFixed(0));
+    t.ok(bx.height >= 28 && bx.width >= 60, 'P4.18 項目3: 指で押せる大きさ',
+      bx.width.toFixed(0) + 'x' + bx.height.toFixed(0));
+
+    /* --- 確認ダイアログ（既存のモーダル様式）・正文 --- */
+    t.ok(M.open('menu') === true, 'P4.18 項目3: `メニューに戻る` で確認が開く');
+    var inf = M.info();
+    t.ok(inf.text === 'メニューに戻る —— 進行は記録されている',
+      'P4.18 項目3: 確認の本文が正文どおり', inf.text);
+    t.ok(inf.yes === '戻る' && inf.no === '続ける',
+      'P4.18 項目3: 選択肢が正文どおり', inf.yes + '/' + inf.no);
+    t.ok(M.visible() === true, 'P4.18 項目3: 確認が画面に出る（computed style）',
+      JSON.stringify({ open: inf.open }));
+    var ov = document.getElementById('confirm-overlay');
+    t.ok(ov.classList.contains('modal-overlay'),
+      'P4.18 項目3: 既存のモーダル様式（memo/gameover と同じ .modal-overlay）');
+    /* 確認中は既存モーダルと同じ「中断安全」＝プレイヤーは動かない */
+    var px = g.player.x, pz = g.player.z;
+    g.input.moveY = 1;
+    sim(g, 30);
+    g.input.reset();
+    t.ok(g.player.x === px && g.player.z === pz,
+      'P4.18 項目3: 確認が開いている間はプレイヤーが動かない');
+
+    /* --- `続ける` は何も起こさない --- */
+    tapEl(no);
+    t.ok(M.isOpen() === false && M.visible() === false, 'P4.18 項目3: `続ける` で確認が閉じる');
+    t.ok(T.state === 'playing', 'P4.18 項目3: `続ける` ではタイトルへ行かない', T.state);
+
+    /* --- `戻る` → タイトルへ。進行は記録されている --- */
+    g.progress.gimmick.key = true;
+    M.open('menu');
+    tapEl(yes);
+    t.ok(T.state === 'title' && T.visible() === true,
+      'P4.18 項目3: `戻る` でタイトルへ戻る', T.state);
+    t.ok(T.hasSave() === true, 'P4.18 項目3: セーブは保持されている（進行は記録されている）');
+    t.ok(T.info().choiceShown === true,
+      'P4.18 項目3: タイトルは `続きから` が出る状態', JSON.stringify(T.info().choiceShown));
+    t.ok(g.progress.gimmick.key === true, 'P4.18 項目3: 進行（鍵の取得）が消えていない');
+    t.ok(g.minimap.full === false, 'P4.18 項目3: 全画面地図は畳まれている');
+    T.skip();
+
+    /* --- タイトルの `データを消す` --- */
+    var be = document.getElementById('title-erase');
+    if (!t.ok(!!be, 'P4.18 項目3: タイトルに `データを消す` がある')) return;
+    t.ok(be.textContent === 'データを消す', 'P4.18 項目3: 文言が正文どおり', be.textContent);
+    t.ok(be.parentNode === document.getElementById('title-actions'),
+      'P4.18 項目3: データ消去はタイトル（メインメニュー）側にある');
+    M.open('erase');
+    var inf2 = M.info();
+    t.ok(inf2.text === '記録をすべて消す —— 元には戻せない',
+      'P4.18 項目3: 消去の確認が正文どおり', inf2.text);
+    t.ok(inf2.yes === '消す' && inf2.no === 'やめる',
+      'P4.18 項目3: 消去の選択肢が正文どおり', inf2.yes + '/' + inf2.no);
+    tapEl(no);
+    t.ok(localStorage.getItem(SAVE_KEY) !== null, 'P4.18 項目3: `やめる` では消えない');
+    M.open('erase');
+    tapEl(yes);
+    t.ok(localStorage.getItem(SAVE_KEY) === null, 'P4.18 項目3: `消す` で記録が消える');
+    t.ok(g.progress.gimmick.key === false, 'P4.18 項目3: 消去で進行も初期状態へ戻る');
+    t.ok(T.state === 'title' && T.info().tapShown === true,
+      'P4.18 項目3: 消したタイトルは `タップして始める` に戻る');
+    T.skip();
+
+    /* --- 開けない場面（タイトル中・起床演出中） --- */
+    T.show();
+    t.ok(M.canOpenMenu() === false, 'P4.18 項目3: タイトル中はメニューを開かない');
+    t.ok(M.open('menu') === false, 'P4.18 項目3: タイトル中は確認も出ない');
+    T.skip();
+    ESCAPE.Wake.begin('new');
+    t.ok(M.canOpenMenu() === false, 'P4.18 項目3: 起床演出中はメニューを開かない');
+    ESCAPE.Wake.skip();
+    t.ok(M.canOpenMenu() === true, 'P4.18 項目3: 通常のプレイ中は開ける');
+
+    /* --- PC は Esc でも開く --- */
+    sendKey('keydown', 'Escape');
+    t.ok(M.isOpen() === true, 'P4.18 項目3: PCは Esc でも確認が開く');
+    sendKey('keydown', 'Escape');
+    t.ok(M.isOpen() === false, 'P4.18 項目3: Esc をもう一度で閉じる（＝続ける）');
+    /* 全画面地図が開いている時の Esc は地図を閉じる番（メニューは出ない） */
+    g.minimap.toggle();
+    sendKey('keydown', 'Escape');
+    t.ok(M.isOpen() === false, 'P4.18 項目3: 全画面地図中の Esc はメニューを開かない');
+    if (g.minimap.full) g.minimap.toggle();
+
+    g.reset();
+    try { localStorage.removeItem(SAVE_KEY); } catch (e) { /* 無効環境は対象外 */ }
+  }
+
+  function testP418Wake(t, g) {
+    var W = ESCAPE.Wake, C = ESCAPE.WAKE_CONST, T = ESCAPE.Title;
+    if (!t.ok(!!W && !!C, 'P4.18 項目4: 起床演出が結線されている')) return;
+    var stand = ESCAPE.Player.EYE_STAND;
+    g.reset();
+    T.skip();
+
+    /* --- 形（純関数。実時間に依らず検証できる） --- */
+    t.ok(C.DUR_NEW >= 3.5 && C.DUR_NEW <= 4.5,
+      'P4.18 項目4: `最初から` は約4秒の起床演出', C.DUR_NEW + 's');
+    t.near(C.DUR_BLINK, 1.2, 1e-9, 'P4.18 項目4: `続きから` は1.2秒の瞬きだけ', C.DUR_BLINK);
+    t.near(C.EYE_FLOOR, 0.35, 1e-9, 'P4.18 項目4: 伏せた視点の高さは0.35m（契約）', C.EYE_FLOOR);
+    var f0 = C.frameOf(0, 'new'), fE = C.frameOf(C.DUR_NEW, 'new');
+    t.near(f0.eye, 0.35, 1e-9, 'P4.18 項目4: 演出の始まりは床に伏せた高さ', f0.eye);
+    t.near(fE.eye, stand, 1e-9, 'P4.18 項目4: 演出の終わりは目線の高さ', fE.eye);
+    t.ok(f0.lid >= 0.5 - 1e-9 && f0.veil >= 0.999,
+      'P4.18 項目4: 始まりは暗転＝まぶたが閉じている', f0.lid + '/' + f0.veil);
+    t.ok(fE.lid < 1e-6 && fE.veil < 1e-6 && fE.blur < 1e-6,
+      'P4.18 項目4: 終わりはまぶたも暗転もぼけも無い',
+      fE.lid + '/' + fE.veil + '/' + fE.blur);
+    t.ok(f0.blur > 4 && f0.blur >= C.frameOf(1.5, 'new').blur,
+      'P4.18 項目4: 視界のぼけは最初が一番強く晴れていく',
+      f0.blur + ' → ' + C.frameOf(1.5, 'new').blur.toFixed(2));
+    t.ok(Math.abs(f0.roll) > 0.05, 'P4.18 項目4: 始まりは少し傾いている', f0.roll);
+    t.near(fE.roll, 0, 1e-9, 'P4.18 項目4: 起き上がると傾きが戻る', fE.roll);
+    t.ok(f0.pitch < -0.05 && Math.abs(fE.pitch) < 1e-9,
+      'P4.18 項目4: 床側を向いた視線が正面へ戻る', f0.pitch + ' → ' + fE.pitch);
+
+    /* カメラ高さは 0.35 → 目線 へ単調に上がる */
+    var prev = -1, mono = true, mid = 0;
+    for (var i = 0; i <= 80; i++) {
+      var tt = C.DUR_NEW * i / 80;
+      var fr = C.frameOf(tt, 'new');
+      if (fr.eye < prev - 1e-9) mono = false;
+      prev = fr.eye;
+      if (i === 40) mid = fr.eye;
+    }
+    t.ok(mono, 'P4.18 項目4: カメラ高さは単調に上がる（行ったり来たりしない）');
+    t.ok(mid > 0.35 + 0.2 && mid < stand - 0.05,
+      'P4.18 項目4: 途中は床と目線の間（起き上がっている最中）', mid.toFixed(3));
+
+    /* まぶた: 開いたあとに2回閉じ直す＝瞬き2回 */
+    function blinkCount(mode, t0, t1) {
+      var above = false, n = 0;
+      for (var k = 0; k <= 400; k++) {
+        var tv = t0 + (t1 - t0) * k / 400;
+        var lid = C.frameOf(tv, mode).lid;
+        if (!above && lid > 0.35) { above = true; n++; }
+        else if (above && lid < 0.10) above = false;
+      }
+      return n;
+    }
+    t.ok(C.frameOf(1.05, 'new').lid < 0.06,
+      'P4.18 項目4: まぶたは上下から黒が引いて一度開く', C.frameOf(1.05, 'new').lid);
+    t.ok(blinkCount('new', 1.05, C.DUR_NEW) === 2,
+      'P4.18 項目4: そのあと瞬きが2回', blinkCount('new', 1.05, C.DUR_NEW) + '回');
+
+    /* `続きから` は瞬きだけ・カメラ高さは動かない */
+    var b0 = C.frameOf(0, 'blink'), bE = C.frameOf(C.DUR_BLINK, 'blink');
+    t.near(b0.eye, stand, 1e-9, 'P4.18 項目4: `続きから` は最初から目線の高さ', b0.eye);
+    t.near(bE.eye, stand, 1e-9, 'P4.18 項目4: `続きから` はカメラ高さを動かさない');
+    t.ok(b0.lid >= 0.5 - 1e-9 && bE.lid < 1e-6,
+      'P4.18 項目4: `続きから` も閉じた状態から開く', b0.lid + ' → ' + bE.lid);
+    t.ok(blinkCount('blink', 0.5, C.DUR_BLINK) === 1,
+      'P4.18 項目4: `続きから` の瞬きは1回', blinkCount('blink', 0.5, C.DUR_BLINK) + '回');
+
+    /* --- 実経路: `最初から`（セーブ無しのタップ開始＝新規） --- */
+    g.reset();
+    try { localStorage.removeItem(SAVE_KEY); } catch (e) { /* 無効環境は対象外 */ }
+    T.show();
+    t.ok(T.start(null) === true, 'P4.18 項目4: タイトルから開始する（前提）');
+    T.flush();
+    t.ok(W.active() === true && W.info().mode === 'new',
+      'P4.18 項目4: 新規開始では起床演出に入る', W.info().mode);
+    t.ok(g.input.locked === true, 'P4.18 項目4: 演出中は入力を受け付けない');
+    t.near(g.player.eyeHeight, 0.35, 1e-6,
+      'P4.18 項目4: 始まりのカメラは床に伏せた高さ', g.player.eyeHeight);
+    t.ok(Math.abs(g.camera.rotation.z) > 0.05,
+      'P4.18 項目4: 始まりのカメラは少し傾いている', g.camera.rotation.z);
+    t.ok((g.canvas.style.filter || '').indexOf('blur') >= 0,
+      'P4.18 項目4: 視界がぼけている', g.canvas.style.filter);
+    var wkEl = document.getElementById('wake');
+    t.ok(!!wkEl && wkEl.classList.contains('on'), 'P4.18 項目4: まぶたのオーバーレイが出ている');
+    t.ok(parseFloat(global.getComputedStyle(document.getElementById('wake-lid-top')).height) > 10,
+      'P4.18 項目4: 上のまぶたが画面を覆っている（computed style）');
+
+    /* 演出中は入力も世界も動かない */
+    var px = g.player.x, pz = g.player.z, yaw0 = g.player.yaw, sim0 = g.simTime;
+    var ex = g.ai.enemy.x, ez = g.ai.enemy.z;
+    var hb0 = ESCAPE.audio.fired.heartbeat || 0;
+    var vinf0 = (ESCAPE.voice && ESCAPE.voice.info) ? ESCAPE.voice.info().count : 0;
+    var crouch0 = g.input.crouchOn, run0 = g.input.runToggle;
+    tapEl(document.getElementById('btn-crouch'));
+    tapEl(document.getElementById('btn-run'));
+    t.ok(g.input.crouchOn === crouch0 && g.input.runToggle === run0,
+      'P4.18 項目4: 演出中はボタンのタップが効かない');
+    var modeWas = W.info().mode, tWas = W.info().t;
+    tapEl(g.canvas);
+    sendKey('keydown', 'KeyE');
+    t.ok(W.info().mode === modeWas && W.info().t === tWas && g.input.interactQueued === 0,
+      'P4.18 項目4: 画面タップ・キーでは演出を短縮できない');
+    g.input.moveY = 1; g.input.lookDX = 600;
+    sim(g, 60);
+    g.input.moveY = 0; g.input.lookDX = 0;
+    t.ok(g.player.x === px && g.player.z === pz && g.player.yaw === yaw0,
+      'P4.18 項目4: 演出中はプレイヤーが動かない');
+    t.ok(g.simTime === sim0, 'P4.18 項目4: 演出中は論理時間が進まない（敵AI・鼓動・声が動かない）');
+    t.ok(g.ai.enemy.x === ex && g.ai.enemy.z === ez, 'P4.18 項目4: 演出中は敵が動かない');
+    t.ok((ESCAPE.audio.fired.heartbeat || 0) === hb0, 'P4.18 項目4: 演出中は鼓動が鳴らない');
+    if (ESCAPE.voice && ESCAPE.voice.info) {
+      t.ok(ESCAPE.voice.info().count === vinf0, 'P4.18 項目4: 演出中は声が鳴らない');
+    }
+    /* 演出そのものは進む（カメラが起き上がる） */
+    t.ok(g.player.eyeHeight > 0.35, 'P4.18 項目4: 演出だけは進む（起き上がる）', g.player.eyeHeight);
+    sim(g, 90);
+    var midEye = g.player.eyeHeight;
+    t.ok(midEye > 0.35 && midEye < stand,
+      'P4.18 項目4: 途中のカメラは床と目線の間', midEye.toFixed(3));
+    sim(g, 120);
+    t.ok(W.active() === false, 'P4.18 項目4: 約4秒で演出が明ける', W.info().t);
+    t.near(g.player.eyeHeight, stand, 1e-6, 'P4.18 項目4: 明けたら目線の高さ', g.player.eyeHeight);
+    t.near(g.camera.rotation.z, 0, 1e-9, 'P4.18 項目4: 傾きが残らない');
+    t.ok(g.input.locked === false, 'P4.18 項目4: 明けたら操作できる');
+    t.ok((g.canvas.style.filter || '') === '', 'P4.18 項目4: ぼけが残らない', g.canvas.style.filter);
+    t.ok(!wkEl.classList.contains('on'), 'P4.18 項目4: まぶたのオーバーレイが消える');
+    t.ok(W.cues >= 3, 'P4.18 項目4: 荒い呼吸と衣擦れが鳴る（既存音色の流用）', W.cues + '回');
+    t.ok((ESCAPE.audio.fired.raggedBreath || 0) > 0, 'P4.18 項目4: 荒い呼吸が鳴った',
+      ESCAPE.audio.fired.raggedBreath);
+    g.input.reset();
+
+    /* 明けたあとは普通に動ける */
+    var qx = g.player.x, qz = g.player.z;
+    g.input.moveY = 1;
+    sim(g, 40);
+    g.input.reset();
+    t.ok(Math.hypot(g.player.x - qx, g.player.z - qz) > 0.2,
+      'P4.18 項目4: 演出のあとはプレイヤーが動く',
+      Math.hypot(g.player.x - qx, g.player.z - qz).toFixed(2) + 'm');
+
+    /* --- skip（機械テスト用の経路） --- */
+    g.reset();
+    try { localStorage.removeItem(SAVE_KEY); } catch (e) { /* 無効環境は対象外 */ }
+    T.show(); T.start(null); T.flush();
+    t.ok(W.active() === true, 'P4.18 項目4: 演出に入る（前提）');
+    t.ok(W.skip() === true, 'P4.18 項目4: 機械テスト用の skip で飛ばせる');
+    t.ok(W.active() === false && g.input.locked === false,
+      'P4.18 項目4: skip のあとは操作できる');
+    t.near(g.player.eyeHeight, stand, 1e-6, 'P4.18 項目4: skip のあとは目線の高さ');
+
+    /* --- `続きから` は1.2秒の瞬きだけ --- */
+    g.reset();
+    try { localStorage.setItem(SAVE_KEY, JSON.stringify({ v: 4, mapId: 'nope' })); } catch (e) { /* 無視 */ }
+    T.show();
+    t.ok(T.info().choiceShown === true, 'P4.18 項目4: 2択が出ている（前提）');
+    tapEl(T.dom.btnContinue);
+    T.flush();
+    t.ok(W.info().mode === 'blink', 'P4.18 項目4: `続きから` は瞬きだけ', W.info().mode);
+    t.near(W.duration(), 1.2, 1e-9, 'P4.18 項目4: その長さは1.2秒', W.duration());
+    t.near(g.player.eyeHeight, stand, 1e-6,
+      'P4.18 項目4: `続きから` ではカメラ高さを動かさない', g.player.eyeHeight);
+    sim(g, 60);
+    t.ok(W.active() === true, 'P4.18 項目4: 1.0秒ではまだ明けていない', W.info().t);
+    sim(g, 20);
+    t.ok(W.active() === false, 'P4.18 項目4: 1.2秒で明ける', W.info().t);
+    g.input.reset();
+    try { localStorage.removeItem(SAVE_KEY); } catch (e) { /* 無効環境は対象外 */ }
+
+    /* --- 捕獲後の復帰は現行のまま（起床演出を挟まない） --- */
+    g.reset();
+    var runs0 = W.runs;
+    g.stealth.capture(g.ai);
+    simUntil(g, function () { return g.stealth.jail.phase === 'none'; }, 1500);
+    t.ok(W.runs === runs0,
+      'P4.18 項目4: 捕獲後の復帰では起床演出を挟まない（現行の暗転のまま）', W.runs - runs0);
+    g.reset();
+    T.skip();
+    try { localStorage.removeItem(SAVE_KEY); } catch (e) { /* 無効環境は対象外 */ }
+  }
+
   function runAll(opts) {
     var g = ESCAPE.game;
     var t = new Runner();
@@ -5702,7 +6219,9 @@
       /* P4.17 レーンB: 物語形式の強制メモ4枚（日記2〜4を進行路上で自動表示・壁メモで読み返し） */
       testP417StoryGates,
       /* P4.17 段階2: 質感と光（品質段階・自動退避・近傍灯・輝度ゲート・退避先の系統X） */
-      testP417Tiers, testP417Degrade, testP417Lights, testP417Render, testP417Fallback
+      testP417Tiers, testP417Degrade, testP417Lights, testP417Render, testP417Fallback,
+      /* P4.18: iPhone実機評4点（地図縮小・走るトグル・メニュー/データ消去・目覚めの演出） */
+      testP418MapLayout, testP418RunToggle, testP418Menu, testP418Wake
     ];
     /* 他モジュールが登録した追加スイート（P4.10a の敵2体・絶叫・地図リセット等）も runAll に乗せる */
     if (ESCAPE.__extraSuites && ESCAPE.__extraSuites.length) suites = suites.concat(ESCAPE.__extraSuites);
@@ -5848,6 +6367,26 @@
       t.ok(!RQ.rig || RQ.rig.slots.length === RQ.TIERS[RQ.tier].lights,
         '復帰: 近傍灯の本数が段階どおり', RQ.rig ? RQ.rig.slots.length : 0);
     }
+
+    /* P4.18: 起床演出・確認ダイアログ・走るトグル・全画面地図も製品初期状態へ戻ること */
+    if (ESCAPE.Wake) {
+      t.ok(ESCAPE.Wake.active() === false, '復帰: 起床演出が動いていない', ESCAPE.Wake.info().mode);
+      t.ok(g.input.locked === false, '復帰: 入力ロックが解除されている');
+      t.ok((g.canvas.style.filter || '') === '', '復帰: 視界のぼけが残っていない', g.canvas.style.filter);
+      var wkEl2 = document.getElementById('wake');
+      t.ok(!!wkEl2 && !wkEl2.classList.contains('on'), '復帰: まぶたのオーバーレイが消えている');
+    }
+    if (ESCAPE.Menu) {
+      t.ok(ESCAPE.Menu.isOpen() === false && ESCAPE.Menu.visible() === false,
+        '復帰: 確認ダイアログが閉じている', JSON.stringify(ESCAPE.Menu.info().kind));
+    }
+    t.ok(g.input.runToggle === false, '復帰: 走るトグルが解除されている');
+    t.ok(document.getElementById('btn-erase') === null,
+      '復帰: プレイ画面の `データ全消去` は失効したまま（P4.18）');
+    t.ok(document.body.classList.contains('map-full') === false,
+      '復帰: 全画面地図の名残（body.map-full）が残っていない');
+    t.ok(g.minimap ? g.minimap.tapsIgnored === 0 : true,
+      '復帰: 地図のタップ計数が初期化されている');
 
     /* P4.16 項目4: 最後にタイトルへ戻す＝製品初期状態（起動直後と同じ画面）へ完全復帰 */
     if (TITLE && TITLE.restore) {

@@ -93,6 +93,10 @@
     this._clearTimers();
     this.state = 'title';
     this.mode = null;
+    /* P4.18: タイトルへ戻る＝起床演出は畳み、走るトグルは自動解除する（項目2の4条件） */
+    if (ESCAPE.Wake && ESCAPE.Wake.cancel) ESCAPE.Wake.cancel();
+    var gT = this.game || (ESCAPE && ESCAPE.game);
+    if (gT && gT.input && gT.input.releaseRun) gT.input.releaseRun('title');
     d.overlay.classList.remove('hidden', 'fading');
     d.overlay.classList.toggle('has-save', this.hasSave());
     this._scheduleGlitch();
@@ -147,6 +151,8 @@
   /** タイトルを出さずに最初から遊べる状態にする（runAll の入口） */
   Title.prototype.skip = function () {
     if (this.state === 'playing') return false;
+    /* runAll の入口。起床演出は挟まない（機械テストは演出を専用スイートで検証する） */
+    if (ESCAPE.Wake && ESCAPE.Wake.cancel) ESCAPE.Wake.cancel();
     this._clearTimers();
     this.state = 'playing';
     var d = this.dom;
@@ -173,6 +179,12 @@
       if (g.input && g.input.reset) g.input.reset();
       g._accum = 0;
       g._last = (global.performance ? performance.now() : Date.now());
+    }
+    /* P4.18 項目4: ここから目覚めの演出へ入る。
+       `続きから` は短い瞬き(1.2秒)、それ以外（`最初から`／セーブ無しの開始＝新規）は
+       約4秒の起床演出。捕獲後の復帰は現行の暗転のまま（こちらは通らない）。 */
+    if (ESCAPE.Wake && ESCAPE.Wake.begin) {
+      ESCAPE.Wake.begin(this.mode === 'continue' ? 'blink' : 'new');
     }
   };
 

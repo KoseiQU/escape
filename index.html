@@ -22,8 +22,9 @@
     position:absolute; left:50%; top:50%; width:6px; height:6px; margin:-3px 0 0 -3px;
     border-radius:50%; background:rgba(200,215,230,.55);
   }
+  /* P4.18 項目3: 左上は `メニューに戻る` が使うので1段下げる */
   #debug {
-    position:absolute; left:8px; top:8px; font-size:11px; line-height:1.5;
+    position:absolute; left:8px; top:48px; font-size:11px; line-height:1.5;
     color:rgba(170,190,205,.75); white-space:pre; letter-spacing:.02em;
     text-shadow:0 1px 2px rgba(0,0,0,.8);
   }
@@ -80,6 +81,32 @@
     font-size:11px; letter-spacing:.4em; color:rgba(200,224,240,.8); line-height:1.2;
   }
   #minimap-wrap.full #minimap-label { display:block; }
+  /* --- P4.18 項目1: 全画面地図の `閉じる`（右上・大きめ。地図のどこをタップしても閉じるが、
+         押す場所がはっきり分かるボタンも置く。正文 docs/notes.md「P4.18追加」） --- */
+  #map-close {
+    display:none; position:absolute; right:6px; top:6px; z-index:22;
+    pointer-events:auto; -webkit-tap-highlight-color:transparent;
+    min-width:104px; padding:15px 22px; line-height:1;
+    font-family:inherit; font-size:15px; font-weight:700; letter-spacing:.18em;
+    padding-right:calc(22px - .18em);
+    color:#eaf4fb; background:rgba(16,21,27,.86);
+    border:1px solid rgba(190,220,240,.62); border-radius:3px;
+  }
+  #minimap-wrap.full #map-close { display:block; }
+  /* --- P4.18 項目1（iPhone実機評1「地図が大きすぎて視界を遮る」）:
+         画面の短辺が600px未満＝スマホ相当では 幅20%・右上8px余白に落とす。
+         min(vw,vh) < 600 ⟺ (vw < 600 または vh < 600) なので or で書く。
+         数値の唯一の真実は js/minimap.js の Minimap.layout()（機械テストは値を注入して
+         そちらを検証する）。ここは同じ数値をCSSへ書き写しているだけ。
+         PC（短辺600px以上）は P4.11 のまま min(32vw, 62vh)。 --- */
+  @media (max-width: 599.98px), (max-height: 599.98px) {
+    #minimap-wrap {
+      width:20vw; min-width:0;
+      right:calc(8px + env(safe-area-inset-right, 0px));
+      top:calc(8px + env(safe-area-inset-top, 0px));
+    }
+    #status { top:calc(20vw + 22px); }
+  }
   #prompt {
     position:absolute; left:50%; bottom:118px; transform:translateX(-50%);
     font-size:13px; letter-spacing:.06em; color:rgba(222,232,240,.92);
@@ -233,14 +260,59 @@
   #fx-dark {
     position:fixed; inset:0; z-index:33; pointer-events:none; opacity:0; background:#000;
   }
-  /* --- P4: データ全消去（暫定UI・目立たせすぎない） --- */
-  #btn-erase {
-    position:fixed; left:8px; bottom:8px; z-index:45; pointer-events:auto;
+  /* --- 【P4.18 失効】プレイ画面の `データ全消去`（#btn-erase）。
+         タイトル画面の `データを消す` へ移設した（DOMごと削除。CSSも残さない）。 --- */
+  /* --- P4.18 項目3: プレイ画面の `メニューに戻る`（画面**上部**の左。
+         スマホは下部だと誤タップが多いという実機評に従う。PCは Esc でも開く） --- */
+  #btn-menu {
+    /* iPhone の横持ちはノッチ側の帯（safe-area-inset-left）に重なるので余白を足す。
+       env() が無い環境（PC・ヘッドレス）では 0px＝左上8pxのまま。 */
+    position:fixed; left:calc(8px + env(safe-area-inset-left, 0px));
+    top:calc(8px + env(safe-area-inset-top, 0px)); z-index:45; pointer-events:auto;
     -webkit-tap-highlight-color:transparent;
-    font-size:10px; letter-spacing:.05em; color:rgba(150,168,182,.45);
-    background:rgba(20,24,28,.35); border:1px solid rgba(150,168,182,.25);
-    border-radius:3px; padding:5px 8px;
+    font-size:12px; letter-spacing:.08em; line-height:1;
+    color:#cbd6e0; background:rgba(20,25,31,.62);
+    border:1px solid rgba(170,195,215,.34); border-radius:3px; padding:10px 14px;
   }
+  body.touch #btn-menu { font-size:13px; padding:12px 16px; }
+  /* 全画面地図の間は引っ込める（`閉じる` と押し間違えない） */
+  body.map-full #btn-menu { display:none; }
+
+  /* --- P4.18 項目3: 確認ダイアログ（既存のモーダル様式＝memo/gameover に揃える）。
+         文言は docs/notes.md「P4.18追加（メニュー・地図・起床）」が正文。 --- */
+  #confirm-overlay { z-index:95; }
+  #confirm-box {
+    width:min(84vw, 460px); padding:28px 24px;
+    background:rgba(13,17,22,.96);
+    border:1px solid rgba(170,195,215,.28); border-radius:3px;
+    box-shadow:0 18px 60px rgba(0,0,0,.7);
+  }
+  #confirm-text { font-size:15px; line-height:1.8; letter-spacing:.08em; color:#dce6ef; }
+  #confirm-actions { margin-top:26px; display:flex; gap:14px; justify-content:center; }
+  .confirm-btn {
+    pointer-events:auto; -webkit-tap-highlight-color:transparent;
+    min-width:120px; padding:14px 20px; font-family:inherit;
+    font-size:13px; letter-spacing:.20em; padding-left:calc(20px + .20em);
+    color:#cbd6e0; background:rgba(26,30,36,.85);
+    border:1px solid rgba(170,195,215,.34); border-radius:2px;
+  }
+  #confirm-yes { color:rgba(240,196,196,.95); border-color:rgba(190,110,110,.45); }
+  /* 細い画面（スマホ）では正文が2行に割れないところまで詰める */
+  @media (max-width: 430px) {
+    #confirm-box { padding:24px 18px; }
+    #confirm-text { font-size:13.5px; letter-spacing:.04em; }
+    .confirm-btn { min-width:104px; padding:13px 16px; padding-left:calc(16px + .20em); }
+  }
+
+  /* --- P4.18 項目4: 目覚めの演出（まぶた・暗転）。高さと不透明度は js/wake.js が毎フレーム
+         書く（CSS遷移に頼らない＝ __pump 駆動のスクショが決定的になる）。
+         視界のぼけは #view への CSS filter: blur() で出す（後処理Zは使わない＝代替経路）。 --- */
+  #wake { position:fixed; inset:0; z-index:88; pointer-events:none; display:none; }
+  #wake.on { display:block; }
+  #wake .wake-lid { position:absolute; left:0; right:0; height:0; background:#000; }
+  #wake-lid-top { top:0; }
+  #wake-lid-bottom { bottom:0; }
+  #wake-veil { position:absolute; inset:0; background:#000; opacity:0; }
 
   /* ================================================================
      P4.16 項目4: タイトル画面（契約 §4「P4.16 再プレイ差し戻し」項目4）
@@ -363,6 +435,13 @@
     border:1px solid rgba(170,195,215,.34); border-radius:2px;
   }
   #title-new { color:rgba(198,168,168,.85); border-color:rgba(170,110,110,.32); }
+  /* P4.18 項目3: データ消去はここ（メインメニュー）が唯一の置き場所。目立たせすぎない */
+  #title-erase {
+    min-width:0; margin-top:12px; padding:10px 16px;
+    font-size:11px; letter-spacing:.18em; padding-left:calc(16px + .18em);
+    color:rgba(152,170,184,.62); background:rgba(18,21,26,.5);
+    border-color:rgba(150,168,182,.22);
+  }
 
   /* --- 縦持ち警告（P4.16: タイトル(90)より前に出す＝縦持ちの案内はタイトルでも見える） --- */
   #orientation {
@@ -395,6 +474,8 @@
     <div id="minimap-wrap">
       <div id="minimap-label">地図</div>
       <canvas id="minimap" width="320" height="320"></canvas>
+      <!-- P4.18 項目1: 全画面時だけ出る `閉じる`（正文 docs/notes.md「P4.18追加」） -->
+      <button id="map-close" type="button">閉じる</button>
     </div>
     <div id="buttons">
       <button class="ctrl-btn" id="btn-crouch" type="button">しゃがむ</button>
@@ -438,7 +519,26 @@
     </div>
   </div>
 
-  <button id="btn-erase" type="button">データ全消去</button>
+  <!-- P4.18 項目3: プレイ画面は `メニューに戻る` だけ（`データ全消去` は失効・タイトルへ移設） -->
+  <button id="btn-menu" type="button">メニューに戻る</button>
+
+  <!-- P4.18 項目3: 確認ダイアログ（メニューに戻る／データを消す の2用途を1枚で兼ねる） -->
+  <div id="confirm-overlay" class="modal-overlay">
+    <div id="confirm-box">
+      <div id="confirm-text"></div>
+      <div id="confirm-actions">
+        <button class="confirm-btn" id="confirm-yes" type="button"></button>
+        <button class="confirm-btn" id="confirm-no" type="button"></button>
+      </div>
+    </div>
+  </div>
+
+  <!-- P4.18 項目4: 目覚めの演出のまぶた（js/wake.js が高さ・不透明度を毎フレーム書く） -->
+  <div id="wake">
+    <div id="wake-veil"></div>
+    <div class="wake-lid" id="wake-lid-top"></div>
+    <div class="wake-lid" id="wake-lid-bottom"></div>
+  </div>
 
   <!-- P4.16 項目4: タイトル画面（正文 docs/notes.md「P4.16追加（導入・タイトル）」）。
        色ずれの分身2枚は js/title.js が .title-word.base を複製して作る（綴りの二重管理を避ける）。 -->
@@ -452,6 +552,7 @@
         <button class="title-btn" id="title-continue" type="button">続きから</button>
         <button class="title-btn" id="title-new" type="button">最初から</button>
       </div>
+      <button class="title-btn" id="title-erase" type="button">データを消す</button>
     </div>
   </div>
 
@@ -485,6 +586,9 @@
   <script src="js/progress.js"></script>
   <script src="js/audio.js"></script>
   <script src="js/voice.js"></script>
+  <!-- P4.18: メニュー/確認ダイアログ・目覚めの演出（title.js より前に読む＝タイトルから呼べる） -->
+  <script src="js/menu.js"></script>
+  <script src="js/wake.js"></script>
   <script src="js/title.js"></script>
   <script src="js/test.js"></script>
 </body>

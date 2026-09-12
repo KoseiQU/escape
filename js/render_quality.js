@@ -826,7 +826,7 @@
 
   function hideHud() {
     ['debug', 'hint', 'stick-base', 'buttons', 'minimap-wrap', 'crosshair', 'status',
-      'objective', 'rope-hud', 'prompt', 'trap-hint', 'voice-sub', 'btn-erase']
+      'objective', 'rope-hud', 'prompt', 'trap-hint', 'voice-sub', 'btn-menu']
       .forEach(function (id) {
         var el = document.getElementById(id);
         if (el) el.style.display = 'none';

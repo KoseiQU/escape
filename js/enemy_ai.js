@@ -1666,6 +1666,8 @@
     p.y = map.floorYAt(p.x, p.z);
     p.yaw = this.locker.faceYaw;
     p.speed = 0;
+    /* P4.18 項目2: 走るトグルの自動解除（ロッカーに入る） */
+    if (this.game.input && this.game.input.releaseRun) this.game.input.releaseRun('locker');
     this.locker.seen = seen;
     this.lockerSeen = seen;
     sfx('lockerIn', { x: c.x, z: c.z });
@@ -1809,6 +1811,9 @@
     if (this.jail.phase !== 'none') return false;
     if (this.locker) return false;
     this.captures++;
+    /* P4.18 項目2: 走るトグルの自動解除（捕獲）。押しっぱなしで捕まった後に
+       復帰した瞬間また走り出す事故を防ぐ。 */
+    if (this.game.input && this.game.input.releaseRun) this.game.input.releaseRun('capture');
     var J = this.jail;
     J.phase = 'grab'; J.t = 0; J.pry = 0;
     J.reset = (this.captures >= this.T.captureLimit);
@@ -1886,6 +1891,8 @@
     J.t = 0;
     if (J.reset) {
       J.phase = 'over';
+      /* P4.18 項目2: 走るトグルの自動解除（ゲームオーバー） */
+      if (this.game.input && this.game.input.releaseRun) this.game.input.releaseRun('gameover');
       this.game.input.reset();
       this._syncDom();
       return;

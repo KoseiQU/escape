@@ -74,11 +74,42 @@
      入っただけで開示してはならない（P4.11 項目4 の真因） */
   var ROOM_MAX = 14;
 
+  /* ================================================================
+   * P4.18 項目1: 画面の大きさ別レイアウト（契約 §4「P4.18 iPhone実機評」項目1）
+   *   短辺600px未満（＝スマホ相当） … 幅は画面幅の20%・右上8pxの余白・下限なし
+   *   短辺600px以上（＝PC）        … P4.11 のまま min(32vw, 62vh)・右10px/上8px・下限118px
+   * CSS（index.html の @media）はこの数値を書き写しているだけで、唯一の真実はここ。
+   * 機械テストは実画面に依存せず、この関数へ画面サイズを注入して検証する。
+   * ============================================================== */
+  var SMALL_SHORT = 600;    /* 短辺(px)。これ未満をスマホ相当とする */
+  var SMALL_W = 0.20;       /* スマホ: 画面幅に対する比 */
+  var SMALL_MARGIN = 8;     /* スマホ: 右上の余白(px) */
+  var WIDE_W = 0.32;        /* PC: 画面幅に対する比（P4.11） */
+  var WIDE_CAP_H = 0.62;    /* PC: 画面高に対する頭打ち（P4.11） */
+  var WIDE_MIN = 118;       /* PC: 最小幅(px) */
+  var WIDE_RIGHT = 10, WIDE_TOP = 8;
+
+  /** 画面サイズ(px) → ミニマップ（小さい方）のレイアウト */
+  function layout(vw, vh) {
+    var short = Math.min(vw, vh);
+    if (short < SMALL_SHORT) {
+      return {
+        small: true, width: vw * SMALL_W, right: SMALL_MARGIN, top: SMALL_MARGIN,
+        minWidth: 0, ratio: SMALL_W
+      };
+    }
+    return {
+      small: false, width: Math.max(WIDE_MIN, Math.min(vw * WIDE_W, vh * WIDE_CAP_H)),
+      right: WIDE_RIGHT, top: WIDE_TOP, minWidth: WIDE_MIN, ratio: WIDE_W
+    };
+  }
+
   function Minimap(game) {
     this.game = game;
     this.dom = {
       wrap: document.getElementById('minimap-wrap'),
-      canvas: document.getElementById('minimap')
+      canvas: document.getElementById('minimap'),
+      close: document.getElementById('map-close')       /* P4.18 項目1: 全画面地図の `閉じる` */
     };
     this.ctx = this.dom.canvas ? this.dom.canvas.getContext('2d') : null;
     this.full = false;
@@ -95,9 +126,12 @@
     this.zoneCount = 0;
     this.regionsSeen = Object.create(null);
     this.full = false;
+    this.taps = 0;            /* P4.18: 矩形内で受けたタップの回数（機械テスト用） */
+    this.tapsIgnored = 0;     /* P4.18: 矩形外で無視したタップの回数 */
     this._sig = '';
     this._lastX = -999; this._lastZ = -999; this._lastYaw = 999;
     if (this.dom.wrap) this.dom.wrap.classList.remove('full');
+    document.body.classList.remove('map-full');
     this._resize();
     this._dirty = true;
   };
@@ -126,6 +160,35 @@
     if (c.width !== px) { c.width = px; c.height = px; }
   };
 
+  /** P4.18 項目1: 指の座標が地図の矩形内か（＝ここでしか開かない）。
+   *  リスナは #minimap-wrap にしか張っていないが、実機では枠の外周1〜2pxや
+   *  親の余白で拾ってしまうことがあるので、座標でもう一度絞る。 */
+  Minimap.prototype.hitTest = function (x, y) {
+    var w = this.dom.wrap;
+    if (!w || !w.getBoundingClientRect) return false;
+    var r = w.getBoundingClientRect();
+    if (!(r.width > 0 && r.height > 0)) return false;
+    return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+  };
+
+  /** P4.18 項目1: タップ1回の処理（唯一の入口。テストは座標を注入して呼ぶ）。
+   *   小さい時 … 地図の矩形内をタップした時だけ全画面へ
+   *   全画面時 … 地図のどこをタップしても閉じる（`閉じる` ボタンは別経路で同じ close()）
+   *  戻り値: 受け付けたら true（＝タップを消費した） */
+  Minimap.prototype.tapAt = function (x, y) {
+    if (!this.hitTest(x, y)) { this.tapsIgnored++; return false; }
+    this.taps++;
+    this.toggle();
+    return true;
+  };
+
+  /** 全画面地図を閉じる（`閉じる` ボタン・Esc から。開いていなければ何もしない） */
+  Minimap.prototype.close = function () {
+    if (!this.full) return false;
+    this.toggle();
+    return true;
+  };
+
   Minimap.prototype._bind = function () {
     var self = this;
     var w = this.dom.wrap;
@@ -134,11 +197,25 @@
       var tap = function (e) {
         e.preventDefault();
         e.stopPropagation();
-        self.toggle();
+        var t = (e.changedTouches && e.changedTouches[0]) || e;
+        self.tapAt(t.clientX, t.clientY);
       };
       w.addEventListener('touchstart', tap, { passive: false });
       w.addEventListener('touchend', function (e) { e.preventDefault(); e.stopPropagation(); }, { passive: false });
       w.addEventListener('mousedown', tap);
+    }
+    /* `閉じる`（全画面時のみ表示）。地図本体のタップより先に食い止める＝二重トグルしない */
+    var cb = this.dom.close;
+    if (cb && !cb._escBound) {
+      cb._escBound = true;
+      var closeTap = function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        self.close();
+      };
+      cb.addEventListener('touchstart', closeTap, { passive: false });
+      cb.addEventListener('touchend', function (e) { e.preventDefault(); e.stopPropagation(); }, { passive: false });
+      cb.addEventListener('mousedown', closeTap);
     }
     global.addEventListener('keydown', function (e) {
       if (e.code === 'KeyM') self.toggle();
@@ -149,6 +226,8 @@
   Minimap.prototype.toggle = function () {
     this.full = !this.full;
     if (this.dom.wrap) this.dom.wrap.classList.toggle('full', this.full);
+    /* 全画面の間は `メニューに戻る` を引っ込める（P4.18 項目3・押し間違い防止） */
+    document.body.classList.toggle('map-full', this.full);
     this._resize();
     this._dirty = true;
     this.draw();
@@ -576,16 +655,23 @@
       explored: this.exploredCount, zones: zs, full: this.full, wipes: this.wipes,
       px: v.px, scale: v.s, arrow: this.playerArrowSize(v), arrowLegacy: this.legacyArrowSize(v),
       rooms: this.roomRegions().length,
-      goal: this.goalCell(), star: this.goalStarSize(v)
+      goal: this.goalCell(), star: this.goalStarSize(v),
+      taps: this.taps, tapsIgnored: this.tapsIgnored,
+      layout: layout(global.innerWidth || 0, global.innerHeight || 0)
     };
   };
 
+  Minimap.layout = layout;
   ESCAPE.Minimap = Minimap;
   /* 機械テスト用の定数公開（唯一の真実はこのファイルの上端） */
   ESCAPE.MINIMAP_CONST = {
     MINI_PX: MINI_PX, FULL_PX: FULL_PX,
     PLAYER_ARROW: PLAYER_ARROW, PLAYER_ARROW_LEGACY: PLAYER_ARROW_LEGACY,
-    ROOM_MAX: ROOM_MAX, COL: COL
+    ROOM_MAX: ROOM_MAX, COL: COL,
+    /* P4.18 項目1: レイアウトの数値（CSS はこれを書き写しているだけ） */
+    SMALL_SHORT: SMALL_SHORT, SMALL_W: SMALL_W, SMALL_MARGIN: SMALL_MARGIN,
+    WIDE_W: WIDE_W, WIDE_CAP_H: WIDE_CAP_H, WIDE_MIN: WIDE_MIN,
+    layout: layout
   };
 
   global.__mapDebug = {
