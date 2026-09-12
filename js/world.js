@@ -1200,8 +1200,12 @@
       }
     }
     this._waterCells = waterCells; this._deepCells = deepCells;
+    /* 天井だけ張るマス（深水・槽）。天井高の段差を埋める処理もこの集合を見る
+     * ＝ 4.6m の幹線と 2.4m の支線にまたがる深水の島で、段差に穴が開かない。 */
+    var ceilOnlyAt = Object.create(null);
     for (var dz = 0; dz < deepCells.length; dz++) {
       cells.push({ col: deepCells[dz].col, row: deepCells[dz].row, ceilOnly: true });
+      ceilOnlyAt[deepCells[dz].col + ',' + deepCells[dz].row] = true;
     }
     /* P5c: 沈殿槽などの「槽」（meta.basins）。実体マスを掘って水を張る＝歩けないまま
      * 覗き込める窪み。壁は張らず（_wallFace を飛ばす）天井だけ張る。 */
@@ -1214,6 +1218,7 @@
           if (!map.isSolid(bc, br)) continue;
           basinAt[bc + ',' + br] = bs;
           cells.push({ col: bc, row: br, ceilOnly: true });
+          ceilOnlyAt[bc + ',' + br] = true;
         }
       }
     }
@@ -1295,7 +1300,8 @@
       var SD = [[1, 0], [0, 1]];
       for (var sd = 0; sd < 2; sd++) {
         var nc0 = cc0 + SD[sd][0], nr0 = rr0 + SD[sd][1];
-        if (!map.isWalkable(nc0, nr0) && !furnAt[nc0 + ',' + nr0]) continue;
+        if (!map.isWalkable(nc0, nr0) && !furnAt[nc0 + ',' + nr0] &&
+            !ceilOnlyAt[nc0 + ',' + nr0]) continue;
         var h1 = map.ceilHAt(nc0, nr0);
         if (Math.abs(h1 - h0) < 1e-6) continue;
         var lo = Math.min(h0, h1), hi = Math.max(h0, h1);
@@ -3593,9 +3599,9 @@
 
   /* P5c「槽」（沈殿槽・沈砂池）。実体マスを掘り下げて水を張り、縁に笠石を回す。
    * 歩けないまま覗き込める＝正文「槽の水は覗くな」の絵をそのまま作る。 */
-  var BASIN_DEPTH = 0.85;     /* 縁の天端から水面までの深さ(m) */
-  var BASIN_PARA = 0.52;      /* 笠石の立ち上がり(m) */
-  var BASIN_COPE = 0.34;      /* 笠石の天端の幅(m) */
+  var BASIN_DEPTH = 0.62;     /* 床から水面までの深さ(m)。深すぎると浅い角度で水が見えない */
+  var BASIN_PARA = 0.40;      /* 笠石の立ち上がり(m) */
+  var BASIN_COPE = 0.17;      /* 笠石の天端の幅(m)。太いと水面が隠れる */
 
   World.prototype._sewerBasins = function (B, SH) {
     var at = this._basinAt;
@@ -3627,8 +3633,9 @@
         if (at[nc + ',' + nr]) continue;               /* 槽の中どうしは continue */
         var open = map.isWalkable(nc, nr);
         var q = boundaryOU(T, c, r, dc, dr);
-        /* 内壁（笠石の幅だけ内側へ寄せる＝外面と同一平面にしない） */
-        var ix = -q.n[0] * BASIN_COPE, iz = -q.n[2] * BASIN_COPE;
+        /* 内壁（笠石の幅だけ**槽の内側へ**寄せる＝外面と同一平面にしない）。
+           q.n は境界から槽の中心へ向く向きなので、内側は +q.n。 */
+        var ix = q.n[0] * BASIN_COPE, iz = q.n[2] * BASIN_COPE;
         B.wall.gridP([q.o[0] + ix, sy - 0.18, q.o[2] + iz], q.u, [0, top - sy + 0.18, 0],
           [0, 1], [0, 0.5, 1], 1, (top - sy) / 3,
           SH.planeShader(key, [wt[0] * 0.66, wt[1] * 0.70, wt[2] * 0.70], q.n));
@@ -3638,9 +3645,10 @@
         B.wall.gridP([q.o[0] + q.u[0], fy, q.o[2] + q.u[2]], [-q.u[0], 0, -q.u[2]],
           [0, top - fy, 0], [0, 1], [0, 1], 1, (top - fy) / 3,
           SH.planeShader(key, [wt[0] * 0.98, wt[1] * 1.00, wt[2] * 1.00], on));
-        /* 天端（笠石の上面） */
+        /* 天端（笠石の上面）。境界から槽の内側へ cw だけ。上向きになる向きで積む */
         var cw = BASIN_COPE;
-        B.wall.gridP([q.o[0], top, q.o[2]], q.u, [-q.n[0] * cw, 0, -q.n[2] * cw],
+        B.wall.gridP([q.o[0] + q.u[0], top, q.o[2] + q.u[2]], [-q.u[0], 0, -q.u[2]],
+          [q.n[0] * cw, 0, q.n[2] * cw],
           [0, 1], [0, 1], 1, 1, SH.planeShader(key, [wt[0] * 1.10, wt[1] * 1.12, wt[2] * 1.12], [0, 1, 0]));
       }
     }
