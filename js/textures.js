@@ -2566,6 +2566,711 @@
 
   /* ================================================================ */
 
+  /* ================================================================
+   * P5 エリア2「下水道」の素材（契約 §4 P5「見た目・細部」の10種）
+   *   トーンはエリア1（研究所の白タイル・鋼板）と別系統にする:
+   *   「暗い・湿った・古い」＝ 低彩度の茶／灰／黒緑。
+   *   ただし真っ黒には潰さない（暗さは照明で作る。素材は読める明度を残す）。
+   *   解像度は既存に合わせる（壁 512x768・床 512x512 の論理サイズ x TEX_S）。
+   * ============================================================== */
+
+  /** 下水道共通: 下へ向かうほど黒い水染み＋水位線の汚れ帯 */
+  function damp(ctx, W, H, rand, opt) {
+    opt = opt || {};
+    var waterline = (opt.waterline === undefined) ? 0.62 : opt.waterline;
+    /* 下部の水染み（重力方向・二乗で濃くなる） */
+    var g = ctx.createLinearGradient(0, H, 0, H * waterline);
+    g.addColorStop(0, 'rgba(10,14,13,' + (opt.dark === undefined ? 0.82 : opt.dark) + ')');
+    g.addColorStop(0.45, 'rgba(12,18,16,0.42)');
+    g.addColorStop(1, 'rgba(12,18,16,0)');
+    ctx.fillStyle = g; ctx.fillRect(0, H * waterline, W, H * (1 - waterline));
+    /* 水位線（かつて水が来ていた高さ）＝ 黒緑の帯と、その上の白い析出 */
+    if (opt.line !== false) {
+      var ly = H * waterline + (rand() - 0.5) * 10;
+      var lg = ctx.createLinearGradient(0, ly - 16, 0, ly + 26);
+      lg.addColorStop(0, 'rgba(36,48,34,0)');
+      lg.addColorStop(0.4, 'rgba(30,44,30,0.42)');
+      lg.addColorStop(1, 'rgba(16,24,18,0.12)');
+      ctx.fillStyle = lg; ctx.fillRect(0, ly - 16, W, 42);
+      ctx.strokeStyle = 'rgba(186,190,172,0.20)'; ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(0, ly - 14);
+      for (var x = 0; x <= W; x += 26) ctx.lineTo(x, ly - 14 + (rand() - 0.5) * 7);
+      ctx.stroke();
+    }
+    /* 上から垂れる黒い流れ染み（重力に沿う＝方向性のある汚れ） */
+    var n = opt.runs === undefined ? 14 : opt.runs;
+    for (var i = 0; i < n; i++) {
+      var sx = rand() * W, sw = 5 + rand() * 22, sh = H * (0.25 + rand() * 0.7);
+      var sg = ctx.createLinearGradient(0, 0, 0, sh);
+      sg.addColorStop(0, 'rgba(14,20,18,0.46)');
+      sg.addColorStop(0.6, 'rgba(16,22,20,0.26)');
+      sg.addColorStop(1, 'rgba(16,22,20,0)');
+      ctx.fillStyle = sg;
+      ctx.beginPath();
+      ctx.moveTo(sx, 0);
+      for (var y = 0; y <= sh; y += 18) {
+        ctx.lineTo(sx + (rand() - 0.5) * sw * 0.6 - sw / 2, y);
+      }
+      for (var y2 = sh; y2 >= 0; y2 -= 18) {
+        ctx.lineTo(sx + (rand() - 0.5) * sw * 0.6 + sw / 2, y2);
+      }
+      ctx.closePath(); ctx.fill();
+    }
+  }
+
+  /** 苔・ぬめり（濡れた面の緑。低い場所ほど濃い） */
+  function moss(ctx, W, H, rand, n, lowBias, alpha) {
+    for (var i = 0; i < n; i++) {
+      var mx = rand() * W;
+      var my = lowBias ? H * (0.35 + Math.pow(rand(), 0.55) * 0.65) : rand() * H;
+      var mr = 12 + rand() * 62;
+      var a = (alpha === undefined ? 0.30 : alpha) * (0.5 + rand() * 0.7);
+      blot(ctx, mx, my, mr, 'rgba(' + (44 + rand() * 22 | 0) + ',' + (66 + rand() * 26 | 0) + ',' + (38 + rand() * 18 | 0) + ',' + a.toFixed(3) + ')');
+    }
+  }
+
+  /** 石灰の垂れ（つらら状の白い析出。目地から下へ） */
+  function limeDrip(ctx, x, y, len, rand) {
+    var g = ctx.createLinearGradient(0, y, 0, y + len);
+    g.addColorStop(0, 'rgba(214,214,198,0.52)');
+    g.addColorStop(0.5, 'rgba(198,198,182,0.32)');
+    g.addColorStop(1, 'rgba(190,190,176,0)');
+    ctx.fillStyle = g;
+    var w = 3 + rand() * 7;
+    ctx.beginPath();
+    ctx.moveTo(x - w, y);
+    ctx.lineTo(x + w, y);
+    ctx.lineTo(x + w * 0.35 + (rand() - 0.5) * 4, y + len);
+    ctx.lineTo(x - w * 0.35 + (rand() - 0.5) * 4, y + len);
+    ctx.closePath(); ctx.fill();
+    ctx.fillStyle = 'rgba(226,226,212,0.30)';
+    ctx.fillRect(x - w * 0.3, y, 1.5, len * 0.8);
+  }
+
+  /** 壁: 湿った古煉瓦（2m x 3m / 512 x 768）。目地に苔・下部ほど黒い水染み */
+  function texWallBrick() {
+    var W = 512, H = 768, T2 = makeTex(W, H), c = T2.c, ctx = T2.ctx;
+    var rand = rng(520911);
+    /* 目地（モルタル）を下地にして、その上に煉瓦を置く */
+    ctx.fillStyle = '#3b3833'; ctx.fillRect(0, 0, W, H);
+    speckle(ctx, W, H, 9000, rand, 'rgba(74,70,62,0.45)');
+    var BW = 64, BH = 26, J = 4;                 /* 煉瓦 25cm x 10cm・目地 1.5cm */
+    var rows = Math.ceil(H / BH), cols = Math.ceil(W / BW) + 1;
+    for (var ry = 0; ry < rows; ry++) {
+      var off = (ry % 2) ? BW / 2 : 0;
+      for (var rx = -1; rx < cols; rx++) {
+        var bx = rx * BW + off + J / 2, by = ry * BH + J / 2;
+        var bw = BW - J, bh = BH - J;
+        /* 煉瓦1枚ごとの色ムラ（焼きムラ＋濡れ）。下段ほど暗く湿る */
+        var wet = Math.min(1, by / H * 1.25);
+        var base = 92 - wet * 32;
+        var r0 = base + rand() * 22 - 8;
+        var g0 = r0 * (0.76 + rand() * 0.08) + 3;
+        var b0 = r0 * (0.66 + rand() * 0.10);
+        if (rand() < 0.18) { g0 += 10; b0 += 5; r0 -= 12; }     /* 焼けすぎて黒緑になった煉瓦 */
+        ctx.fillStyle = 'rgb(' + (r0 | 0) + ',' + (g0 | 0) + ',' + (b0 | 0) + ')';
+        ctx.fillRect(bx, by, bw, bh);
+        /* 面の微傾き（1枚ごとに光の向きが違う） */
+        var lg = ctx.createLinearGradient(bx, by, bx + bw, by + bh);
+        lg.addColorStop(0, 'rgba(255,240,220,' + (0.03 + rand() * 0.07).toFixed(3) + ')');
+        lg.addColorStop(1, 'rgba(0,0,0,' + (0.05 + rand() * 0.10).toFixed(3) + ')');
+        ctx.fillStyle = lg; ctx.fillRect(bx, by, bw, bh);
+        /* 角の欠け */
+        if (rand() < 0.22) {
+          var cx0 = bx + (rand() < 0.5 ? 0 : bw - 10), cy0 = by + (rand() < 0.5 ? 0 : bh - 8);
+          ctx.fillStyle = 'rgba(46,42,36,0.85)';
+          ctx.beginPath();
+          ctx.moveTo(cx0, cy0);
+          ctx.lineTo(cx0 + 4 + rand() * 8, cy0 + 1);
+          ctx.lineTo(cx0 + 1, cy0 + 3 + rand() * 6);
+          ctx.closePath(); ctx.fill();
+        }
+        /* 目地の影（上と左）＝ 立体感 */
+        ctx.fillStyle = 'rgba(22,20,17,0.55)';
+        ctx.fillRect(bx - J / 2, by - J / 2, bw + J, 2);
+        ctx.fillRect(bx - J / 2, by - J / 2, 2, bh + J);
+        ctx.fillStyle = 'rgba(150,146,132,0.10)';
+        ctx.fillRect(bx - J / 2, by + bh - 1, bw + J, 1.5);
+      }
+    }
+    /* 目地の苔（下ほど濃い）。緑は帯でなく目地の線に沿って乗せる */
+    for (var m = 0; m < 260; m++) {
+      var my = (Math.floor(Math.pow(rand(), 0.6) * rows)) * BH + J / 2;
+      var mx = rand() * W;
+      var ml = 12 + rand() * 70;
+      ctx.strokeStyle = 'rgba(' + (48 + rand() * 26 | 0) + ',' + (72 + rand() * 30 | 0) + ',' + (40 + rand() * 20 | 0) + ',' + (0.18 + rand() * 0.42).toFixed(3) + ')';
+      ctx.lineWidth = 2 + rand() * 3;
+      ctx.beginPath(); ctx.moveTo(mx, my); ctx.lineTo(mx + ml, my + (rand() - 0.5) * 2); ctx.stroke();
+    }
+    moss(ctx, W, H, rand, 44, true, 0.26);
+    /* 崩れた目地（モルタルが抜けた穴） */
+    for (var h2 = 0; h2 < 26; h2++) {
+      blot(ctx, rand() * W, H * (0.2 + rand() * 0.8), 4 + rand() * 12, 'rgba(18,16,14,0.62)');
+    }
+    /* 白い析出（石灰）が目地から短く垂れる */
+    for (var l = 0; l < 12; l++) limeDrip(ctx, rand() * W, rand() * H * 0.7, 20 + rand() * 70, rand);
+    damp(ctx, W, H, rand, { waterline: 0.60, dark: 0.84, runs: 16 });
+    /* 天井側の煤けた影 */
+    var gt = ctx.createLinearGradient(0, 0, 0, 110);
+    gt.addColorStop(0, 'rgba(12,14,13,0.52)'); gt.addColorStop(1, 'rgba(12,14,13,0)');
+    ctx.fillStyle = gt; ctx.fillRect(0, 0, W, 110);
+    scuff(ctx, 900, rand, 'rgba(26,24,20,0.20)', 0, 40);
+    fineGrit(ctx, 26000, rand, 'rgba(22,26,22,0.26)');
+    fineGrit(ctx, 9000, rand, 'rgba(150,156,140,0.10)');
+    for (var cr = 0; cr < 6; cr++) crack(ctx, rand() * W, rand() * H, 80 + rand() * 220, rand() * 6.28, rand, 0);
+    grain(ctx, c.width, c.height, 8, rand);
+    return c;
+  }
+
+  /** 壁: 暗灰の切石ヴォールト（2m x 3m）。水染みと石灰の白い垂れ */
+  function texWallStone() {
+    var W = 512, H = 768, T2 = makeTex(W, H), c = T2.c, ctx = T2.ctx;
+    var rand = rng(781344);
+    ctx.fillStyle = '#2c2f2d'; ctx.fillRect(0, 0, W, H);      /* 目地 */
+    var BW = 128, BH = 96, J = 6;                             /* 切石 50cm x 37cm */
+    var rows = Math.ceil(H / BH), cols = Math.ceil(W / BW) + 1;
+    for (var ry = 0; ry < rows; ry++) {
+      var off = (ry % 2) ? BW / 2 : 0;
+      for (var rx = -1; rx < cols; rx++) {
+        var bx = rx * BW + off + J / 2, by = ry * BH + J / 2;
+        var bw = BW - J, bh = BH - J;
+        var v = 74 + rand() * 30 - Math.min(26, by / H * 30);
+        ctx.fillStyle = 'rgb(' + (v | 0) + ',' + ((v + 3) | 0) + ',' + ((v - 2) | 0) + ')';
+        ctx.fillRect(bx, by, bw, bh);
+        /* 石の粒（花崗岩状の斑） */
+        for (var s = 0; s < 220; s++) {
+          var sv = v + (rand() - 0.5) * 44;
+          ctx.fillStyle = 'rgba(' + (sv | 0) + ',' + ((sv + 4) | 0) + ',' + ((sv - 3) | 0) + ',0.5)';
+          ctx.fillRect(bx + rand() * bw, by + rand() * bh, 1 + rand() * 2.6, 1 + rand() * 2.2);
+        }
+        /* ノミ跡（斜めの筋） */
+        ctx.strokeStyle = 'rgba(20,22,21,0.20)'; ctx.lineWidth = 1.4;
+        for (var t = 0; t < 16; t++) {
+          var tx = bx + rand() * bw, ty = by + rand() * bh;
+          ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(tx + 10 + rand() * 16, ty + 6 + rand() * 10); ctx.stroke();
+        }
+        /* 面取りの陰影（上＝影・下＝受け光） */
+        var bg = ctx.createLinearGradient(0, by, 0, by + bh);
+        bg.addColorStop(0, 'rgba(0,0,0,0.34)');
+        bg.addColorStop(0.22, 'rgba(0,0,0,0)');
+        bg.addColorStop(0.86, 'rgba(0,0,0,0)');
+        bg.addColorStop(1, 'rgba(206,212,206,0.10)');
+        ctx.fillStyle = bg; ctx.fillRect(bx, by, bw, bh);
+        /* 欠けた角 */
+        if (rand() < 0.30) {
+          ctx.fillStyle = 'rgba(34,36,34,0.9)';
+          var qx = bx + (rand() < 0.5 ? -1 : bw - 16), qy = by + rand() * (bh - 16);
+          ctx.beginPath(); ctx.moveTo(qx, qy);
+          ctx.lineTo(qx + 8 + rand() * 12, qy + 3);
+          ctx.lineTo(qx + 3, qy + 10 + rand() * 12);
+          ctx.closePath(); ctx.fill();
+        }
+        /* 目地の影 */
+        ctx.fillStyle = 'rgba(16,18,17,0.62)';
+        ctx.fillRect(bx - J / 2, by - J / 2, bw + J, 3);
+        ctx.fillRect(bx - J / 2, by - J / 2, 3, bh + J);
+      }
+    }
+    /* 石灰の白い垂れ（目地から。ヴォールトの継ぎ目に多い） */
+    for (var l = 0; l < 26; l++) {
+      limeDrip(ctx, rand() * W, (Math.floor(rand() * rows)) * BH + 4, 40 + rand() * 190, rand);
+    }
+    /* 白い析出の面（にじみ） */
+    for (var w2 = 0; w2 < 14; w2++) blot(ctx, rand() * W, rand() * H * 0.8, 24 + rand() * 90, 'rgba(196,198,186,0.12)');
+    moss(ctx, W, H, rand, 34, true, 0.22);
+    damp(ctx, W, H, rand, { waterline: 0.58, dark: 0.80, runs: 18 });
+    var gt2 = ctx.createLinearGradient(0, 0, 0, 130);
+    gt2.addColorStop(0, 'rgba(10,12,12,0.58)'); gt2.addColorStop(1, 'rgba(10,12,12,0)');
+    ctx.fillStyle = gt2; ctx.fillRect(0, 0, W, 130);
+    scuff(ctx, 1100, rand, 'rgba(18,20,19,0.18)', 0.5, 44);
+    fineGrit(ctx, 30000, rand, 'rgba(20,24,22,0.24)');
+    fineGrit(ctx, 11000, rand, 'rgba(170,176,168,0.10)');
+    for (var cr2 = 0; cr2 < 9; cr2++) crack(ctx, rand() * W, rand() * H, 90 + rand() * 240, rand() * 6.28, rand, 0);
+    grain(ctx, c.width, c.height, 8, rand);
+    return c;
+  }
+
+  /** 壁: 打放しコンクリート（2m x 3m）。型枠の継ぎ目・黒い流れ染み */
+  function texWallConcreteWet() {
+    var W = 512, H = 768, T2 = makeTex(W, H), c = T2.c, ctx = T2.ctx;
+    var rand = rng(300277);
+    ctx.fillStyle = '#585d5a'; ctx.fillRect(0, 0, W, H);
+    speckle(ctx, W, H, 26000, rand, 'rgba(72,78,74,0.42)');
+    speckle(ctx, W, H, 9000, rand, 'rgba(104,110,106,0.30)');
+    /* 骨材とあばた（気泡痕） */
+    for (var i = 0; i < 900; i++) {
+      var v = 72 + rand() * 40;
+      ctx.fillStyle = 'rgba(' + (v | 0) + ',' + ((v + 4) | 0) + ',' + ((v + 1) | 0) + ',0.45)';
+      ctx.beginPath(); ctx.arc(rand() * W, rand() * H, 1 + rand() * 3, 0, Math.PI * 2); ctx.fill();
+    }
+    for (var p = 0; p < 260; p++) {
+      var px = rand() * W, py = rand() * H, pr = 1.5 + rand() * 4;
+      ctx.fillStyle = 'rgba(26,30,28,0.55)';
+      ctx.beginPath(); ctx.arc(px, py, pr, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = 'rgba(138,144,140,0.20)';
+      ctx.beginPath(); ctx.arc(px, py - pr * 0.4, pr * 0.7, 0, Math.PI * 2); ctx.fill();
+    }
+    /* 型枠（合板）の木目が転写された筋 */
+    for (var g2 = 0; g2 < 140; g2++) {
+      ctx.fillStyle = 'rgba(' + (58 + rand() * 34 | 0) + ',' + (62 + rand() * 34 | 0) + ',' + (60 + rand() * 32 | 0) + ',0.13)';
+      ctx.fillRect(0, rand() * H, W, 1 + rand() * 2.0);
+    }
+    /* 型枠の継ぎ目（0.9m ごとの水平・1m ごとの垂直）＋セパの穴 */
+    var PH = 230, PV = 256;
+    for (var y = 0; y <= H; y += PH) {
+      ctx.fillStyle = 'rgba(24,28,26,0.72)'; ctx.fillRect(0, y - 2, W, 4);
+      ctx.fillStyle = 'rgba(154,160,156,0.16)'; ctx.fillRect(0, y + 2, W, 2);
+    }
+    for (var x = 0; x <= W; x += PV) {
+      ctx.fillStyle = 'rgba(24,28,26,0.60)'; ctx.fillRect(x - 2, 0, 4, H);
+      ctx.fillStyle = 'rgba(154,160,156,0.12)'; ctx.fillRect(x + 2, 0, 2, H);
+    }
+    for (var hy = PH * 0.5; hy < H; hy += PH) {
+      for (var hx = PV * 0.5; hx < W; hx += PV) {
+        var hr = 7;
+        ctx.fillStyle = 'rgba(22,26,24,0.85)';
+        ctx.beginPath(); ctx.arc(hx, hy, hr, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = 'rgba(122,128,124,0.35)';
+        ctx.beginPath(); ctx.arc(hx, hy - 1.4, hr * 0.62, 0, Math.PI * 2); ctx.fill();
+        /* 穴から下へ伸びる錆のにじみ（茶。赤くしない＝P4.17 の色相規定を踏襲） */
+        rustRun(ctx, hx, hy + hr, 5 + rand() * 5, 26 + rand() * 64, rand, 0.55);
+      }
+    }
+    /* 黒い流れ染み（多め） */
+    damp(ctx, W, H, rand, { waterline: 0.66, dark: 0.78, runs: 26 });
+    moss(ctx, W, H, rand, 30, true, 0.24);
+    /* ひび（構造の亀裂） */
+    for (var cr = 0; cr < 10; cr++) crack(ctx, rand() * W, rand() * H, 110 + rand() * 260, rand() * 6.28, rand, 0);
+    var gt = ctx.createLinearGradient(0, 0, 0, 120);
+    gt.addColorStop(0, 'rgba(12,16,15,0.50)'); gt.addColorStop(1, 'rgba(12,16,15,0)');
+    ctx.fillStyle = gt; ctx.fillRect(0, 0, W, 120);
+    scuff(ctx, 1200, rand, 'rgba(30,34,32,0.16)', 0, 46);
+    fineGrit(ctx, 34000, rand, 'rgba(26,30,28,0.24)');
+    fineGrit(ctx, 12000, rand, 'rgba(168,174,170,0.10)');
+    grain(ctx, c.width, c.height, 9, rand);
+    return c;
+  }
+
+  /** 床: 濡れた石畳（2m x 2m）。水たまりは低周波で明るく＝粗さマップで艶が出る */
+  function texFloorStoneWet() {
+    var W = 512, H = 512, T2 = makeTex(W, H), c = T2.c, ctx = T2.ctx;
+    var rand = rng(640022);
+    ctx.fillStyle = '#2f3230'; ctx.fillRect(0, 0, W, H);      /* 目地 */
+    /* 玉石（不定形の多角形）を千鳥に敷く */
+    var CS = 52;
+    for (var ry = -1; ry <= H / CS + 1; ry++) {
+      for (var rx = -1; rx <= W / CS + 1; rx++) {
+        var ox = (ry % 2) ? CS * 0.5 : 0;
+        var cx = rx * CS + ox + CS * 0.5 + (rand() - 0.5) * 6;
+        var cy = ry * CS + CS * 0.5 + (rand() - 0.5) * 6;
+        var v = 66 + rand() * 34;
+        ctx.beginPath();
+        for (var k = 0; k <= 9; k++) {
+          var a = k / 9 * Math.PI * 2;
+          var r = CS * (0.40 + rand() * 0.10);
+          var qx = cx + Math.cos(a) * r, qy = cy + Math.sin(a) * r * 0.92;
+          if (k === 0) ctx.moveTo(qx, qy); else ctx.lineTo(qx, qy);
+        }
+        ctx.closePath();
+        ctx.fillStyle = 'rgb(' + (v | 0) + ',' + ((v + 2) | 0) + ',' + ((v - 2) | 0) + ')';
+        ctx.fill();
+        /* 石の頂の摩耗（明るい）と縁の影 */
+        var sg = ctx.createRadialGradient(cx - CS * 0.12, cy - CS * 0.14, 1, cx, cy, CS * 0.55);
+        sg.addColorStop(0, 'rgba(226,230,224,' + (0.08 + rand() * 0.10).toFixed(3) + ')');
+        sg.addColorStop(0.6, 'rgba(0,0,0,0)');
+        sg.addColorStop(1, 'rgba(0,0,0,0.30)');
+        ctx.fillStyle = sg; ctx.fill();
+        for (var s = 0; s < 90; s++) {
+          var sv = v + (rand() - 0.5) * 40;
+          ctx.fillStyle = 'rgba(' + (sv | 0) + ',' + ((sv + 3) | 0) + ',' + ((sv - 2) | 0) + ',0.45)';
+          ctx.fillRect(cx - CS * 0.4 + rand() * CS * 0.8, cy - CS * 0.4 + rand() * CS * 0.8, 1 + rand() * 2.2, 1 + rand() * 2);
+        }
+      }
+    }
+    /* 目地の泥と苔 */
+    moss(ctx, W, H, rand, 46, false, 0.24);
+    for (var d = 0; d < 40; d++) blot(ctx, rand() * W, rand() * H, 10 + rand() * 34, 'rgba(38,34,26,0.28)');
+    /* 水たまり: 低周波で**明るい**冷色の膜（＝ materialMaps の粗さが下がり艶が出る）。
+       半径は粗さマップのぼかし幅（テクスチャの1/24）より十分大きく取る。 */
+    var pools = [
+      [96, 128, 86], [330, 96, 68], [190, 330, 104], [408, 300, 74], [58, 400, 62], [300, 430, 58]
+    ];
+    for (var p = 0; p < pools.length; p++) {
+      var px = pools[p][0], py = pools[p][1], pr = pools[p][2];
+      ctx.save();
+      ctx.beginPath();
+      for (var k2 = 0; k2 <= 16; k2++) {
+        var a2 = k2 / 16 * Math.PI * 2;
+        var rr = pr * (0.82 + rand() * 0.30);
+        var qx2 = px + Math.cos(a2) * rr, qy2 = py + Math.sin(a2) * rr * 0.82;
+        if (k2 === 0) ctx.moveTo(qx2, qy2); else ctx.lineTo(qx2, qy2);
+      }
+      ctx.closePath();
+      ctx.clip();
+      /* 水膜＝空（天井の灯）の映り込み。周囲より明るい冷色 */
+      var pg = ctx.createRadialGradient(px - pr * 0.2, py - pr * 0.25, 2, px, py, pr * 1.15);
+      pg.addColorStop(0, 'rgba(138,168,178,0.56)');
+      pg.addColorStop(0.55, 'rgba(106,138,148,0.50)');
+      pg.addColorStop(1, 'rgba(70,98,108,0.34)');
+      ctx.fillStyle = pg; ctx.fillRect(px - pr * 1.4, py - pr * 1.4, pr * 2.8, pr * 2.8);
+      /* 水面のさざ波（細い明線） */
+      ctx.strokeStyle = 'rgba(198,214,216,0.22)'; ctx.lineWidth = 1.4;
+      for (var w3 = 0; w3 < 14; w3++) {
+        var wy = py - pr + rand() * pr * 2;
+        ctx.beginPath(); ctx.moveTo(px - pr, wy);
+        ctx.bezierCurveTo(px - pr * 0.3, wy + (rand() - 0.5) * 6, px + pr * 0.3, wy + (rand() - 0.5) * 6, px + pr, wy);
+        ctx.stroke();
+      }
+      ctx.restore();
+      /* 水縁（濡れて暗い輪） */
+      ctx.strokeStyle = 'rgba(20,26,26,0.42)'; ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.ellipse(px, py, pr * 1.02, pr * 0.86, 0, 0, Math.PI * 2); ctx.stroke();
+    }
+    /* 引きずり跡・摩耗の動線 */
+    sheen(ctx, W, H, 3, rand, 0, 'rgba(190,206,208,%A%)');
+    sheen(ctx, W, H, 2, rand, 1.5708, 'rgba(190,206,208,%A%)');
+    scuff(ctx, 1400, rand, 'rgba(196,204,202,0.09)', 0, 48);
+    scuff(ctx, 900, rand, 'rgba(24,26,24,0.16)', 0, 40);
+    fineGrit(ctx, 30000, rand, 'rgba(24,28,26,0.24)');
+    fineGrit(ctx, 10000, rand, 'rgba(176,186,184,0.10)');
+    grain(ctx, c.width, c.height, 8, rand);
+    return c;
+  }
+
+  /** 床: 煉瓦敷き（2m x 2m）。動線が摩耗して平ら・目地に泥 */
+  function texFloorBrick() {
+    var W = 512, H = 512, T2 = makeTex(W, H), c = T2.c, ctx = T2.ctx;
+    var rand = rng(118822);
+    ctx.fillStyle = '#33302b'; ctx.fillRect(0, 0, W, H);
+    speckle(ctx, W, H, 12000, rand, 'rgba(60,56,48,0.40)');
+    var BW = 64, BH = 32, J = 4;
+    var rows = Math.ceil(H / BH), cols = Math.ceil(W / BW) + 1;
+    for (var ry = 0; ry < rows; ry++) {
+      var off = (ry % 2) ? BW / 2 : 0;
+      for (var rx = -1; rx < cols; rx++) {
+        var bx = rx * BW + off + J / 2, by = ry * BH + J / 2;
+        var bw = BW - J, bh = BH - J;
+        var base = 80 + rand() * 24;
+        var r0 = base, g0 = base * (0.78 + rand() * 0.08), b0 = base * (0.68 + rand() * 0.10);
+        if (rand() < 0.16) { r0 -= 16; g0 += 5; b0 += 2; }
+        ctx.fillStyle = 'rgb(' + (r0 | 0) + ',' + (g0 | 0) + ',' + (b0 | 0) + ')';
+        ctx.fillRect(bx, by, bw, bh);
+        var lg = ctx.createLinearGradient(bx, by, bx + bw * 0.4, by + bh);
+        lg.addColorStop(0, 'rgba(255,244,226,' + (0.03 + rand() * 0.06).toFixed(3) + ')');
+        lg.addColorStop(1, 'rgba(0,0,0,' + (0.06 + rand() * 0.10).toFixed(3) + ')');
+        ctx.fillStyle = lg; ctx.fillRect(bx, by, bw, bh);
+        ctx.fillStyle = 'rgba(20,18,15,0.50)';
+        ctx.fillRect(bx - J / 2, by - J / 2, bw + J, 2);
+        ctx.fillRect(bx - J / 2, by - J / 2, 2, bh + J);
+        ctx.fillStyle = 'rgba(150,142,126,0.09)';
+        ctx.fillRect(bx - J / 2, by + bh - 1, bw + J, 1.5);
+        if (rand() < 0.18) {
+          ctx.fillStyle = 'rgba(44,40,34,0.8)';
+          ctx.beginPath();
+          var qx = bx + rand() * bw, qy = by + (rand() < 0.5 ? 0 : bh - 6);
+          ctx.moveTo(qx, qy); ctx.lineTo(qx + 5 + rand() * 9, qy + 1); ctx.lineTo(qx + 2, qy + 4 + rand() * 5);
+          ctx.closePath(); ctx.fill();
+        }
+      }
+    }
+    /* 動線の摩耗（中央が擦れて明るく平滑） */
+    var wear = ctx.createLinearGradient(0, H * 0.5 - 150, 0, H * 0.5 + 150);
+    wear.addColorStop(0, 'rgba(206,196,178,0)');
+    wear.addColorStop(0.5, 'rgba(206,196,178,0.16)');
+    wear.addColorStop(1, 'rgba(206,196,178,0)');
+    ctx.fillStyle = wear; ctx.fillRect(0, 0, W, H);
+    /* 目地の泥・苔・落ちた砂 */
+    for (var m = 0; m < 44; m++) blot(ctx, rand() * W, rand() * H, 12 + rand() * 44, 'rgba(40,36,26,0.30)');
+    moss(ctx, W, H, rand, 26, false, 0.20);
+    /* 欠けて抜けた煉瓦（穴） */
+    for (var hh = 0; hh < 5; hh++) {
+      var hx = rand() * W, hy = rand() * H;
+      ctx.fillStyle = 'rgba(18,17,14,0.80)';
+      ctx.fillRect(hx, hy, BW - J, BH - J);
+      blot(ctx, hx + BW * 0.4, hy + BH * 0.4, 22, 'rgba(12,12,10,0.5)');
+    }
+    sheen(ctx, W, H, 3, rand, 0, 'rgba(214,204,186,%A%)');
+    scuff(ctx, 1500, rand, 'rgba(212,202,184,0.08)', 0, 50);
+    scuff(ctx, 900, rand, 'rgba(26,24,20,0.15)', 0, 40);
+    fineGrit(ctx, 28000, rand, 'rgba(26,24,20,0.24)');
+    fineGrit(ctx, 9000, rand, 'rgba(178,170,152,0.10)');
+    grain(ctx, c.width, c.height, 8, rand);
+    return c;
+  }
+
+  /** 床: 泥と堆積物（2m x 2m）。足跡つき */
+  function texFloorMud() {
+    var W = 512, H = 512, T2 = makeTex(W, H), c = T2.c, ctx = T2.ctx;
+    var rand = rng(455901);
+    ctx.fillStyle = '#4a4234'; ctx.fillRect(0, 0, W, H);
+    /* 堆積のムラ（大きいうねり） */
+    for (var i = 0; i < 70; i++) {
+      var v = 52 + rand() * 34;
+      blot(ctx, rand() * W, rand() * H, 40 + rand() * 130,
+        'rgba(' + (v | 0) + ',' + ((v - 5) | 0) + ',' + ((v - 16) | 0) + ',0.40)');
+    }
+    /* 濡れて黒くなった窪み */
+    for (var d = 0; d < 34; d++) blot(ctx, rand() * W, rand() * H, 18 + rand() * 76, 'rgba(20,20,16,0.36)');
+    /* 乾いて白く浮いた膜 */
+    for (var w2 = 0; w2 < 18; w2++) blot(ctx, rand() * W, rand() * H, 20 + rand() * 60, 'rgba(150,142,120,0.14)');
+    /* 砂利・小石・堆積した破片 */
+    for (var s = 0; s < 900; s++) {
+      var sv = 70 + rand() * 46;
+      ctx.fillStyle = 'rgba(' + (sv | 0) + ',' + ((sv - 4) | 0) + ',' + ((sv - 14) | 0) + ',' + (0.28 + rand() * 0.34).toFixed(2) + ')';
+      ctx.beginPath(); ctx.arc(rand() * W, rand() * H, 1 + rand() * 2.4, 0, Math.PI * 2); ctx.fill();
+    }
+    /* ひび割れた泥（乾いた面の亀甲） */
+    for (var cr = 0; cr < 26; cr++) crack(ctx, rand() * W, rand() * H, 40 + rand() * 130, rand() * 6.28, rand, 0);
+    /* 足跡（2列・進行方向へ）。縁が盛り上がり中が暗い */
+    var fa = rand() * Math.PI * 2;
+    var fx0 = rand() * W, fy0 = rand() * H;
+    for (var f = 0; f < 9; f++) {
+      var side = (f % 2) ? 1 : -1;
+      var fx = fx0 + Math.cos(fa) * f * 46 + Math.cos(fa + 1.57) * side * 13;
+      var fy = fy0 + Math.sin(fa) * f * 46 + Math.sin(fa + 1.57) * side * 13;
+      ctx.save();
+      ctx.translate(fx % W, fy % H); ctx.rotate(fa + 1.57);
+      ctx.fillStyle = 'rgba(170,162,140,0.08)';
+      ctx.beginPath(); ctx.ellipse(0, 0, 12.5, 24.5, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = 'rgba(14,14,11,0.50)';
+      ctx.beginPath(); ctx.ellipse(0, 0, 10, 21, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = 'rgba(20,20,15,0.42)';
+      ctx.beginPath(); ctx.ellipse(0, 14.5, 8, 8.5, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.restore();
+    }
+    /* 引きずり跡 */
+    ctx.strokeStyle = 'rgba(24,24,18,0.26)';
+    for (var t = 0; t < 8; t++) {
+      ctx.lineWidth = 5 + rand() * 16;
+      ctx.beginPath();
+      var tx = rand() * W;
+      ctx.moveTo(tx, -8);
+      ctx.bezierCurveTo(tx + (rand() - 0.5) * 70, H * 0.4, tx + (rand() - 0.5) * 90, H * 0.72, tx + (rand() - 0.5) * 50, H + 8);
+      ctx.stroke();
+    }
+    moss(ctx, W, H, rand, 18, false, 0.18);
+    fineGrit(ctx, 40000, rand, 'rgba(22,22,17,0.28)');
+    fineGrit(ctx, 14000, rand, 'rgba(170,162,140,0.10)');
+    grain(ctx, c.width, c.height, 11, rand);
+    return c;
+  }
+
+  /**
+   * 水面: 黒緑の下水（2m x 2m）。
+   * 継ぎ目なくスクロールさせるので、波は**整数の波数**の正弦の和で作る
+   * （x/W・y/H が1周する＝上下左右どこで切っても繋がる）。
+   * 実時間の揺れは ESCAPE.Textures.animate(dt) が offset を動かして作る
+   * （キャンバスの描き換えは1回きり＝iPhone でも負荷が増えない）。
+   */
+  var WAVES = [
+    /* [nx, ny, amp, phase] */
+    [6, 2, 1.00, 0.00], [3, 7, 0.82, 1.31], [9, 5, 0.58, 2.44],
+    [13, 11, 0.34, 0.77], [17, 6, 0.24, 3.90], [8, 19, 0.20, 5.12],
+    [22, 14, 0.13, 2.05], [5, 27, 0.09, 4.41]
+  ];
+  function texWaterSewer() {
+    var W = 512, H = 512, T2 = makeTex(W, H), c = T2.c, ctx = T2.ctx;
+    var rand = rng(909142);
+    var dw = c.width, dh = c.height;
+    var img = ctx.createImageData(dw, dh);
+    var d = img.data;
+    var TAU = Math.PI * 2, amax = 0;
+    for (var k = 0; k < WAVES.length; k++) amax += WAVES[k][2];
+    for (var y = 0; y < dh; y++) {
+      var v = y / dh;
+      for (var x = 0; x < dw; x++) {
+        var u = x / dw, s = 0;
+        for (var w = 0; w < WAVES.length; w++) {
+          var q = WAVES[w];
+          s += q[2] * Math.sin(TAU * (q[0] * u + q[1] * v) + q[3]);
+        }
+        var hgt = s / amax;                       /* -1 .. 1 */
+        var b = 0.5 + 0.5 * hgt;
+        /* 黒緑の水。緑を主に、赤は最小限（真っ黒にはしない） */
+        var r0 = 12 + 18 * b;
+        var g0 = 26 + 34 * b;
+        var b0 = 22 + 26 * b;
+        /* 波の頂の擬似スペキュラ（灯が水面で割れる） */
+        var cr = hgt > 0 ? Math.pow(hgt, 7) : 0;
+        r0 += cr * 96; g0 += cr * 104; b0 += cr * 88;
+        var o = (y * dw + x) * 4;
+        d[o] = clamp255(r0); d[o + 1] = clamp255(g0); d[o + 2] = clamp255(b0); d[o + 3] = 255;
+      }
+    }
+    ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.putImageData(img, 0, 0);
+    ctx.restore();
+    /* 浮遊物・油膜・泡（縁をまたがない位置に置く＝タイルの継ぎ目を壊さない） */
+    for (var i = 0; i < 26; i++) {
+      var ox = 60 + rand() * (W - 120), oy = 60 + rand() * (H - 120), orr = 14 + rand() * 42;
+      var og = ctx.createRadialGradient(ox, oy, 1, ox, oy, orr);
+      og.addColorStop(0, 'rgba(96,74,120,0.16)');
+      og.addColorStop(0.5, 'rgba(70,104,96,0.14)');
+      og.addColorStop(1, 'rgba(60,80,70,0)');
+      ctx.fillStyle = og;
+      ctx.beginPath(); ctx.arc(ox, oy, orr, 0, Math.PI * 2); ctx.fill();
+    }
+    for (var f = 0; f < 120; f++) {
+      ctx.fillStyle = 'rgba(' + (150 + rand() * 60 | 0) + ',' + (156 + rand() * 60 | 0) + ',' + (140 + rand() * 50 | 0) + ',' + (0.10 + rand() * 0.26).toFixed(2) + ')';
+      ctx.beginPath(); ctx.arc(50 + rand() * (W - 100), 50 + rand() * (H - 100), 1 + rand() * 4, 0, Math.PI * 2); ctx.fill();
+    }
+    for (var g2 = 0; g2 < 34; g2++) {
+      blot(ctx, 60 + rand() * (W - 120), 60 + rand() * (H - 120), 10 + rand() * 30, 'rgba(18,26,18,0.34)');
+    }
+    return c;
+  }
+
+  /**
+   * 金属の格子（アルファ。床の grate・排水口）。
+   * 透過部分は完全に抜く。世界側は alphaTest:0.5・transparent:true で使うこと
+   * （CanvasTexture は非プリマルチプライ想定だが、ブラウザが内部で
+   *  プリマルチプライして抜けた画素の色が黒になるため、alphaTest で縁を切る）。
+   */
+  function texMetalGrate() {
+    var W = 256, H = 256, c = makeCanvas(W, H), ctx = c.getContext('2d');
+    var rand = rng(662201);
+    ctx.clearRect(0, 0, W, H);
+    var BAR = 16, PITCH = 64;                    /* 主桟 6cm・ピッチ 25cm */
+    function bar(x, y, w, h, vert) {
+      var g = vert ? ctx.createLinearGradient(x, 0, x + w, 0) : ctx.createLinearGradient(0, y, 0, y + h);
+      g.addColorStop(0, 'rgba(44,46,44,1)');
+      g.addColorStop(0.28, 'rgba(126,130,128,1)');
+      g.addColorStop(0.62, 'rgba(92,96,94,1)');
+      g.addColorStop(1, 'rgba(34,36,34,1)');
+      ctx.fillStyle = g; ctx.fillRect(x, y, w, h);
+    }
+    for (var x = 0; x < W; x += PITCH) bar(x, 0, BAR, H, true);
+    for (var y = 0; y < H; y += PITCH * 2) bar(0, y + PITCH - 5, W, 10, false);
+    /* 錆・汚れ（桟の上だけに乗るよう source-atop で合成） */
+    ctx.save();
+    ctx.globalCompositeOperation = 'source-atop';
+    for (var i = 0; i < 120; i++) {
+      ctx.fillStyle = 'rgba(' + (96 + rand() * 40 | 0) + ',' + (62 + rand() * 30 | 0) + ',' + (28 + rand() * 18 | 0) + ',' + (0.18 + rand() * 0.44).toFixed(2) + ')';
+      ctx.fillRect(rand() * W, rand() * H, 2 + rand() * 12, 2 + rand() * 20);
+    }
+    for (var m = 0; m < 40; m++) blot(ctx, rand() * W, rand() * H, 8 + rand() * 26, 'rgba(34,48,32,0.30)');
+    for (var s = 0; s < 900; s++) {
+      ctx.fillStyle = 'rgba(20,22,20,0.30)';
+      ctx.fillRect((rand() * W) | 0, (rand() * H) | 0, 1, 1);
+    }
+    /* 踏面の摩耗（上面が擦れて光る） */
+    for (var x2 = 0; x2 < W; x2 += PITCH) {
+      ctx.fillStyle = 'rgba(196,202,200,0.22)';
+      ctx.fillRect(x2 + 3, 0, 3, H);
+    }
+    ctx.restore();
+    return c;
+  }
+
+  /** 配管: 錆と塗装の剥げ（円周方向にタイル可。溶接のリングは横帯） */
+  function texPipeRust() {
+    var W = 512, H = 512, T2 = makeTex(W, H), c = T2.c, ctx = T2.ctx;
+    var rand = rng(773310);
+    ctx.fillStyle = '#38403c'; ctx.fillRect(0, 0, W, H);       /* 工業用の暗い緑灰の塗装 */
+    speckle(ctx, W, H, 16000, rand, 'rgba(52,62,58,0.40)');
+    speckle(ctx, W, H, 6000, rand, 'rgba(78,90,86,0.28)');
+    /* 溶接リング（管軸に直交＝横帯）。継ぎ手のふくらみ */
+    for (var y = 0; y < H; y += 170) {
+      var wg = ctx.createLinearGradient(0, y - 12, 0, y + 14);
+      wg.addColorStop(0, 'rgba(18,22,20,0.55)');
+      wg.addColorStop(0.45, 'rgba(126,132,126,0.45)');
+      wg.addColorStop(1, 'rgba(18,22,20,0.55)');
+      ctx.fillStyle = wg; ctx.fillRect(0, y - 12, W, 26);
+      /* ビードの粒 */
+      for (var b = 0; b < 120; b++) {
+        ctx.fillStyle = 'rgba(' + (110 + rand() * 60 | 0) + ',' + (104 + rand() * 52 | 0) + ',' + (94 + rand() * 44 | 0) + ',0.5)';
+        ctx.beginPath(); ctx.arc(rand() * W, y + (rand() - 0.5) * 16, 1.5 + rand() * 3.5, 0, Math.PI * 2); ctx.fill();
+      }
+    }
+    /* 広い錆のにじみ（塗装の下で進む腐食。低周波の茶） */
+    for (var b3 = 0; b3 < 26; b3++) {
+      blot(ctx, rand() * W, rand() * H, 30 + rand() * 96,
+        'rgba(' + (86 + rand() * 26 | 0) + ',' + (62 + rand() * 20 | 0) + ',' + (40 + rand() * 14 | 0) + ',0.26)');
+    }
+    /* 塗装の剥げ＝下地の錆が出る（小さく・多く。大きな斑は迷彩に見える） */
+    for (var p = 0; p < 54; p++) {
+      var px = rand() * W, py = rand() * H, pr = 6 + rand() * 17;
+      peel(ctx, px, py, pr, rand,
+        'rgba(' + (98 + rand() * 24 | 0) + ',' + (68 + rand() * 20 | 0) + ',' + (42 + rand() * 14 | 0) + ',0.72)',
+        'rgba(30,34,31,0.55)');
+      /* 剥げの下から流れる錆（管軸方向＝縦） */
+      rustRun(ctx, px, py + pr * 0.6, 4 + rand() * 8, 22 + rand() * 80, rand, 0.55);
+    }
+    /* 錆の粒（塗装の上に点々と噴き出す） */
+    for (var r2 = 0; r2 < 900; r2++) {
+      ctx.fillStyle = 'rgba(' + (104 + rand() * 44 | 0) + ',' + (64 + rand() * 30 | 0) + ',' + (30 + rand() * 16 | 0) + ',' + (0.2 + rand() * 0.5).toFixed(2) + ')';
+      ctx.beginPath(); ctx.arc(rand() * W, rand() * H, 1 + rand() * 3, 0, Math.PI * 2); ctx.fill();
+    }
+    /* 結露と黒い汚れの筋 */
+    for (var s2 = 0; s2 < 16; s2++) {
+      ctx.strokeStyle = 'rgba(16,20,18,' + (0.14 + rand() * 0.24).toFixed(2) + ')';
+      ctx.lineWidth = 3 + rand() * 10;
+      ctx.beginPath();
+      var sx = rand() * W;
+      ctx.moveTo(sx, -8);
+      ctx.bezierCurveTo(sx + (rand() - 0.5) * 40, H * 0.4, sx + (rand() - 0.5) * 50, H * 0.7, sx + (rand() - 0.5) * 30, H + 8);
+      ctx.stroke();
+    }
+    moss(ctx, W, H, rand, 20, false, 0.18);
+    /* 円筒の陰影は付けない（法線と近傍灯が作る）。粒だけ足す */
+    scuff(ctx, 1200, rand, 'rgba(22,26,24,0.18)', 1.5708, 44);
+    fineGrit(ctx, 26000, rand, 'rgba(24,28,26,0.24)');
+    fineGrit(ctx, 8000, rand, 'rgba(170,164,150,0.10)');
+    grain(ctx, c.width, c.height, 8, rand);
+    return c;
+  }
+
+  /**
+   * ぬめり帯（アルファ）。水位線に沿って横に長く貼る帯。
+   * 上下端は alpha でぼかし、帯の下側に垂れを付ける。
+   */
+  function texSlime() {
+    var W = 512, H = 128, c = makeCanvas(W, H), ctx = c.getContext('2d');
+    var rand = rng(214477);
+    ctx.clearRect(0, 0, W, H);
+    /* 帯の本体（黒緑）。上端はゆらぐ水位線、下端はぼける */
+    var g = ctx.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0.00, 'rgba(44,62,36,0)');
+    g.addColorStop(0.16, 'rgba(40,60,34,0.84)');
+    g.addColorStop(0.45, 'rgba(26,44,26,0.95)');
+    g.addColorStop(0.80, 'rgba(16,28,18,0.62)');
+    g.addColorStop(1.00, 'rgba(12,20,14,0)');
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.moveTo(0, H);
+    for (var x = 0; x <= W; x += 16) {
+      var yy = H * 0.16 + Math.sin(x / W * Math.PI * 6) * 5 + Math.sin(x / W * Math.PI * 14) * 3 + (rand() - 0.5) * 4;
+      ctx.lineTo(x, yy);
+    }
+    ctx.lineTo(W, H);
+    ctx.closePath(); ctx.fill();
+    /* ぬめりの照り（湿って光る細い線を水位線の直下に） */
+    ctx.strokeStyle = 'rgba(186,214,170,0.52)'; ctx.lineWidth = 2.4;
+    ctx.beginPath();
+    for (var x2 = 0; x2 <= W; x2 += 12) {
+      var y2 = H * 0.20 + Math.sin(x2 / W * Math.PI * 6) * 5 + (rand() - 0.5) * 3;
+      if (x2 === 0) ctx.moveTo(x2, y2); else ctx.lineTo(x2, y2);
+    }
+    ctx.stroke();
+    /* 垂れ（帯の下へ伸びる糸状のぬめり） */
+    for (var i = 0; i < 40; i++) {
+      var dx = rand() * W, dl = 10 + rand() * 54;
+      var dg = ctx.createLinearGradient(0, H * 0.4, 0, H * 0.4 + dl);
+      dg.addColorStop(0, 'rgba(26,40,26,0.60)');
+      dg.addColorStop(1, 'rgba(22,34,22,0)');
+      ctx.fillStyle = dg;
+      ctx.fillRect(dx, H * 0.4, 2 + rand() * 6, dl);
+    }
+    /* 藻の粒・気泡 */
+    for (var s = 0; s < 700; s++) {
+      var sy = H * (0.16 + rand() * 0.7);
+      ctx.fillStyle = 'rgba(' + (48 + rand() * 50 | 0) + ',' + (76 + rand() * 60 | 0) + ',' + (44 + rand() * 30 | 0) + ',' + (0.2 + rand() * 0.5).toFixed(2) + ')';
+      ctx.fillRect((rand() * W) | 0, sy | 0, 1 + (rand() < 0.3 ? 1 : 0), 1 + (rand() < 0.3 ? 1 : 0));
+    }
+    return c;
+  }
+
   var BUILDERS = {
     wall: function () { return texWall(1337); },
     wall2: function () { return texWall(90210); },
@@ -2579,7 +3284,33 @@
     bigboard: texBigBoard,
     bloodHand: texBloodHand, bloodDrag: texBloodDrag, bloodSplat: texBloodSplat,
     wallPaint: texWallPaint, wallMetal: texWallMetal,
-    floorTile: texFloorTile, floorWet: texFloorWet, floorMetal: texFloorMetal
+    floorTile: texFloorTile, floorWet: texFloorWet, floorMetal: texFloorMetal,
+    /* P5 エリア2「下水道」（契約 §4 P5「見た目・細部」の素材キー10種）。
+       同じキーを js/render_quality.js の MAT_PROFILE にも登録してある
+       （両方に無いと法線・粗さが付かない）。 */
+    wallBrick: texWallBrick, wallStone: texWallStone, wallConcreteWet: texWallConcreteWet,
+    floorStoneWet: texFloorStoneWet, floorBrick: texFloorBrick, floorMud: texFloorMud,
+    waterSewer: texWaterSewer, metalGrate: texMetalGrate,
+    pipeRust: texPipeRust, slime: texSlime
+  };
+
+  /* エリア専用の大面素材（GPU 見積りの区分け。エリア切替＝ページ再読込なので
+     この2群が同時に GPU へ載ることはない）。ここに無いものは共通素材として数える。 */
+  var AREA1_TEX = {
+    wall: 1, wall2: 1, wall3: 1, wallPaint: 1, wallMetal: 1,
+    floor: 1, floorTile: 1, floorWet: 1, floorMetal: 1
+  };
+  var AREA2_TEX = {
+    wallBrick: 1, wallStone: 1, wallConcreteWet: 1,
+    floorStoneWet: 1, floorBrick: 1, floorMud: 1,
+    waterSewer: 1, metalGrate: 1, pipeRust: 1, slime: 1
+  };
+
+  /** アルファを持つ素材（世界側は transparent / alphaTest で使うこと） */
+  var ALPHA_TEX = {
+    poster: 1, litter: 1, water: 1, glass: 1, blood: 1, paper: 1, sheet: 1,
+    bloodHand: 1, bloodDrag: 1, bloodSplat: 1,
+    metalGrate: 1, slime: 1
   };
 
   var cache = Object.create(null);
@@ -2601,9 +3332,119 @@
     return tex;
   }
 
+  /* ================================================================
+   * P5: 動く素材（水面の揺れ）
+   *   契約 §4 P5「waterSewer は法線を時間でスクロールして揺らす／静止した板に
+   *   見えないこと」「fallback では静止テクスチャに落とす」。
+   *   キャンバスの描き換えは**しない**。offset だけを毎フレーム進める
+   *   （iPhone の負荷を増やさないため。テクスチャの再アップロードが起きない）。
+   *   world.js（P5c）が毎フレーム ESCAPE.Textures.animate(dt) を呼ぶ前提。
+   * ============================================================== */
+  var ANIMATED = {
+    waterSewer: {
+      albedo: [0.0130, 0.0075],       /* アルベドのスクロール（uv/秒） */
+      n1: [0.0210, 0.0125],           /* 法線 1層目 */
+      n2: [-0.0145, 0.0235],          /* 法線 2層目（逆向き＝干渉して周期が読めない） */
+      pulseHz: 0.11, pulseAmp: 0.055  /* わずかな明滅（光の反射が寄る・散る） */
+    }
+  };
+  var animT = 0;
+  var animEnabled = true;
+  var animState = Object.create(null);
+  var animMats = [];                  /* RQ.waterMaterial が登録した材質の uniform */
+
+  function animTier() {
+    var RQ = ESCAPE.RQ;
+    if (!RQ) return 'high';
+    return (typeof RQ.tier === 'function') ? RQ.tier() : RQ.tier;
+  }
+  /** この段階で動かしてよいか（fallback / off は静止） */
+  function animLive() {
+    if (!animEnabled) return false;
+    var t = animTier();
+    return t !== 'fallback' && t !== 'off';
+  }
+  function animSlot(name) {
+    var st = animState[name];
+    if (!st) {
+      st = animState[name] = { t: 0, au: 0, av: 0, u1: 0, v1: 0, u2: 0, v2: 0, pulse: 1, moving: false };
+    }
+    return st;
+  }
+  function frac(v) { v = v % 1; return v < 0 ? v + 1 : v; }
+
+  /**
+   * 動く素材を dt 秒ぶん進める。
+   *   戻り値: 進んだあとの内部時刻（秒）。fallback では常に 0。
+   */
+  function animate(dt) {
+    if (!(dt > 0) || !isFinite(dt)) dt = 0;
+    var live = animLive();
+    if (live) animT += dt;
+    for (var name in ANIMATED) {
+      if (!ANIMATED.hasOwnProperty(name)) continue;
+      var a = ANIMATED[name], st = animSlot(name);
+      if (live) {
+        st.t = animT;
+        st.au = frac(a.albedo[0] * animT); st.av = frac(a.albedo[1] * animT);
+        st.u1 = frac(a.n1[0] * animT); st.v1 = frac(a.n1[1] * animT);
+        st.u2 = frac(a.n2[0] * animT); st.v2 = frac(a.n2[1] * animT);
+        st.pulse = 1 + a.pulseAmp * Math.sin(Math.PI * 2 * a.pulseHz * animT);
+        st.moving = true;
+      } else {
+        st.t = 0; st.au = st.av = st.u1 = st.v1 = st.u2 = st.v2 = 0;
+        st.pulse = 1; st.moving = false;
+      }
+      /* アルベド（＝ CanvasTexture）は offset を動かすだけ。needsUpdate は不要 */
+      var tex = cache[name];
+      if (tex) { tex.offset.x = st.au; tex.offset.y = st.av; }
+    }
+    /* 法線2層＋明滅は材質の uniform 側で受ける（RQ.waterMaterial が結線する） */
+    for (var i = 0; i < animMats.length; i++) {
+      var m = animMats[i], s2 = animSlot(m.name);
+      if (m.u.uNrmOff1) m.u.uNrmOff1.value.set(s2.u1, s2.v1);
+      if (m.u.uNrmOff2) m.u.uNrmOff2.value.set(s2.u2, s2.v2);
+      if (m.u.uPulse) m.u.uPulse.value = s2.pulse;
+    }
+    return animT;
+  }
+
   ESCAPE.Textures = {
     get: get,
     names: function () { return Object.keys(BUILDERS); },
+    /** アルファを持つ素材か（世界側が transparent / alphaTest を決める判断材料） */
+    hasAlpha: function (name) { return !!ALPHA_TEX[name]; },
+    alphaNames: function () { return Object.keys(ALPHA_TEX); },
+    /* ---- P5: 動く素材 ---- */
+    /** 毎フレーム呼ぶ（world.js）。dt 秒ぶん水面を進める。戻り値は内部時刻(秒) */
+    animate: animate,
+    /** 動く素材の現在値（機械テスト・監査が読む）: {t,au,av,u1,v1,u2,v2,pulse,moving} */
+    animState: function (name) { return animSlot(name || 'waterSewer'); },
+    /** 動く素材のキー一覧 */
+    animNames: function () { return Object.keys(ANIMATED); },
+    /** 動く素材のパラメータ（スクロール速度・明滅） */
+    animParams: function (name) { return ANIMATED[name || 'waterSewer']; },
+    /** この段階で水面が動くか（fallback/off は false） */
+    animLive: animLive,
+    /** 強制停止・再開（監査用。製品コードは触らない） */
+    setAnimEnabled: function (on) { animEnabled = !!on; },
+    /** 時刻を 0 に戻す（world の作り直し・テストの初期化） */
+    resetAnim: function () {
+      animT = 0;
+      for (var k in animState) if (animState.hasOwnProperty(k)) {
+        var s = animState[k];
+        s.t = s.au = s.av = s.u1 = s.v1 = s.u2 = s.v2 = 0; s.pulse = 1; s.moving = false;
+        if (cache[k]) cache[k].offset.set(0, 0);
+      }
+    },
+    /** RQ.waterMaterial が自分の uniform を預ける（animate が毎フレーム書く） */
+    bindAnimated: function (name, uniforms) {
+      animMats.push({ name: name, u: uniforms });
+      return uniforms;
+    },
+    unbindAnimated: function (uniforms) {
+      for (var i = animMats.length - 1; i >= 0; i--) if (animMats[i].u === uniforms) animMats.splice(i, 1);
+    },
     /** P4.17 項目1: 壁の血痕の作画数値（機械テストが読む）。垂れの本数と長さ・擦りの長さ */
     wallBloodMetrics: function () {
       return { drips: P4_17_HAND.drips, dripM: P4_17_HAND.dripM, smearM: P4_17_HAND.smearM };
@@ -2618,6 +3459,8 @@
     disposeAll: function () {
       for (var k in cache) cache[k].dispose();
       cache = Object.create(null);
+      animMats.length = 0;
+      this.resetAnim();
     },
     /**
      * P4.11 項目7 の解像度倍率（既定2＝壁1024x1536・床1024x1024）。
@@ -2633,14 +3476,39 @@
       var im = get(name).image;
       return { w: im.width, h: im.height };
     },
-    /** 合計ピクセル数(百万)と GPU 見積り(MB, mipmap込み)。契約の報告値 */
-    budget: function () {
-      var n = Object.keys(BUILDERS), px = 0;
-      for (var i = 0; i < n.length; i++) {
-        var im = get(n[i]).image;
-        px += im.width * im.height;
+    /**
+     * 合計ピクセル数(百万)と GPU 見積り(MB, mipmap込み)。契約の報告値。
+     *
+     * P5 で素材が2エリアぶんになったので「1セッションで実際に GPU に載る量」を返す。
+     * エリアの切替は**ページ再読込**（契約 §4 P5「エリア接続」）なので、
+     * エリア1の大面素材とエリア2（下水道）の大面素材が同時に載ることはない。
+     * 既定はその**最悪ケース**（共通＋大きい方のエリア）＝ P4.11 で較正した値と同じ。
+     *   budget()            … セッションの最悪ケース（world.js の上限テストが読む値）
+     *   budget({all:true})  … 全素材の単純合計（両エリアぶん。参考値）
+     *   budget({area:'area2'}) … そのエリアのセッションの見積り
+     */
+    budget: function (opts) {
+      opts = opts || {};
+      var n = Object.keys(BUILDERS), i, im;
+      var sum = { all: 0, common: 0, area1: 0, area2: 0 };
+      for (i = 0; i < n.length; i++) {
+        im = get(n[i]).image;
+        var px = im.width * im.height;
+        sum.all += px;
+        if (AREA2_TEX[n[i]]) sum.area2 += px;
+        else if (AREA1_TEX[n[i]]) sum.area1 += px;
+        else sum.common += px;
       }
-      return { mpx: px / 1e6, gpuMB: px * 4 * 4 / 3 / 1e6 };
+      var px2 = opts.all ? sum.all
+        : (opts.area === 'area1' ? sum.common + sum.area1
+          : (opts.area === 'area2' ? sum.common + sum.area2
+            : sum.common + Math.max(sum.area1, sum.area2)));
+      return {
+        mpx: px2 / 1e6, gpuMB: px2 * 4 * 4 / 3 / 1e6,
+        allMpx: sum.all / 1e6, allGpuMB: sum.all * 4 * 4 / 3 / 1e6,
+        commonMpx: sum.common / 1e6,
+        area1Mpx: sum.area1 / 1e6, area2Mpx: sum.area2 / 1e6
+      };
     },
     /**
      * 「細部の量」の数値化。隣接ピクセルの輝度差（高周波成分）を面全体で積む。

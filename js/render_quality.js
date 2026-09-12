@@ -217,7 +217,29 @@
     floorMetal: { height: 2.6, grain: 0.40, rough: [0.30, 0.80], metal: 0.60 },
     /* 天井は見上げる面積が広く、法線を強くすると紙やすり状に荒れる＝弱める */
     ceiling: { height: 0.9, grain: 0.22, rough: [0.72, 0.98], metal: 0.02 },
-    metal: { height: 2.0, grain: 0.40, rough: [0.30, 0.78], metal: 0.62 }
+    metal: { height: 2.0, grain: 0.40, rough: [0.30, 0.78], metal: 0.62 },
+
+    /* ---- P5 エリア2「下水道」（js/textures.js の BUILDERS と同じキーで必ず対にする。
+       片方に無いと法線・粗さが付かない）。エリア1の値は一切触らない
+       （§3 の輝度ゲートが既定の材質で較正済みのため）。 ---- */
+    /* 煉瓦は目地が深い＝法線を強く。濡れて艶が出るぶん粗さの下限を下げる */
+    wallBrick: { height: 3.2, grain: 0.55, rough: [0.52, 0.97], metal: 0.02 },
+    /* 切石はノミ跡の中周波が主。面は広いのでやや弱める */
+    wallStone: { height: 2.7, grain: 0.45, rough: [0.50, 0.95], metal: 0.02 },
+    /* 打放しは平滑。あばた（気泡痕）だけが凹む＝ height は低く grain を高く */
+    wallConcreteWet: { height: 1.6, grain: 0.72, rough: [0.42, 0.94], metal: 0.02 },
+    /* 石畳: 水たまり（低周波で明るい）が粗さ下限に落ちて艶になる＝幅を広く取る */
+    floorStoneWet: { height: 2.9, grain: 0.45, rough: [0.05, 0.97], metal: 0.03 },
+    floorBrick: { height: 3.0, grain: 0.48, rough: [0.46, 0.95], metal: 0.02 },
+    /* 泥は反射しない。凹凸は細かい粒だけ */
+    floorMud: { height: 1.4, grain: 0.75, rough: [0.70, 0.99], metal: 0.01 },
+    /* 水面: ほぼ鏡面。法線は弱め（強いと波が金属板に見える） */
+    waterSewer: { height: 1.2, grain: 0.12, rough: [0.06, 0.30], metal: 0.10 },
+    /* 格子: 桟の角が立つ＝法線を最も強く。抜けた穴は黒＝深い凹みとして出る */
+    metalGrate: { height: 3.4, grain: 0.35, rough: [0.32, 0.86], metal: 0.55 },
+    pipeRust: { height: 2.4, grain: 0.50, rough: [0.34, 0.93], metal: 0.42 },
+    /* ぬめりは濡れて光る。凹凸は浅い */
+    slime: { height: 1.2, grain: 0.55, rough: [0.22, 0.72], metal: 0.02 }
   };
 
   /** 幅 rad の箱ぼかし（横→縦の2パス・巻き込みは繰り返し境界で行う） */
@@ -653,6 +675,96 @@
           '\toutgoingLight *= vBakedLight * uBakedMix + vec3(uBakedLift);\n#include <opaque_fragment>');
     };
     mat.customProgramCacheKey = function () { return 'rq-basic-baked'; };
+    return mat;
+  };
+
+
+  /* ================================================================
+   * P5: 下水の水面（法線2層スクロール）
+   *   three の MeshStandardMaterial は法線マップを1枚しか持てないので、
+   *   同じ法線マップを**別の offset・別の縮尺で2回**サンプルして合成する。
+   *   offset は ESCAPE.Textures.animate(dt) が uniform に書く
+   *   （テクスチャの再アップロードは起きない＝ iPhone でも負荷が増えない）。
+   *   fallback / off 段階では Basic（静止したアルベドだけ）に落とす。
+   * ============================================================== */
+  RQ.waterMaterial = function (opts) {
+    opts = opts || {};
+    var THREE = global.THREE;
+    var TX = ESCAPE.Textures;
+    var name = opts.texture || 'waterSewer';
+    var vc = (opts.vertexColors === undefined) ? true : !!opts.vertexColors;
+    var baked = (opts.baked === undefined) ? true : !!opts.baked;
+    var map = TX.get(name);
+    if (!cfg().y) {
+      /* 退避段階: 静止した水面（焼き込みだけ）。契約 P5「fallback では静止」 */
+      var b = new THREE.MeshBasicMaterial({ map: map, vertexColors: vc, fog: true });
+      if (baked) RQ.patchBasic(b);
+      b.userData.water = { animated: false, uniforms: null };
+      return b;
+    }
+    var div = opts.div || RQ.normalDiv();
+    var mm = materialMaps(name, div);
+    var so = { map: map, vertexColors: vc, fog: true, roughness: 1.0 };
+    if (mm) {
+      so.normalMap = mm.normalMap;
+      so.normalScale = new THREE.Vector2(opts.normalScale || 0.85, opts.normalScale || 0.85);
+      so.roughnessMap = mm.roughnessMap;
+      so.metalness = (opts.metalness === undefined) ? mm.profile.metal : opts.metalness;
+    } else {
+      so.metalness = 0.1;
+    }
+    var mat = new THREE.MeshStandardMaterial(so);
+    var u = {
+      uNrmOff1: { value: new THREE.Vector2(0, 0) },
+      uNrmOff2: { value: new THREE.Vector2(0, 0) },
+      uNrmScale2: { value: opts.layer2Scale || 1.73 },
+      uPulse: { value: 1 }
+    };
+    var ub = RQ.uBakedMix;
+    mat.onBeforeCompile = function (shader) {
+      shader.uniforms.uNrmOff1 = u.uNrmOff1;
+      shader.uniforms.uNrmOff2 = u.uNrmOff2;
+      shader.uniforms.uNrmScale2 = u.uNrmScale2;
+      shader.uniforms.uPulse = u.uPulse;
+      var head = 'uniform vec2 uNrmOff1;\nuniform vec2 uNrmOff2;\nuniform float uNrmScale2;\nuniform float uPulse;\n';
+      if (baked) {
+        shader.uniforms.uBakedMix = ub;
+        shader.vertexShader = 'attribute vec3 bakedLight;\nvarying vec3 vBakedLight;\n' +
+          shader.vertexShader.replace('#include <begin_vertex>',
+            '#include <begin_vertex>\n\tvBakedLight = bakedLight;');
+        head += 'uniform float uBakedMix;\nvarying vec3 vBakedLight;\n';
+      }
+      var src = head + shader.fragmentShader;
+      /* 法線を2層サンプルして合成（速度も向きも違う＝干渉して周期が読めない）。
+         onBeforeCompile の時点では #include はまだ展開されていないので、
+         チャンクの取り込み自体を差し替える（展開後の1行を狙うと当たらない）。 */
+      var one = '#include <normal_fragment_maps>';
+      var two = '#ifdef USE_NORMALMAP_TANGENTSPACE\n' +
+        '\tvec3 mapNa = texture2D( normalMap, vNormalMapUv + uNrmOff1 ).xyz * 2.0 - 1.0;\n' +
+        '\tvec3 mapNb = texture2D( normalMap, vNormalMapUv * uNrmScale2 + uNrmOff2 ).xyz * 2.0 - 1.0;\n' +
+        '\tvec3 mapN = normalize( vec3( mapNa.xy + mapNb.xy, max( mapNa.z * mapNb.z, 0.05 ) ) );\n' +
+        '\tmapN.xy *= normalScale;\n' +
+        '\tnormal = normalize( tbn * mapN );\n' +
+        '#else\n' +
+        '\t#include <normal_fragment_maps>\n' +
+        '#endif';
+      if (src.indexOf(one) >= 0) {
+        src = src.replace(one, two);
+        RQ.waterLayers = 2;
+      } else {
+        RQ.waterLayers = 1;                  /* three の実装が変わった時の保険 */
+        RQ.notes.push('水面: 法線2層の差し込みに失敗（1層で描画）');
+      }
+      /* わずかな明滅＋焼き込みの残り */
+      src = src.replace('#include <opaque_fragment>',
+        '\toutgoingLight *= uPulse;\n' +
+        (baked ? '\toutgoingLight += vBakedLight * diffuseColor.rgb * uBakedMix;\n' : '') +
+        '#include <opaque_fragment>');
+      shader.fragmentShader = src;
+    };
+    mat.customProgramCacheKey = function () { return 'rq-water-' + (baked ? 'baked' : 'plain'); };
+    mat.userData.water = { animated: true, uniforms: u };
+    TX.bindAnimated(name, u);
     return mat;
   };
 

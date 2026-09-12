@@ -299,7 +299,10 @@
     tile:  { thF: 92, thG: 0.50, thD: 0.075, bpF: 1900, bpQ: 1.1, nG: 0.40, nD: 0.050, ring: 0,    ringG: 0,    ringD: 0 },
     metal: { thF: 76, thG: 0.46, thD: 0.100, bpF: 2400, bpQ: 1.5, nG: 0.44, nD: 0.075, ring: 2650, ringG: 0.20, ringD: 0.34 },
     water: { thF: 68, thG: 0.38, thD: 0.090, bpF: 880,  bpQ: 0.9, nG: 0.62, nD: 0.190, ring: 0,    ringG: 0,    ringD: 0 },
-    glass: { thF: 98, thG: 0.30, thD: 0.065, bpF: 4300, bpQ: 1.3, nG: 0.52, nD: 0.100, ring: 6100, ringG: 0.17, ringD: 0.18 }
+    glass: { thF: 98, thG: 0.30, thD: 0.065, bpF: 4300, bpQ: 1.3, nG: 0.52, nD: 0.100, ring: 6100, ringG: 0.17, ringD: 0.18 },
+    /* P5 エリア2「下水道」: 石（硬く短い＋砂利のざらつき）。
+       タイルより踏み込みが硬く（thF 高め・減衰短く）、擦れは砂利ぶんだけ高域に散る */
+    stone: { thF: 104, thG: 0.46, thD: 0.058, bpF: 2250, bpQ: 0.9, nG: 0.46, nD: 0.072, ring: 0,    ringG: 0,    ringD: 0, grit: 1 }
   };
 
   var VOICES = {
@@ -336,6 +339,16 @@
         var f2 = bq(ctx, 'bandpass', m.ring * det, 12);
         chain([n2, f2, hit(ctx, t0 + 0.004, m.ringG * lv, 0.003, m.ringD), dest]);
         startStop(n2, t0, m.ringD + 0.08);
+      }
+      /* 石は砂利が散る（硝子より低く・短い粒） */
+      if (m.grit) {
+        for (var gi = 0; gi < 3; gi++) {
+          var gt2 = t0 + 0.012 + gi * (0.016 + r * 0.012);
+          var gn2 = noiseSrc(ctx, 1.1 + r * 0.3);
+          var gf2 = bq(ctx, 'bandpass', 3100 + gi * 900, 7);
+          chain([gn2, gf2, hit(ctx, gt2, 0.075 * lv, 0.002, 0.030), dest]);
+          startStop(gn2, gt2, 0.05);
+        }
       }
       /* 硝子は粒が散る */
       if (p.mat === 'glass') {
@@ -484,6 +497,43 @@
       chain([n2, bq(ctx, 'lowpass', 420, 0.7), hit(ctx, t0, 0.13, 0.006, 0.5), dest]);
       startStop(n2, t0, 0.7);
       return 1.6;
+    },
+
+    /**
+     * P5 エリア2: 遠い金属の唸りと配管の軋み（下水道の不定期音）。
+     * 低い唸り（管が水圧で鳴る）＋ その上を軋みが這う。
+     */
+    pipeGroan: function (ctx, dest, t0, p) {
+      var r = (p.r === undefined) ? 0.5 : p.r;
+      var dur = 2.0 + r * 1.4;
+      var f0 = 46 + r * 22;
+      /* 唸り: 低い鋸波をローパスで丸め、ゆっくり上下させる */
+      var o = osc(ctx, 'sawtooth', f0);
+      o.frequency.setValueAtTime(f0 * 0.94, t0);
+      o.frequency.linearRampToValueAtTime(f0 * 1.14, t0 + dur * 0.55);
+      o.frequency.linearRampToValueAtTime(f0 * 0.88, t0 + dur);
+      var lp = bq(ctx, 'lowpass', 210 + r * 120, 3.0);
+      chain([o, lp, swell(ctx, t0, 0.30, 0.42, dur * 0.35, dur * 0.5), dest]);
+      startStop(o, t0, dur + 0.3);
+      /* 共鳴（管の固有振動。2本の細い帯） */
+      for (var i = 0; i < 2; i++) {
+        var n = noiseSrc(ctx, 0.42 + i * 0.15);
+        var bp = bq(ctx, 'bandpass', 180 + i * 260 + r * 90, 18);
+        chain([n, bp, swell(ctx, t0 + 0.1 * i, 0.16 / (i + 1), 0.3, dur * 0.4, dur * 0.5), dest]);
+        startStop(n, t0, dur + 0.3);
+      }
+      /* 軋み（金属が擦れる。短い上行グリッサンドを2〜3回） */
+      var creaks = 2 + (r > 0.6 ? 1 : 0);
+      for (var k = 0; k < creaks; k++) {
+        var ct = t0 + 0.25 + k * (0.5 + r * 0.55);
+        var co = osc(ctx, 'sawtooth', 320 + r * 180 + k * 90);
+        co.frequency.setValueAtTime(300 + k * 80, ct);
+        co.frequency.linearRampToValueAtTime(520 + k * 120 + r * 160, ct + 0.34);
+        var cf = bq(ctx, 'bandpass', 900 + k * 320, 9);
+        chain([co, cf, swell(ctx, ct, 0.075, 0.05, 0.10, 0.22), dest]);
+        startStop(co, ct, 0.44);
+      }
+      return dur + 0.4;
     },
 
     /* ---------------- 敵 ---------------- */
@@ -1498,6 +1548,48 @@
   };
 
   /* ================================================================
+   * P5 エリア2「下水道」の環境音（マップ meta の ambience:'sewer' で切替）
+   *   エリア1（'lab' 相当＝ meta 無し）の AMBIENCE は一切触らない。
+   *   色味はエリア1より低く・湿らせ、空気（air）の帯を水の反響側へ寄せる。
+   *   rev は「その区画の残響の深さ」（幹線ほど長く響く）。
+   * ============================================================== */
+  var AMB_SEWER_DEFAULT = { f: 34, f2: 51.2, lp: 138, air: 260, airG: 0.085, g: 0.32, rev: 0.20 };
+  var AMBIENCE_SEWER = {
+    /* 区画 A〜F（契約 §4 P5 の区画表）。world の region id はマップ側が決めるので
+       「意味の名前」と「区画の文字」の両方を引けるようにしておく。 */
+    inlet:     { f: 36, f2: 54.2, lp: 150, air: 320, airG: 0.105, g: 0.33, rev: 0.26 },  /* A 流入: 上から落ちる水 */
+    trunk:     { f: 31, f2: 46.8, lp: 128, air: 230, airG: 0.090, g: 0.35, rev: 0.42 },  /* B 幹線: 最も長い残響 */
+    settle:    { f: 29, f2: 43.6, lp: 118, air: 205, airG: 0.115, g: 0.36, rev: 0.34 },  /* C 沈殿: 泡と広い水面 */
+    pumproom:  { f: 41, f2: 61.8, lp: 205, air: 520, airG: 0.100, g: 0.40, rev: 0.22 },  /* D 機関: 機械の唸り */
+    oldtunnel: { f: 27, f2: 40.6, lp: 106, air: 170, airG: 0.062, g: 0.30, rev: 0.16 },  /* E 旧坑: 詰まった空気 */
+    watergate: { f: 38, f2: 57.4, lp: 175, air: 420, airG: 0.078, g: 0.34, rev: 0.30 }   /* F 水門: 鉄と水 */
+  };
+  /* 区画の文字（A〜F）と、よくある別名でも同じ色味を引けるようにする */
+  (function () {
+    var alias = {
+      A: 'inlet', B: 'trunk', C: 'settle', D: 'pumproom', E: 'oldtunnel', F: 'watergate',
+      sewerA: 'inlet', sewerB: 'trunk', sewerC: 'settle', sewerD: 'pumproom',
+      sewerE: 'oldtunnel', sewerF: 'watergate',
+      main: 'trunk', trunkline: 'trunk', channel: 'trunk',
+      basin: 'settle', settling: 'settle', tank: 'settle',
+      pump: 'pumproom', machine: 'pumproom',
+      old: 'oldtunnel', tunnel: 'oldtunnel', brick: 'oldtunnel',
+      gate: 'watergate', sluice: 'watergate', control: 'watergate',
+      shaft: 'inlet', intake: 'inlet'
+    };
+    for (var k in alias) if (alias.hasOwnProperty(k)) AMBIENCE_SEWER[k] = AMBIENCE_SEWER[alias[k]];
+  })();
+
+  /* 水流（水路マスに近いほど強い低域）。距離は「マス」で測る */
+  var FLOW_NEAR = 0.095;        /* 水路マスの上での音量 */
+  var FLOW_FAR = 0.011;         /* 水路から離れても残る「遠い水音」 */
+  var FLOW_FALLOFF = 9;         /* このマス数で FLOW_FAR まで落ちる */
+  var FLOW_MAXDIST = 14;        /* 距離場を作る上限（これ以上は遠方扱い） */
+  /* 滴り（下水道は頻繁）・遠い金属の唸り */
+  var SEWER_DRIP_MIN = 3.0, SEWER_DRIP_RANGE = 6.0;     /* 3〜9秒 */
+  var SEWER_GROAN_MIN = 30.0, SEWER_GROAN_RANGE = 60.0; /* 30〜90秒 */
+
+  /* ================================================================
    * P4.13 項目3: 緊迫層のチャンク予約（実機も機械テストもここを通る）
    *
    *   VOICES.tension は「TEN_CYCLE の整数倍」で模様が一巡する。次のチャンクを
@@ -1989,6 +2081,8 @@
     { key: 'step_metal',  name: 'footstep', params: { mat: 'metal', level: STEP_GAIN.walk, r: 0.5 }, sec: 0.8 },
     { key: 'step_water',  name: 'footstep', params: { mat: 'water', level: STEP_GAIN.walk, r: 0.5 }, sec: 0.8 },
     { key: 'step_glass',  name: 'footstep', params: { mat: 'glass', level: STEP_GAIN.walk, r: 0.5 }, sec: 0.8 },
+    /* P5 エリア2: 石の足音（硬く短い＋砂利） */
+    { key: 'step_stone',  name: 'footstep', params: { mat: 'stone', level: STEP_GAIN.walk, r: 0.5 }, sec: 0.7 },
     { key: 'noise_step',  name: 'noiseStep', params: { mat: 'water', r: 0.5 }, sec: 1.2 },
     { key: 'sting',       name: 'sting', params: {}, sec: 1.4 },
     { key: 'heartbeat',   name: 'heartbeat', params: {}, sec: 0.8 },
@@ -2035,6 +2129,8 @@
     { key: 'boneCrack',   name: 'boneCrack', params: {}, sec: 1.4 },
     { key: 'capture',     name: 'capture', params: {}, sec: 2.2 },
     { key: 'drip',        name: 'drip', params: { r: 0.5 }, sec: 0.8 },
+    /* P5 エリア2: 遠い金属の唸りと配管の軋み */
+    { key: 'pipeGroan',   name: 'pipeGroan', params: { r: 0.5 }, sec: 3.6 },
     { key: 'doorRoar',    name: 'doorRoar', params: {}, sec: 3.8 },
     { key: 'enemyMoan',   name: 'enemyMoan', params: { r: 0.5 }, sec: 3.2 },
     { key: 'enemyClaw',   name: 'enemyClaw', params: { r: 0.5 }, sec: 0.4 },
@@ -2242,6 +2338,31 @@
     b.out.connect(this.bus.amb);
     try { b.o1.start(); b.o2.start(); b.n.start(); } catch (e2) { this.errors++; }
     this.buzz = b;
+
+    /* P5: 下水の水流（常時鳴る低域のノイズ。水路マスに近いほど強い）。
+       エリア1では gain 0 のまま＝既存の環境音は不変 */
+    var f = {};
+    f.n = noiseSrc(ctx, 0.35);
+    f.lp = bq(ctx, 'lowpass', 240, 0.9);
+    f.lg = gainOf(ctx, 1.0);
+    f.n2 = noiseSrc(ctx, 1.15);
+    f.bp = bq(ctx, 'bandpass', 1150, 0.8);
+    f.bg = gainOf(ctx, 0.12);
+    f.out = gainOf(ctx, 0);
+    f.n.connect(f.lp); f.lp.connect(f.lg); f.lg.connect(f.out);
+    f.n2.connect(f.bp); f.bp.connect(f.bg); f.bg.connect(f.out);
+    f.out.connect(this.bus.amb);
+    try { f.n.start(); f.n2.start(); } catch (e4) { this.errors++; }
+    this.flow = f;
+
+    /* P5: 幹線の長い残響。amb / sfx バスから送る量を ambience で切り替える
+       （'lab' では送り 0＝エリア1の音は一切変わらない） */
+    this.revIn = reverb(ctx, this.master, [0.0731, 0.1013, 0.1367, 0.1789], 0.66, 1500, 1.0);
+    this.revSend = gainOf(ctx, 0);
+    this.revSend.connect(this.revIn);
+    this.bus.amb.connect(this.revSend);
+    this.bus.sfx.connect(this.revSend);
+    this.bus.self.connect(this.revSend);
 
     /* 呼吸（漆黒区画で前に出る） */
     var c = {};
@@ -2572,6 +2693,12 @@
     this._eSt = null;            /* P4.10: 個体ごとの気配の累積器（作り直す） */
     this.dripT = 4.0;
     this.metalT = 12.0;
+    /* P5: 下水道の環境音 */
+    this.groanT = 22.0;
+    this.flowTarget = 0;
+    this.flowDist = FLOW_MAXDIST;
+    this.revTarget = 0;
+    this._wSrc = null; this._wSet = null; this._wList = null; this._wField = null;
     this.duckT = 0;
     /* P4.13 項目3: 追跡中の緊迫層と、至近距離の環境音ダッキング */
     this.chaseNow = false;
@@ -2607,6 +2734,7 @@
   /** 製品初期状態へ戻す（game.reset() から呼ばれる）。鳴りっぱなしを止める */
   Engine.prototype.reset = function () {
     this.panic();
+    this._ambForce = null;          /* P5: 監査の強制切替も製品初期状態へ戻す */
     this._resetState();
     this._applyFxDom(true);
     /* 声・字幕も製品初期状態へ（契約 §6「実行後は初期状態へ完全復帰」） */
@@ -2620,6 +2748,8 @@
     if (this.amb) { this.amb.out.gain.value = 0; }
     if (this.buzz) { this.buzz.out.gain.value = 0; }
     if (this.breath) { this.breath.out.gain.value = 0; }
+    if (this.flow) { this.flow.out.gain.value = 0; }
+    if (this.revSend) { this.revSend.gain.value = 0; }
     this._killTension();
     if (this.bus && this.bus.amb) this.bus.amb.gain.value = AMB_BUS_GAIN;
     this.ambDuck = 0;
@@ -2714,6 +2844,11 @@
     var g = this.game;
     if (!g || !g.map) return 'tile';
     var map = g.map, TILE = ESCAPE.TILE;
+    /* P5: 既定の床種はマップ meta で決める（area1 は meta 無し＝'tile' のまま不変） */
+    var dflt = (map.meta && map.meta.floorDefault) || 'tile';
+    if (!FLOOR_MAT[dflt]) dflt = 'tile';
+    /* 水路マス（P5b-A が足す WATER タイル／meta.waterTiles）は水の足音 */
+    if (this._isWaterTile(col, row)) return 'water';
     if (map.tileAt(col, row) === TILE.NOISE) {
       if (!this._noiseKind) {
         this._noiseKind = Object.create(null);
@@ -2737,7 +2872,106 @@
       var b = pls[k];
       if (col >= b.c0 && col <= b.c1 && row >= b.r0 && row <= b.r1) return 'metal';
     }
-    return 'tile';
+    return dflt;
+  };
+
+  /* ================================================================
+   * P5: 水路マスの索引と距離場
+   *   水路は次のどれかで表される（P5b-A の実装に合わせてどれでも拾う）:
+   *     map.meta.waterTiles = [{col,row} | [col,row] | 'c,r']
+   *     タイル種別 TILE.WATER / TILE.DEEP（将来の 'W' / 'V'）
+   *     音地盤 TILE.NOISE の kind:'water'
+   * ============================================================== */
+  Engine.prototype._waterIndex = function () {
+    var g = this.game, map = g && g.map;
+    if (!map) return null;
+    if (this._wSrc === map && this._wSet) return this._wSet;
+    var TILE = ESCAPE.TILE, set = Object.create(null), list = [];
+    function add(c, r) {
+      var k = c + ',' + r;
+      if (set[k]) return;
+      set[k] = true; list.push(c); list.push(r);
+    }
+    var wt = (map.meta && map.meta.waterTiles) || [];
+    for (var i = 0; i < wt.length; i++) {
+      var w = wt[i];
+      if (w === null || w === undefined) continue;
+      if (typeof w === 'string') { var pr = w.split(','); add(+pr[0], +pr[1]); }
+      else if (w.length >= 2) add(+w[0], +w[1]);
+      else if (w.col !== undefined) add(+w.col, +w.row);
+    }
+    var wid = map.width, hei = map.height;
+    var hasW = (TILE.WATER !== undefined), hasV = (TILE.DEEP !== undefined);
+    if (hasW || hasV) {
+      for (var r2 = 0; r2 < hei; r2++) {
+        for (var c2 = 0; c2 < wid; c2++) {
+          var t = map.tileAt(c2, r2);
+          if ((hasW && t === TILE.WATER) || (hasV && t === TILE.DEEP)) add(c2, r2);
+        }
+      }
+    }
+    var noise = (map.meta && map.meta.noise) || [];
+    for (var j = 0; j < noise.length; j++) {
+      var nk = noise[j].kind;
+      if (nk !== 'glass' && nk !== 'metal') add(noise[j].col, noise[j].row);
+    }
+    this._wSrc = map;
+    this._wSet = set;
+    this._wList = list;
+    this._wField = null;
+    return set;
+  };
+  /** そのマスが水路か */
+  Engine.prototype._isWaterTile = function (col, row) {
+    var set = this._waterIndex();
+    return !!(set && set[col + ',' + row]);
+  };
+  /** 水路マスからの距離（マス単位・BFS。上限を超えたら FLOW_MAXDIST） */
+  Engine.prototype._waterDist = function (col, row) {
+    var g = this.game, map = g && g.map;
+    if (!map) return FLOW_MAXDIST;
+    this._waterIndex();
+    if (!this._wField) {
+      var wid = map.width, hei = map.height, n = wid * hei;
+      var fld = new Uint8Array(n);
+      for (var i = 0; i < n; i++) fld[i] = FLOW_MAXDIST;
+      var q = [], list = this._wList || [];
+      for (var k = 0; k < list.length; k += 2) {
+        var c0 = list[k], r0 = list[k + 1];
+        if (c0 < 0 || r0 < 0 || c0 >= wid || r0 >= hei) continue;
+        fld[r0 * wid + c0] = 0; q.push(r0 * wid + c0);
+      }
+      var head = 0;
+      while (head < q.length) {
+        var idx = q[head++], d = fld[idx];
+        if (d >= FLOW_MAXDIST) continue;
+        var cc = idx % wid, rr = (idx / wid) | 0;
+        for (var s2 = 0; s2 < 4; s2++) {
+          var nc = cc + (s2 === 0 ? 1 : s2 === 1 ? -1 : 0);
+          var nr = rr + (s2 === 2 ? 1 : s2 === 3 ? -1 : 0);
+          if (nc < 0 || nr < 0 || nc >= wid || nr >= hei) continue;
+          var ni = nr * wid + nc;
+          if (fld[ni] > d + 1) { fld[ni] = d + 1; q.push(ni); }
+        }
+      }
+      this._wField = fld;
+    }
+    if (col < 0 || row < 0 || col >= map.width || row >= map.height) return FLOW_MAXDIST;
+    return this._wField[row * map.width + col];
+  };
+
+  /* ---------------- P5: 環境音の系統（'lab' / 'sewer'） ---------------- */
+
+  /** 今の環境音の系統。製品コードはマップ meta で自動、監査は setAmbience で強制する */
+  Engine.prototype.ambienceId = function () {
+    if (this._ambForce) return this._ambForce;
+    var g = this.game, m = g && g.map && g.map.meta;
+    return (m && m.ambience) || 'lab';
+  };
+  /** 検証・監査用の強制切替（null / 'auto' で解除） */
+  Engine.prototype.setAmbience = function (id) {
+    this._ambForce = (id === 'sewer' || id === 'lab') ? id : null;
+    return this.ambienceId();
   };
 
   /** 明滅器具のうち最寄りのもの（音の同期元）。世界が作り直されたら索引も作り直す */
@@ -2788,6 +3022,7 @@
     var inBlack = !!(g.world && g.world._inBlackZone && g.world._inBlackZone(col, row));
 
     this._stepAmbient(dt, quiet, inBlack, col, row);
+    this._stepFlow(dt, quiet, inBlack, col, row);
     this._stepBuzz(dt, quiet, inBlack);
     this._stepRandomAmbience(dt, quiet, col, row);
     this._stepFootsteps(dt, quiet || locker, col, row);
@@ -2806,7 +3041,10 @@
     var a = this.amb;
     var g = this.game;
     var rid = (g.world && g.world._regionAt) ? g.world._regionAt(col, row) : null;
-    var t = (rid && AMBIENCE[rid]) || AMB_DEFAULT;
+    /* P5: マップ meta の ambience で系統を切り替える（既定 'lab'＝エリア1は不変） */
+    var sewer = this.ambienceId() === 'sewer';
+    var table = sewer ? AMBIENCE_SEWER : AMBIENCE;
+    var t = (rid && table[rid]) || (sewer ? AMB_SEWER_DEFAULT : AMB_DEFAULT);
     var k = 1 - Math.exp(-1.6 * dt);            /* 区画をまたぐ時のクロスフェード */
     var scale = 1;
     if (inBlack) scale *= 0.16;                 /* 漆黒区画: 環境音を絞って呼吸だけにする */
@@ -2821,14 +3059,48 @@
     /* 「鳴らすべき音量」は出力可否と分けて持つ（未解錠・テスト中でも判定を検証できる） */
     this.ambRegion = rid;
     this.ambTarget = t.g * scale;
+    /* P5: 幹線ほど長い残響。'lab' では送り 0（＝エリア1の響きは変わらない） */
+    var rev = sewer ? ((t.rev === undefined ? AMB_SEWER_DEFAULT.rev : t.rev) * (inBlack ? 0.6 : 1)) : 0;
+    if (quiet) rev *= 0.4;
+    this.revTarget = rev;
     if (!a) return;
     var live = this.ctxLive() ? 1 : 0;
+    if (this.revSend) this.revSend.gain.value = lerp(this.revSend.gain.value, this.revTarget * live, k);
     a.o1.frequency.value = lerp(a.o1.frequency.value, t.f, k);
     a.o2.frequency.value = lerp(a.o2.frequency.value, t.f2, k);
     a.lp.frequency.value = lerp(a.lp.frequency.value, t.lp, k);
     a.air.frequency.value = lerp(a.air.frequency.value, t.air, k);
     a.airG.gain.value = lerp(a.airG.gain.value, t.airG, k);
     a.out.gain.value = lerp(a.out.gain.value, this.ambTarget * live, quiet ? 0.25 : k);
+  };
+
+  /**
+   * P5: 下水の水流（常時）。水路マスに近いほど強く、遠いと微か。
+   * 距離は水路マスからの BFS 距離（マップごとに1回だけ作る）。
+   */
+  Engine.prototype._stepFlow = function (dt, quiet, inBlack, col, row) {
+    var sewer = this.ambienceId() === 'sewer';
+    var target = 0, d = FLOW_MAXDIST, near = 0;
+    if (sewer) {
+      d = this._waterDist(col, row);
+      near = 1 - d / FLOW_FALLOFF;
+      if (near < 0) near = 0; else if (near > 1) near = 1;
+      near = near * near;                        /* 近くだけ一気に強くなる */
+      target = FLOW_FAR + (FLOW_NEAR - FLOW_FAR) * near;
+      if (inBlack) target *= 0.55;
+      if (quiet) target *= 0.35;
+      if (this.duckT > 0) target *= 0.35;
+    }
+    this.flowDist = d;
+    this.flowTarget = target;
+    var f = this.flow;
+    if (!f) return;
+    var live = this.ctxLive() ? 1 : 0;
+    var k = 1 - Math.exp(-2.2 * dt);
+    f.out.gain.value = lerp(f.out.gain.value, target * live, k);
+    /* 近いほど水の高域（はぜる音）が乗る。遠いと低域だけ＝「遠くで流れている」 */
+    f.bg.gain.value = lerp(f.bg.gain.value, 0.05 + 0.30 * near, k);
+    f.lp.frequency.value = lerp(f.lp.frequency.value, 200 + 240 * near, k);
   };
 
   /* 蛍光灯のジー音（明滅パターンに同期・近接で増大） */
@@ -2858,11 +3130,26 @@
   /* 滴り・遠い金属音（ランダム間隔） */
   Engine.prototype._stepRandomAmbience = function (dt, quiet, col, row) {
     if (quiet) return;
+    var sewer = this.ambienceId() === 'sewer';
     this.dripT -= dt;
     if (this.dripT <= 0) {
-      this.dripT = 5.5 + this._rand() * 9.0;
-      var s = this._randomSpot(col, row, 3, 9);
-      if (s) this.play('drip', { x: s.x, z: s.z, bus: 'amb', gain: 0.55, r: this._rand(), maxDist: 20 });
+      /* P5: 下水道は滴りが頻繁（3〜9秒）。位置はランダム＝パンも毎回変わる。
+         残響は revSend（amb バス）経由で自動的に乗る */
+      this.dripT = sewer
+        ? (SEWER_DRIP_MIN + this._rand() * SEWER_DRIP_RANGE)
+        : (5.5 + this._rand() * 9.0);
+      var s = this._randomSpot(col, row, sewer ? 2 : 3, sewer ? 13 : 9);
+      if (s) this.play('drip', { x: s.x, z: s.z, bus: 'amb', gain: sewer ? 0.66 : 0.55, r: this._rand(), maxDist: 20 });
+    }
+    if (sewer) {
+      /* 遠い金属の唸りと配管の軋み（30〜90秒に1回） */
+      this.groanT -= dt;
+      if (this.groanT <= 0) {
+        this.groanT = SEWER_GROAN_MIN + this._rand() * SEWER_GROAN_RANGE;
+        var s3 = this._randomSpot(col, row, 12, 26);
+        if (s3) this.play('pipeGroan', { x: s3.x, z: s3.z, bus: 'amb', gain: 0.5, r: this._rand(), maxDist: 46, occlude: false });
+      }
+      return;
     }
     this.metalT -= dt;
     if (this.metalT <= 0) {
@@ -3236,6 +3523,12 @@
   ESCAPE.Audio = {
     VOICES: VOICES,
     AMBIENCE: AMBIENCE,
+    /* P5 エリア2「下水道」（meta.ambience:'sewer'） */
+    AMBIENCE_SEWER: AMBIENCE_SEWER,
+    AMB_SEWER_DEFAULT: AMB_SEWER_DEFAULT,
+    FLOW_NEAR: FLOW_NEAR, FLOW_FAR: FLOW_FAR, FLOW_FALLOFF: FLOW_FALLOFF, FLOW_MAXDIST: FLOW_MAXDIST,
+    SEWER_DRIP_MIN: SEWER_DRIP_MIN, SEWER_DRIP_RANGE: SEWER_DRIP_RANGE,
+    SEWER_GROAN_MIN: SEWER_GROAN_MIN, SEWER_GROAN_RANGE: SEWER_GROAN_RANGE,
     FLOOR_MAT: FLOOR_MAT,
     STEP_GAIN: STEP_GAIN,
     STRIDE: STRIDE,

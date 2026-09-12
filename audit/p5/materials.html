@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ESCAPE P5b-B 素材見本（下水道 10種）</title>
+<style>
+  html, body { margin: 0; padding: 0; background: #0b0d0e; color: #c8d0d2;
+    font-family: -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif; }
+  #head { padding: 8px 14px 6px; border-bottom: 1px solid #1d2426; }
+  #head h1 { margin: 0; font-size: 14px; letter-spacing: .08em; font-weight: 600; color: #e2eaec; }
+  #head .sub { margin-top: 3px; font-size: 11px; color: #7d8a8d; }
+  #head .sub b { color: #a9b8bb; font-weight: 600; }
+  #stage { position: relative; width: 1280px; }
+  #cv { display: block; }
+  .label { position: absolute; pointer-events: none; font-size: 11px; line-height: 1.35;
+    text-shadow: 0 1px 3px #000, 0 0 8px #000; }
+  .label .k { color: #eaf2f4; font-weight: 700; letter-spacing: .03em; }
+  .label .d { color: #93a3a6; font-size: 10px; }
+  .label .n { color: #6f8f86; font-size: 10px; font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+<div id="head">
+  <h1>ESCAPE ／ P5b-B 素材見本 — エリア2「下水道」の10種</h1>
+  <div class="sub">近傍点光源つき・法線／粗さは <b>ESCAPE.RQ.materialMaps</b> の実物・<b>waterSewer</b> は
+    <b>ESCAPE.Textures.animate(dt)</b> で揺れる　<span id="meta"></span></div>
+</div>
+<div id="stage"><canvas id="cv"></canvas></div>
+
+<script src="../../js/three.min.js"></script>
+<script src="../../js/render_quality.js"></script>
+<script src="../../js/textures.js"></script>
+<script>
+(function () {
+  'use strict';
+  var THREE = window.THREE, ESCAPE = window.ESCAPE, RQ = ESCAPE.RQ, TX = ESCAPE.Textures;
+
+  var COLS = 5, ROWS = 2, CW = 1280 / COLS, CH = 648 / ROWS;
+  var SAMPLES = [
+    { key: 'wallBrick',       kind: 'wall',  desc: '湿った古煉瓦・目地に苔・下部の黒い水染み' },
+    { key: 'wallStone',       kind: 'wall',  desc: '暗灰の切石ヴォールト・石灰の白い垂れ' },
+    { key: 'wallConcreteWet', kind: 'wall',  desc: '打放しコンクリ・型枠の継ぎ目・黒い流れ染み' },
+    { key: 'pipeRust',        kind: 'pipe',  desc: '配管の錆と塗装剥げ（円周方向にタイル）' },
+    { key: 'metalGrate',      kind: 'grate', desc: '格子（透過。下は暗い水面）' },
+    { key: 'floorStoneWet',   kind: 'floor', desc: '濡れた石畳・水たまりの光沢（粗さの差）' },
+    { key: 'floorBrick',      kind: 'floor', desc: '煉瓦の床・動線の摩耗' },
+    { key: 'floorMud',        kind: 'floor', desc: '泥と堆積物・足跡' },
+    { key: 'waterSewer',      kind: 'water', desc: '黒緑の水面（法線2層スクロール＋明滅）' },
+    { key: 'slime',           kind: 'band',  desc: '水位線の苔・ぬめり帯（上下端が alpha でぼける）' }
+  ];
+
+  var cv = document.getElementById('cv');
+  var renderer = new THREE.WebGLRenderer({ canvas: cv, antialias: true });
+  renderer.setPixelRatio(1);
+  renderer.setSize(1280, 648, false);
+  renderer.setScissorTest(true);
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.35;
+  renderer.autoClear = false;
+
+  var div = RQ.normalDiv() || 2;
+  var useY = RQ.isY();
+
+  function uvScale(geo, su, sv) {
+    var uv = geo.attributes.uv;
+    for (var i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) * su, uv.getY(i) * sv);
+    uv.needsUpdate = true;
+    return geo;
+  }
+  function stdMat(name, extra) {
+    var o = { map: TX.get(name), fog: false, roughness: 1.0, metalness: 0.05 };
+    if (extra) for (var k in extra) o[k] = extra[k];
+    if (!useY) return new THREE.MeshBasicMaterial({ map: o.map, fog: false,
+      transparent: !!o.transparent, alphaTest: o.alphaTest || 0, side: o.side });
+    var mm = RQ.materialMaps(name, div);
+    if (mm) {
+      o.normalMap = mm.normalMap;
+      o.normalScale = new THREE.Vector2(1, 1);
+      o.roughnessMap = mm.roughnessMap;
+      o.metalness = mm.profile.metal;
+    }
+    return new THREE.MeshStandardMaterial(o);
+  }
+
+  var cells = [];
+  function buildCell(s) {
+    var sc = new THREE.Scene();
+    var cam = new THREE.PerspectiveCamera(42, CW / CH, 0.05, 60);
+    sc.add(new THREE.AmbientLight(0x1a2430, 0.55));
+    var key = s.key;
+    var mesh = null, mat = null, extraMesh = null;
+
+    if (s.kind === 'wall') {
+      mat = stdMat(key);
+      mesh = new THREE.Mesh(new THREE.PlaneGeometry(2, 3), mat);
+      cam.position.set(0, 0.05, 3.25); cam.lookAt(0, 0, 0);
+    } else if (s.kind === 'floor') {
+      mat = stdMat(key);
+      mesh = new THREE.Mesh(new THREE.PlaneGeometry(2.4, 2.4), mat);
+      mesh.rotation.x = -Math.PI / 2;
+      uvScale(mesh.geometry, 1.2, 1.2);
+      cam.position.set(0, 1.55, 1.75); cam.lookAt(0, 0, -0.15);
+    } else if (s.kind === 'pipe') {
+      mat = stdMat(key, { side: THREE.DoubleSide });
+      var g = new THREE.CylinderGeometry(0.52, 0.52, 3.0, 40, 1, true);
+      uvScale(g, 2, 1.6);
+      mesh = new THREE.Mesh(g, mat);
+      mesh.rotation.z = 0.06;
+      cam.position.set(0, 0.05, 2.55); cam.lookAt(0, 0, 0);
+    } else if (s.kind === 'grate') {
+      /* 下の暗い水面 → その上に格子（透過） */
+      var backMat = stdMat('waterSewer');
+      extraMesh = new THREE.Mesh(new THREE.PlaneGeometry(3.2, 3.2), backMat);
+      extraMesh.position.z = -0.75;
+      sc.add(extraMesh);
+      mat = stdMat(key, { transparent: true, alphaTest: 0.5, side: THREE.DoubleSide });
+      mesh = new THREE.Mesh(new THREE.PlaneGeometry(2.2, 2.2), mat);
+      uvScale(mesh.geometry, 2, 2);
+      cam.position.set(0.25, 0.35, 2.7); cam.lookAt(0, 0, 0);
+    } else if (s.kind === 'water') {
+      mat = RQ.waterMaterial({ baked: false, vertexColors: false, div: div });
+      mat.fog = false;
+      mesh = new THREE.Mesh(new THREE.PlaneGeometry(7, 7), mat);
+      mesh.rotation.x = -Math.PI / 2;
+      uvScale(mesh.geometry, 2.4, 2.4);
+      cam.position.set(0, 0.62, 2.5); cam.lookAt(0, 0, -1.4);
+    } else if (s.kind === 'band') {
+      var wallMat = stdMat('wallConcreteWet');
+      extraMesh = new THREE.Mesh(new THREE.PlaneGeometry(2.6, 3), wallMat);
+      extraMesh.position.z = -0.02;
+      sc.add(extraMesh);
+      mat = stdMat(key, { transparent: true, side: THREE.DoubleSide, depthWrite: false });
+      mesh = new THREE.Mesh(new THREE.PlaneGeometry(2.6, 0.65), mat);
+      uvScale(mesh.geometry, 1.3, 1);
+      mesh.position.set(0, -0.25, 0.01);
+      cam.position.set(0, -0.15, 2.9); cam.lookAt(0, -0.2, 0);
+    }
+    sc.add(mesh);
+
+    /* 近傍点光源（契約 P4.17 段階2 の「近傍灯」と同じ考え方） */
+    var key1 = new THREE.PointLight(0xffe0b4, 7.2, 9, 2);
+    key1.position.set(1.05, 1.15, 1.45);
+    var key2 = new THREE.PointLight(0x9fd0ff, 2.6, 8, 2);
+    key2.position.set(-1.25, -0.55, 1.15);
+    sc.add(key1); sc.add(key2);
+    return { s: s, scene: sc, cam: cam, mesh: mesh, mat: mat, l1: key1, l2: key2 };
+  }
+  for (var i = 0; i < SAMPLES.length; i++) cells.push(buildCell(SAMPLES[i]));
+
+  /* ---- ラベル ---- */
+  var stage = document.getElementById('stage');
+  for (var n = 0; n < cells.length; n++) {
+    var cx = (n % COLS) * CW, cy = Math.floor(n / COLS) * CH;
+    var d = document.createElement('div');
+    d.className = 'label';
+    d.style.left = (cx + 10) + 'px';
+    d.style.top = (cy + 8 + 43) + 'px';
+    d.style.width = (CW - 20) + 'px';
+    d.innerHTML = '<div class="k">' + cells[n].s.key + '</div>' +
+      '<div class="d">' + cells[n].s.desc + '</div>' +
+      '<div class="n" id="n' + n + '"></div>';
+    stage.appendChild(d);
+  }
+
+  /* ---- 計測（監査が読む数値） ---- */
+  function roughStats(name) {
+    var mm = RQ.materialMaps(name, div);
+    if (!mm) return null;
+    var d = mm.roughnessMap.image.data, n = d.length / 4;
+    var mn = 255, mx = 0, sum = 0;
+    for (var i = 0; i < n; i++) { var v = d[i * 4 + 1]; if (v < mn) mn = v; if (v > mx) mx = v; sum += v; }
+    return { min: mn / 255, max: mx / 255, mean: sum / n / 255, spread: (mx - mn) / 255 };
+  }
+  function normStats(name) {
+    var mm = RQ.materialMaps(name, div);
+    if (!mm) return null;
+    var d = mm.normalMap.image.data, n = d.length / 4, s = 0, mx = 0;
+    for (var i = 0; i < n; i++) {
+      var x = Math.abs(d[i * 4] / 255 - 0.5) * 2, y = Math.abs(d[i * 4 + 1] / 255 - 0.5) * 2;
+      var m = Math.max(x, y); s += m; if (m > mx) mx = m;
+    }
+    return { mean: s / n, max: mx, w: mm.w, h: mm.h };
+  }
+  function lumStats(name) {
+    var im = TX.get(name).image;
+    var c = document.createElement('canvas');
+    c.width = Math.min(256, im.width); c.height = Math.min(256, im.height);
+    var x = c.getContext('2d');
+    x.drawImage(im, 0, 0, c.width, c.height);
+    var p = x.getImageData(0, 0, c.width, c.height).data, sum = 0, n = c.width * c.height, a = 0;
+    for (var i = 0; i < n; i++) {
+      sum += 0.2126 * p[i * 4] + 0.7152 * p[i * 4 + 1] + 0.0722 * p[i * 4 + 2];
+      a += p[i * 4 + 3];
+    }
+    return { lum: sum / n, alpha: a / n / 255 };
+  }
+  /** 左右／上下の端が繋がるか（タイルの継ぎ目。小さいほど良い） */
+  function seam(name) {
+    var im = TX.get(name).image;
+    var c = document.createElement('canvas');
+    c.width = im.width; c.height = im.height;
+    var x = c.getContext('2d'); x.drawImage(im, 0, 0);
+    var p = x.getImageData(0, 0, c.width, c.height).data;
+    function px(cx, cy) { var o = (cy * c.width + cx) * 4; return [p[o], p[o + 1], p[o + 2]]; }
+    var dh = 0, dv = 0;
+    for (var y = 0; y < c.height; y++) {
+      var a = px(0, y), b = px(c.width - 1, y);
+      dh += (Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) + Math.abs(a[2] - b[2])) / 3;
+    }
+    for (var xx = 0; xx < c.width; xx++) {
+      var a2 = px(xx, 0), b2 = px(xx, c.height - 1);
+      dv += (Math.abs(a2[0] - b2[0]) + Math.abs(a2[1] - b2[1]) + Math.abs(a2[2] - b2[2])) / 3;
+    }
+    return { h: dh / c.height, v: dv / c.width };
+  }
+
+  window.__mat = {
+    tier: function () { return RQ.tier; },
+    keys: function () {
+      var out = [];
+      for (var i = 0; i < SAMPLES.length; i++) {
+        var k = SAMPLES[i].key;
+        var sz = TX.sizeOf(k);
+        out.push({
+          key: k,
+          inBuilders: TX.names().indexOf(k) >= 0,
+          inProfile: !!RQ.MAT_PROFILE[k],
+          w: sz.w, h: sz.h,
+          detail: +TX.detail(k).total.toFixed(1),
+          lum: +lumStats(k).lum.toFixed(1),
+          rough: roughStats(k), norm: normStats(k)
+        });
+      }
+      return out;
+    },
+    seam: seam,
+    /** 水面が実際に動いているか（時系列サンプル） */
+    waterSeries: function (steps, dt) {
+      var out = [];
+      for (var i = 0; i < (steps || 6); i++) {
+        TX.animate(dt || 0.5);
+        var st = TX.animState('waterSewer');
+        out.push({ t: +st.t.toFixed(3), u1: +st.u1.toFixed(5), v1: +st.v1.toFixed(5),
+          u2: +st.u2.toFixed(5), v2: +st.v2.toFixed(5), au: +st.au.toFixed(5),
+          pulse: +st.pulse.toFixed(5), moving: st.moving });
+      }
+      return out;
+    },
+    /** 材質の uniform に実際に書かれた値（シェーダが受け取る値） */
+    waterUniforms: function () {
+      var m = null;
+      for (var i = 0; i < cells.length; i++) if (cells[i].s.kind === 'water') m = cells[i].mat;
+      if (!m || !m.userData.water || !m.userData.water.uniforms) return null;
+      var u = m.userData.water.uniforms;
+      return { off1: [u.uNrmOff1.value.x, u.uNrmOff1.value.y],
+        off2: [u.uNrmOff2.value.x, u.uNrmOff2.value.y],
+        pulse: u.uPulse.value, layers: RQ.waterLayers,
+        animated: m.userData.water.animated, type: m.type };
+    },
+    frames: 0
+  };
+
+  /* ---- 描画 ---- */
+  var t0 = performance.now(), last = t0, fps = 0, acc = 0, frames = 0;
+  function draw(now) {
+    var dt = Math.min(0.05, (now - last) / 1000); last = now;
+    TX.animate(dt);
+    /* 灯をゆっくり動かす＝法線の効きが分かる（静止画でも位置は固定） */
+    var t = (now - t0) / 1000;
+    for (var i = 0; i < cells.length; i++) {
+      var c = cells[i];
+      c.l1.position.x = 1.05 + Math.sin(t * 0.35 + i) * 0.25;
+      c.l1.position.y = 1.15 + Math.cos(t * 0.27 + i) * 0.12;
+      var col = i % COLS, row = (i / COLS) | 0;
+      var x = col * CW, y = 648 - (row + 1) * CH;
+      renderer.setViewport(x, y, CW, CH);
+      renderer.setScissor(x, y, CW, CH);
+      renderer.clear();
+      renderer.render(c.scene, c.cam);
+    }
+    frames++; acc += dt;
+    if (acc > 0.5) { fps = frames / acc; frames = 0; acc = 0; }
+    window.__mat.frames++;
+    requestAnimationFrame(draw);
+  }
+  requestAnimationFrame(draw);
+
+  /* ---- 見出しと各セルの数値 ---- */
+  var info = window.__mat.keys();
+  document.getElementById('meta').innerHTML =
+    '段階 <b>' + RQ.tier + '</b>（法線 1/' + div + '）　水面の揺れ <b>' +
+    (TX.animLive() ? 'ON' : '静止（fallback）') + '</b>';
+  for (var q = 0; q < info.length; q++) {
+    var el = document.getElementById('n' + q), it = info[q];
+    el.textContent = it.w + '×' + it.h + '  細部' + it.detail +
+      '  粗さ' + it.rough.min.toFixed(2) + '–' + it.rough.max.toFixed(2) +
+      '  輝度' + it.lum.toFixed(0);
+  }
+})();
+</script>
+</body>
+</html>
