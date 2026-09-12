@@ -237,6 +237,31 @@
     el.addEventListener('mousedown', function (e) { e.preventDefault(); e.stopPropagation(); fn(); });
   }
 
+  /** 背景（紙の外側）のタップだけで閉じる結線。紙の中は既定のスクロールに任せる */
+  function bindBackdropTap(el, inner, fn) {
+    if (!el) return;
+    var t0 = null;
+    function inside(t) { return !!(inner && t && inner.contains(t)); }
+    el.addEventListener('touchstart', function (e) {
+      if (inside(e.target)) { t0 = null; return; }          /* 紙の中: スクロールを妨げない */
+      e.preventDefault(); e.stopPropagation();
+      var t = e.touches && e.touches[0];
+      t0 = t ? { x: t.clientX, y: t.clientY } : { x: 0, y: 0 };
+    }, { passive: false });
+    el.addEventListener('touchend', function (e) {
+      if (inside(e.target) || !t0) return;
+      e.preventDefault(); e.stopPropagation();
+      var t = e.changedTouches && e.changedTouches[0];
+      var moved = t ? Math.hypot(t.clientX - t0.x, t.clientY - t0.y) : 0;
+      t0 = null;
+      if (moved < 12) fn();
+    }, { passive: false });
+    el.addEventListener('mousedown', function (e) {
+      if (inside(e.target)) return;
+      e.preventDefault(); e.stopPropagation(); fn();
+    });
+  }
+
   var FACE = { n: [0, 0, -1], s: [0, 0, 1], e: [1, 0, 0], w: [-1, 0, 0] };
 
   /* ================================================================
@@ -1191,7 +1216,10 @@
   /* ---------------- DOM結線（コンストラクタから1回だけ） ---------------- */
   Progress.prototype._bind = function () {
     var self = this;
-    bindTap(this.dom.memoOverlay, function () { self.onCloseTap(); });
+    /* P4.18 追補（メイン修正）: スマホでメモをスクロールしようとすると最初のタップで閉じていた。
+       閉じるのは「紙の外側のタップ」と `閉じる` ボタンだけにし、紙の中は指を動かしてスクロールできるようにする。 */
+    bindBackdropTap(this.dom.memoOverlay, document.getElementById('memo-paper'), function () { self.onCloseTap(); });
+    bindTap(document.getElementById('memo-close'), function () { self.onCloseTap(); });
 
     /* 【P4.18 項目3 失効】プレイ画面の `データ全消去` の結線（window.confirm 経由）。
        消去はタイトルの `データを消す` → 既存モーダル様式の確認 → eraseAllData()（js/menu.js）。 */
