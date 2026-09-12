@@ -5329,6 +5329,11 @@
     return { dark: dark / n * 100, mid: mid / n * 100, hot: hot / n * 100 };
   }
 
+  /* P5 段階2: js/test_area2.js（area2 専用の runArea2）が同じ輝度ゲートの読み取りを
+   * 使い回せるよう最小限に共有する（契約 DESIGN.md「P5 エリア2」段階2）。 */
+  ESCAPE.__testUtil = ESCAPE.__testUtil || {};
+  ESCAPE.__testUtil.lumaGate = lumaGate;
+
   /** 視点を置いて1枚描く（ロープの線と鼓動の縁は比較の邪魔なので伏せる） */
   function p417Place(g, c) {
     place(g, c.col, c.row, c.yawDeg);
@@ -6430,6 +6435,15 @@
   global.__test = {
     runAll: runAll,
     runAllAsync: runAllAsync,
+    /** P5 段階2: area2 専用の一括テスト（実体は js/test_area2.js。契約 DESIGN.md「P5」段階2）。
+     *  ?area=area2 のページでのみ動く。js/test_area2.js が読み込まれていない/area1 ページで
+     *  呼ばれた場合は、その旨の失敗1件だけを返す（area1 の runAll には影響しない）。 */
+    runArea2: function (opts) {
+      if (typeof ESCAPE.__runArea2 === 'function') return ESCAPE.__runArea2(opts);
+      var t = new Runner();
+      t.ok(false, 'runArea2 が未登録（js/test_area2.js が読み込まれていない）');
+      return global.Promise ? global.Promise.resolve(summarize(t, opts)) : summarize(t, opts);
+    },
     /** 個別デバッグ用 */
     _place: function (col, row, yawDeg) { place(ESCAPE.game, col, row, yawDeg); ESCAPE.game.syncCamera(); }
   };

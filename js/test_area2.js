@@ -816,4 +816,350 @@
     testA2Structure, testA2Tiles, testA2Placement, testA2Regions,
     testA2DeadEnds, testA2Ramps, testA2Story, testA2Engine
   );
+
+  /* ================================================================
+   * 段階2「runArea2」（契約 DESIGN.md「P5 エリア2『下水道』」段階2）。
+   * `?area=area2` の**実ページ**で `window.__test.runArea2()` から呼ばれる（js/test.js が
+   * 結線する。js/test.js の変更はその結線と輝度ゲート helper の共有だけ＝実体はここ）。
+   * runAll の __extraSuites（上の8関数）は area1 ページの静的データ検査で、これとは別物。
+   * ============================================================== */
+
+  /** 最小限の Runner（js/test.js の Runner と同じ形。あちらは内部クロージャで取り出せない） */
+  function A2Runner() { this.results = []; this.passed = 0; this.failed = 0; }
+  A2Runner.prototype.ok = function (cond, name, detail) {
+    var r = { name: name, pass: !!cond, detail: detail === undefined ? '' : String(detail) };
+    this.results.push(r);
+    if (r.pass) this.passed++; else this.failed++;
+    return r.pass;
+  };
+  function a2Summarize(t) {
+    return { passed: t.passed, failed: t.failed, total: t.results.length, results: t.results };
+  }
+
+  /** キー入力。実ブラウザと同じ経路（body から発火 → window の bubble）で流す */
+  function a2SendKey(type, code) {
+    document.body.dispatchEvent(new KeyboardEvent(type, { code: code, bubbles: true, cancelable: true }));
+  }
+  /** 「調べる」1回ぶん（keydown → 1ポンプ → keyup） */
+  function a2PressInteract() {
+    a2SendKey('keydown', 'KeyE');
+    global.__pump(1);
+    a2SendKey('keyup', 'KeyE');
+  }
+  /** computed style での可視判定（契約「罠」節：表示は computed style で見る） */
+  function a2Visible(el) {
+    if (!el || !global.getComputedStyle) return false;
+    var cs = global.getComputedStyle(el);
+    if (cs.display === 'none' || cs.visibility === 'hidden') return false;
+    return parseFloat(cs.opacity || '1') > 0.01;
+  }
+
+  /** 視点を置いて1枚描く準備（js/test.js の p417Place と同じ手順。ロープ線は伏せる） */
+  function a2PlaceCam(g, c) {
+    var pos = g.map.cellCenter(c.col, c.row);
+    g.player.x = pos.x; g.player.z = pos.z;
+    g.player.yaw = (c.yawDeg || 0) * Math.PI / 180;
+    g.player.pitch = 0;
+    g.player.y = g.map.floorYAt(g.player.x, g.player.z);
+    g.player.speed = 0;
+    g.syncCamera();
+    if (g.rope && g.rope.group) g.rope.group.visible = false;
+    if (g.headlight) {
+      g.headlight.on = !!c.light;
+      g.headlight.level = c.light ? 1 : 0;
+      if (g.headlight._place) g.headlight._place();
+      if (g.headlight._apply) g.headlight._apply();
+    }
+    if (ESCAPE.RQ && ESCAPE.RQ.snapLights) ESCAPE.RQ.snapLights();
+  }
+
+  /** yaw(deg): forward()=( -sin(yaw), -cos(yaw) ) なので dr=-1(北)→0 / dr=+1(南)→180 /
+   *  dc=-1(西)→90 / dc=+1(東)→270（js/maps/area2.js のギミックの向きと同じ換算）。 */
+  function a2YawTo(dc, dr) {
+    if (dr === -1) return 0;
+    if (dr === 1) return 180;
+    if (dc === -1) return 90;
+    return 270;
+  }
+
+  /** マス中心から次のマス中心まで、実入力（moveY=前進）で歩かせる。
+   *  onModal(memoId) が渡された場合、途中で開いたメモを即座に閉じて歩行を続ける。
+   *  各マスの到達後にそのマス中心へ軽く寄せる（隅を曲がる際の僅かなズレが積算し、
+   *  何十マスも先で壁に張り付いて動けなくなる事故を防ぐ。見た目は「そのマスへ歩いて
+   *  入った」のままで、通過した実マス自体は変えない）。
+   *  戻り値: 実際に開いたメモ id の配列（順番どおり）。 */
+  function a2WalkPath(g, path, onModal) {
+    g.input.moveX = 0; g.input.moveY = 0;
+    var opened = [];
+    function checkModal() {
+      if (g.progress && g.progress.modal === 'memo') {
+        var id = g.progress.memoId;
+        opened.push(id);
+        if (onModal) onModal(id);
+        g.progress.onCloseTap();
+      }
+    }
+    for (var i = 1; i < path.length; i++) {
+      var cur = path[i - 1], nxt = path[i];
+      var dc = nxt.col - cur.col, dr = nxt.row - cur.row;
+      g.player.yaw = a2YawTo(dc, dr) * Math.PI / 180;
+      g.input.moveX = 0; g.input.moveY = 1;
+      var guard = 0;
+      while (guard < 90 && !(g.player.col() === nxt.col && g.player.row() === nxt.row)) {
+        global.__pump(1);
+        guard++;
+        checkModal();
+      }
+      var c = g.map.cellCenter(nxt.col, nxt.row);
+      g.player.x = c.x; g.player.z = c.z;
+      global.__pump(1);
+      checkModal();
+    }
+    g.input.moveX = 0; g.input.moveY = 0;
+    return opened;
+  }
+
+  /* ---------------- 1) 輝度ゲート3視点 ---------------- */
+  function testA2RunLuma(t, g) {
+    var util = ESCAPE.__testUtil;
+    if (!t.ok(!!util && typeof util.lumaGate === 'function',
+      'P5 段階2 輝度ゲート: lumaGate helper が js/test.js から共有されている')) return;
+    var sp = g.map.meta.spawn;
+    var cams = [
+      { col: sp.col, row: sp.row, yawDeg: sp.yawDeg, light: false, name: 'スタート地点(spawn)' },
+      { col: 39, row: 16, yawDeg: 180, light: false, name: '幹線の合流槽(39,16)' },
+      { col: 21, row: 51, yawDeg: 0, light: true, name: '旧坑の暗部（ハンドル付近・ライト点灯）' }
+    ];
+    for (var i = 0; i < cams.length; i++) {
+      a2PlaceCam(g, cams[i]);
+      global.__pump(3);
+      var q = util.lumaGate(g);
+      t.ok(q.dark >= 35 && q.dark <= 65,
+        'P5 段階2 輝度ゲート(' + cams[i].name + '): 暗部35〜65%', q.dark.toFixed(1) + '%');
+      t.ok(q.mid >= 20,
+        'P5 段階2 輝度ゲート(' + cams[i].name + '): 中間調20%以上', q.mid.toFixed(1) + '%');
+      t.ok(q.hot < 3,
+        'P5 段階2 輝度ゲート(' + cams[i].name + '): 白飛び3%未満', q.hot.toFixed(2) + '%');
+    }
+    if (g.rope && g.rope.group) g.rope.group.visible = true;
+    if (g.headlight) g.headlight.reset();
+  }
+
+  /* ---------------- 2) 通し（ハンドル→操作盤→水門→到達パッド→クリア仮画面） ---------------- */
+  function testA2RunPlaythrough(t, g) {
+    g.reset();
+    var pr = g.progress, U = ESCAPE.PROGRESS_UI_TEXT, O = ESCAPE.PROGRESS_OBJECTIVE;
+
+    global.__test._place(14, 59, 270);
+    global.__pump(60);
+    t.ok(pr.dom.prompt.textContent === U.safe,
+      'P5 段階2 通し: ハンドル前のプロンプトが「' + U.safe + '」', pr.dom.prompt.textContent);
+    a2PressInteract();
+    t.ok(pr.gimmick.key === true, 'P5 段階2 通し: KeyE でハンドルを取得');
+    t.ok(pr.dom.objective.textContent === O.haveKey,
+      'P5 段階2 通し: 目的表示が「' + O.haveKey + '」', pr.dom.objective.textContent);
+    /* 「ハンドルを手に入れた」の応答表示（1.9秒）が残ったままだと次のプロンプト判定を
+       上書きしてしまう（#prompt は _flashT>0 の間はそちらを優先する仕様）ので、
+       js/test.js の既存テストと同じ流儀で明示的に消してから次へ進む。 */
+    pr._flashT = 0; pr._flashMsg = '';
+
+    global.__test._place(68, 70, 90);
+    global.__pump(3);
+    t.ok(pr.dom.prompt.textContent === U.bulkheadUnlock,
+      'P5 段階2 通し: 操作盤前のプロンプトが「' + U.bulkheadUnlock + '」', pr.dom.prompt.textContent);
+    a2PressInteract();
+    t.ok(pr.gimmick.doorOpen === true, 'P5 段階2 通し: KeyE で水門を開放');
+    t.ok(pr.dom.objective.textContent === O.doorOpen,
+      'P5 段階2 通し: 目的表示が「' + O.doorOpen + '」', pr.dom.objective.textContent);
+
+    global.__test._place(68, 70, 270);
+    global.__pump(2);
+    a2SendKey('keydown', 'KeyW');
+    var frames = 0, guard = 500;
+    while (frames < guard && !pr.cleared) { global.__pump(1); frames++; }
+    a2SendKey('keyup', 'KeyW');
+    t.ok(pr.cleared === true, 'P5 段階2 通し: 到達パッド(76,70)へ歩いてクリア', frames + 'フレーム');
+    t.ok(pr.clearedBy === 'main', 'P5 段階2 通し: 正規ルートとして記録される', pr.clearedBy);
+
+    var eo = document.getElementById('ending-overlay');
+    t.ok(a2Visible(eo), 'P5 段階2 通し: クリア画面が可視（computed style）');
+    var et = document.getElementById('ending-title'), eb = document.getElementById('ending-btn');
+    t.ok(!!et && et.textContent === '深部へ', 'P5 段階2 通し: 見出しが「深部へ」', et && et.textContent);
+    t.ok(!!eb && eb.textContent === 'タイトルへ', 'P5 段階2 通し: ボタンが「タイトルへ」', eb && eb.textContent);
+  }
+
+  /* ---------------- 3) 水路の速度 x0.75・走行不可 ---------------- */
+  function testA2RunWater(t, g) {
+    g.reset();
+    function measure(col, row, useShift) {
+      global.__test._place(col, row, 270);
+      g.player.y = g.map.floorYAt(g.player.x, g.player.z);
+      global.__pump(2);
+      var x0 = g.player.x, z0 = g.player.z;
+      if (useShift) a2SendKey('keydown', 'ShiftLeft');
+      a2SendKey('keydown', 'KeyW');
+      global.__pump(60);
+      a2SendKey('keyup', 'KeyW');
+      if (useShift) a2SendKey('keyup', 'ShiftLeft');
+      global.__pump(1);
+      return Math.hypot(g.player.x - x0, g.player.z - z0);
+    }
+    var dry = measure(1, 12, false);
+    var wetWalk = measure(1, 13, false);
+    var wetRun = measure(1, 13, true);
+    var mul = ESCAPE.Player.WATER_SPEED_MUL;
+    var r1 = wetWalk / dry, r2 = wetRun / dry;
+    t.ok(dry > 0, 'P5 段階2 水路: 乾いた歩廊(1,12)の実測距離が0でない', dry.toFixed(3) + 'm');
+    t.ok(r1 >= mul * 0.95 && r1 <= mul * 1.05,
+      'P5 段階2 水路: 水路(1,13)の実移動が乾いた歩廊の' + mul + '倍(±5%)', r1.toFixed(3));
+    t.ok(r2 >= mul * 0.95 && r2 <= mul * 1.05,
+      'P5 段階2 水路: Shift併用でも' + mul + '倍のまま（走れない）', r2.toFixed(3));
+    g.input.reset();
+  }
+
+  /* ---------------- 4) 敵0体 ---------------- */
+  function testA2RunEnemyZero(t, g) {
+    g.reset();
+    t.ok(g.ai === null, 'P5 段階2 敵0: game.ai が null', g.ai);
+    t.ok(!!g.ais && g.ais.list.length === 0, 'P5 段階2 敵0: AIリストが空',
+      g.ais ? g.ais.list.length : 'ais無し');
+
+    var au = ESCAPE.audio, errBefore = au ? au.errors : 0, threw = null;
+    try { global.__pump(120); } catch (e) { threw = e; }
+    t.ok(threw === null, 'P5 段階2 敵0: 敵なしで120フレーム回してもゲームループが例外を出さない',
+      threw && (threw.message || String(threw)));
+    t.ok(!au || au.errors === errBefore, 'P5 段階2 敵0: 音響系の例外も増えない', au ? au.errors : 0);
+
+    var threw2 = null;
+    if (g.stealth && typeof g.stealth.capture === 'function') {
+      try { g.stealth.capture(g.ai); } catch (e2) { threw2 = e2; }
+    }
+    t.ok(threw2 === null, 'P5 段階2 敵0: 捕獲処理を直接呼んでも例外にならない（体が居ない）',
+      threw2 && (threw2.message || String(threw2)));
+    g.reset();
+    t.ok(g.stealth.captures === 0 && g.stealth.jail.phase === 'none',
+      'P5 段階2 敵0: 直接呼び出し後も reset で製品初期状態に戻る');
+  }
+
+  /* ---------------- 5) 日誌1・2の発火地点 ---------------- */
+  function testA2RunDiaries(t, g) {
+    g.reset();
+    var pr = g.progress, wasAuto = pr.diaryAuto;
+    pr.diaryAuto = true;
+
+    var map = g.map, sp = map.meta.spawn, target = { col: 50, row: 38 };
+    var d = bfs(map, sp.col, sp.row);
+    if (!t.ok(d[target.row * map.width + target.col] >= 0,
+      'P5 段階2 日誌: spawnから日誌2の地点(50,38)へ到達できる')) {
+      pr.diaryAuto = wasAuto; g.reset(); return;
+    }
+    var idxPath = pathBack(map, d, target.col, target.row);
+    var path = [];
+    for (var i = 0; i < idxPath.length; i++) {
+      var k = idxPath[i], c = k % map.width, r = (k - c) / map.width;
+      path.push({ col: c, row: r });
+    }
+
+    var diary1Seen = false, diary2Seen = false, unexpected = [];
+    a2WalkPath(g, path, function (id) {
+      if (id === 'a2_diary1') {
+        diary1Seen = true;
+        var mt1 = document.getElementById('memo-title');
+        t.ok(!!mt1 && mt1.textContent === '作業員の日誌', 'P5 段階2 日誌1: 表示タイトルが正文',
+          mt1 && mt1.textContent);
+        var b1 = ((document.getElementById('memo-body') || {}).textContent || '').split('\n')[0];
+        t.ok(b1 === '梯子を降りた。上の隔壁は、もう開かない。', 'P5 段階2 日誌1: 本文1行目が正文', b1);
+      } else if (id === 'a2_diary2') {
+        diary2Seen = true;
+        var mt2 = document.getElementById('memo-title');
+        t.ok(!!mt2 && mt2.textContent === '作業員の日誌', 'P5 段階2 日誌2: 表示タイトルが正文',
+          mt2 && mt2.textContent);
+        var b2 = ((document.getElementById('memo-body') || {}).textContent || '').split('\n')[0];
+        t.ok(b2 === 'ポンプ室に降りる。ここが一番低い。', 'P5 段階2 日誌2: 本文1行目が正文', b2);
+      } else {
+        unexpected.push(id);
+      }
+    });
+    t.ok(diary1Seen, 'P5 段階2 日誌1: スタート区画を出た瞬間に自動表示された（経路上で）');
+    t.ok(diary2Seen, 'P5 段階2 日誌2: (50,38) 到達で自動表示された');
+    t.ok(unexpected.length === 0, 'P5 段階2 日誌: 想定外のメモは開かなかった', unexpected.join(','));
+
+    /* 再訪では開かない（各1回だけ）: 短い区間だけ歩き直して確かめる */
+    var reopened1 = 0;
+    a2WalkPath(g, [{ col: 9, row: 9 }, { col: 9, row: 10 }, { col: 9, row: 11 }],
+      function () { reopened1++; });
+    t.ok(reopened1 === 0, 'P5 段階2 日誌1: 部屋を出直しても再表示されない', reopened1);
+
+    var prev = path[path.length - 2];
+    var reopened2 = 0;
+    a2WalkPath(g, [prev, target], function () { reopened2++; });
+    t.ok(reopened2 === 0, 'P5 段階2 日誌2: 同じマスに再度入っても再表示されない', reopened2);
+
+    pr.diaryAuto = wasAuto;
+    g.reset();
+  }
+
+  /* ---------------- 本体 ---------------- */
+  function runArea2(opts) {
+    var t = new A2Runner();
+    var g = ESCAPE.game;
+    if (!t.ok(!!g, 'P5 段階2: ゲームが初期化されている')) {
+      return global.Promise ? global.Promise.resolve(a2Summarize(t)) : a2Summarize(t);
+    }
+    if (g.mapId !== 'area2') {
+      t.ok(false, 'runArea2 は ?area=area2 のページで実行せよ（現在: ' + g.mapId + '）');
+      return global.Promise ? global.Promise.resolve(a2Summarize(t)) : a2Summarize(t);
+    }
+
+    /* 実行前の localStorage 全キーを控える（契約: 実行後はキー集合も値も元どおり） */
+    var lsBefore = Object.create(null);
+    try {
+      for (var i = 0; i < global.localStorage.length; i++) {
+        var k = global.localStorage.key(i);
+        lsBefore[k] = global.localStorage.getItem(k);
+      }
+    } catch (e0) { /* localStorage 無効環境は対象外 */ }
+    var areaBefore = ESCAPE.currentArea ? ESCAPE.currentArea() : g.mapId;
+
+    var TITLE = ESCAPE.Title, WAKE = ESCAPE.Wake;
+    if (TITLE && TITLE.skip) TITLE.skip();
+    if (WAKE && WAKE.skip) WAKE.skip();
+    var au = ESCAPE.audio;
+    var audioWasTest = au ? au.testMode : false;
+    if (au) { au.testMode = true; au.panic(); }
+
+    try {
+      testA2RunLuma(t, g);
+      testA2RunPlaythrough(t, g);
+      testA2RunWater(t, g);
+      testA2RunEnemyZero(t, g);
+      testA2RunDiaries(t, g);
+    } catch (err) {
+      t.ok(false, 'runArea2 実行中に例外', err && (err.message || String(err)));
+    }
+
+    /* ---------------- 後始末: 製品初期状態へ完全復帰 ---------------- */
+    g.reset();
+    if (au) au.testMode = audioWasTest;
+    if (TITLE && TITLE.restore) TITLE.restore();
+
+    try {
+      var cur = Object.create(null), kk;
+      for (i = 0; i < global.localStorage.length; i++) cur[global.localStorage.key(i)] = true;
+      for (kk in cur) if (!(kk in lsBefore)) global.localStorage.removeItem(kk);
+      for (kk in lsBefore) global.localStorage.setItem(kk, lsBefore[kk]);
+    } catch (e1) { /* 無視 */ }
+
+    t.ok((ESCAPE.currentArea ? ESCAPE.currentArea() : g.mapId) === areaBefore,
+      'P5 段階2 復帰: escape.area が実行前のまま', areaBefore);
+    t.ok(g.progress ? g.progress.modal === null : true, 'P5 段階2 復帰: モーダルが閉じている');
+    var sp2 = g.map.meta.spawn;
+    t.ok(g.player.col() === sp2.col && g.player.row() === sp2.row,
+      'P5 段階2 復帰: プレイヤーが spawn にいる',
+      g.player.col() + ',' + g.player.row() + ' vs ' + sp2.col + ',' + sp2.row);
+
+    return global.Promise ? global.Promise.resolve(a2Summarize(t)) : a2Summarize(t);
+  }
+
+  ESCAPE.__runArea2 = runArea2;
 })(window);
