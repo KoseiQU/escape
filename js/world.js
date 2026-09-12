@@ -141,6 +141,13 @@
   function normZoneStyle(z, s) {
     var base = {
       ceil: 'ceil',
+      ceilTint: null,     /* 天井の色味（無ければ壁と同じ）。契約 P5c: 天井は壁より暗いこと */
+      floorRep: 1,        /* 床テクスチャの1マスあたり繰り返し数（石を小さく見せる） */
+      vault: 0,           /* 天井の縁を落として筒（ヴォールト）に見せる量 0..1 */
+      minSpacing: 0,      /* 灯具の最小間隔(マス)。0 で従来どおり */
+      sideReach: 1,       /* 低天井（支線）の灯の到達半径の倍率 */
+      sideGain: 1,        /* 低天井（支線）の灯の明るさの倍率 */
+      lampStyle: null,    /* 'cage' ケージ付き / 'bulb' 裸電球 / null 蛍光灯（area1） */
       tex: ZONE_TEX[z] || DEFAULT_TEX,
       tint: ZONE_TINT[z] || DEFAULT_TINT,
       lamp: ZONE_LAMP[z] || LAMP_COLORS[0],
@@ -156,6 +163,13 @@
     }
     return {
       ceil: s.ceil || base.ceil,
+      ceilTint: s.ceilTint || base.ceilTint,
+      floorRep: (s.floorRep === undefined) ? base.floorRep : s.floorRep,
+      vault: (s.vault === undefined) ? base.vault : s.vault,
+      minSpacing: (s.minSpacing === undefined) ? base.minSpacing : s.minSpacing,
+      sideReach: (s.sideReach === undefined) ? base.sideReach : s.sideReach,
+      sideGain: (s.sideGain === undefined) ? base.sideGain : s.sideGain,
+      lampStyle: s.lampStyle || base.lampStyle,
       tex: tex,
       tint: s.tint || base.tint,
       lamp: s.lamp || base.lamp,
@@ -269,6 +283,8 @@
     /* P5c エリア2「下水道」の大面（素材は js/textures.js / js/render_quality.js の P5b-B 製） */
     wallBrick: 1, wallStone: 1, wallConcreteWet: 1,
     floorStoneWet: 1, floorBrick: 1, floorMud: 1,
+    /* 天井は壁と同じ絵でも**別メッシュ**にする（壁より暗いことを数値で検証できるように） */
+    ceilBrick: 1, ceilStone: 1, ceilConcrete: 1,
     /* 水底も大面（壁床と同じ明るさ系統に乗せる）。水面は専用材質なので別扱い */
     waterBed: 1,
     /* 水面は RQ.waterMaterial（法線2層）。bakedLight 属性を持たせるためここに入れる */
@@ -700,7 +716,8 @@
           state = (v < offL) ? 'off' : ((v < fl) ? 'flicker' : 'on');
         }
         /* 区画ごとの色温度（契約 §4「区画ごとの景観差」）。管の劣化で更に個体差をつける */
-        var zl = this._style(this._zoneAt(c, r)).lamp;
+        var st1 = this._style(this._zoneAt(c, r));
+        var zl = st1.lamp;
         var wob = (hash2(c + 5, r + 3) < 0.20) ? -0.08 : ((hash2(c + 91, r + 7) < 0.12) ? 0.07 : 0.00);
         var lampCol = { r: Math.min(1, zl.r * (1 + wob)), g: Math.min(1, zl.g), b: Math.min(1, zl.b * (1 - wob)) };
         var fy = map.cellFloorY(c, r), ch = map.ceilHAt(c, r);
@@ -709,11 +726,27 @@
           col: c, row: r, x: (c + 0.5) * T, z: (r + 0.5) * T,
           fy: fy, ch: ch, y: fy + ch - LIGHT_DROP,
           state: state, color: lampCol,
-          R: LIGHT_R * this._style(this._zoneAt(c, r)).reach,
-          gain: LIGHT_GAIN * this._style(this._zoneAt(c, r)).gain,
+          /* 支線（低天井）は到達も明るさも落とす＝「支線は消灯帯多め」（契約 P5） */
+          R: LIGHT_R * st1.reach * (ch < 3.0 ? st1.sideReach : 1),
+          gain: LIGHT_GAIN * st1.gain * (ch < 3.0 ? st1.sideGain : 1),
           axis: ns ? 'z' : 'x', phase: hash2(c * 3 + 1, r * 7 + 2) * 6.283
         });
       }
+    }
+    /* P5c: 区画ごとの最小間隔で灯具を間引く（幹線 8〜12 マス＝長い暗区間を作る）。
+       走査順に貪欲に残し、既に残した灯から minSpacing マス以内のものは消灯にする。 */
+    var kept = [];
+    for (var mi = 0; mi < list.length; mi++) {
+      var f0 = list[mi];
+      if (f0.state === 'off') continue;
+      var ms = this._style(this._zoneAt(f0.col, f0.row)).minSpacing;
+      if (!ms) continue;
+      var near = false;
+      for (var kj = 0; kj < kept.length && !near; kj++) {
+        var kf = kept[kj];
+        if (Math.abs(kf.col - f0.col) + Math.abs(kf.row - f0.row) < ms) near = true;
+      }
+      if (near) f0.state = 'off'; else kept.push(f0);
     }
     /* 作為的な上書き（最寄りの器具に適用） */
     var ov = (map.meta && map.meta.lightOverrides) || [];
@@ -972,6 +1005,14 @@
     return this.styles[zone] || this.styles.A;
   };
   World.prototype._zoneTex = function (col, row) { return this._style(this._zoneAt(col, row)).tex; };
+  /** 天井の色味。regionTints[id].c ＞ zoneStyles.ceilTint ＞ 壁と同じ（area1 は不変） */
+  World.prototype._ceilTintAt = function (col, row) {
+    var id = this._regionAt(col, row), rt = this.regionTints;
+    if (id && rt[id] && rt[id].c) return rt[id].c;
+    var st = this._style(this._zoneAt(col, row));
+    if (st.ceilTint) return st.ceilTint;
+    return this._tintAt(col, row).w;
+  };
   World.prototype._tintAt = function (col, row) {
     var id = this._regionAt(col, row);
     var rt = this.regionTints;
@@ -1143,6 +1184,30 @@
         return [scratch[0] * tint[0] * a, scratch[1] * tint[1] * a, scratch[2] * tint[2] * a];
       };
     }
+    /** P5c 天井用: floorShader に「壁際で落ちる帯」を掛けてヴォールト（筒）に見せる。
+     *  vault=0（area1 の既定）なら floorShader そのもの＝挙動不変。 */
+    function ceilShader(ownerKey, tint, c, r, vault) {
+      var base = floorShader(ownerKey, tint, [0, -1, 0]);
+      if (!vault) return base;
+      var x0 = c * T, z0 = r * T;
+      /* その方向の隣が実体なら、その境界からの距離で暗くする */
+      var dW = map.isSolid(c - 1, r), dE = map.isSolid(c + 1, r);
+      var dN = map.isSolid(c, r - 1), dS = map.isSolid(c, r + 1);
+      if (!dW && !dE && !dN && !dS) return base;
+      var BAND = 1.15;
+      return function (x, y, z) {
+        var d = 99;
+        if (dW) d = Math.min(d, x - x0);
+        if (dE) d = Math.min(d, x0 + T - x);
+        if (dN) d = Math.min(d, z - z0);
+        if (dS) d = Math.min(d, z0 + T - z);
+        var k = d / BAND; if (k > 1) k = 1; if (k < 0) k = 0;
+        var f = 1 - vault * (1 - k) * (1 - k);
+        var cc2 = base(x, y, z);
+        if (SPLIT.on) { SPLIT.a[0] *= f; SPLIT.a[1] *= f; SPLIT.a[2] *= f; }
+        return [cc2[0] * f, cc2[1] * f, cc2[2] * f];
+      };
+    }
     /** 壁面用（隅と床際・天井際のAOを焼き込む）。fyFn はそのマスの床高さ */
     function wallShader(ownerKey, tint, n, only, fyBase, chLocal) {
       return function (x, y, z) {
@@ -1241,7 +1306,9 @@
 
       var uvF = uvVariant(hash2(c + 41, r + 7));
       var uvC = uvVariant(hash2(c + 71, r + 23));
-      var ct = this._tintAt(c, r).w;
+      var ct = this._ceilTintAt(c, r);
+      var stC = this._style(this._zoneAt(c, r));
+      var fRep = stC.floorRep;
       if (atlas) {
         /* 系統X: 照明はテクセルへ移るので、頂点分割は接地AOのために細かくしなくてよい
          * （＝三角形が減る。床16→4・天井9→4 クアッド） */
@@ -1253,7 +1320,7 @@
           lmEnd();
           lmJob(rF, [x0, 0, z1], [T, 0, 0], [0, 0, -T], defFloor, shF);
         }
-        var shC = floorShader(key, ct, [0, -1, 0]);
+        var shC = ceilShader(key, ct, c, r, stC.vault);
         var dC = defCeil(ch);
         var rC = lmBegin(LMR, LMR);
         B.ceil.gridP([x0, 0, z0], [T, 0, 0], [0, 0, T], XDIV, XDIV, 1, 1,
@@ -1262,11 +1329,11 @@
         lmJob(rC, [x0, 0, z0], [T, 0, 0], [0, 0, T], dC, shC);
       } else {
         if (!noFloor) {
-          B.floor.gridP([x0, 0, z1], [T, 0, 0], [0, 0, -T], FDIV, FDIV, 1, 1,
+          B.floor.gridP([x0, 0, z1], [T, 0, 0], [0, 0, -T], FDIV, FDIV, fRep, fRep,
             floorShader(key, ft, [0, 1, 0]), uvF, defFloor);
         }
         B.ceil.gridP([x0, 0, z0], [T, 0, 0], [0, 0, T], CDIV, CDIV, 1, 1,
-          floorShader(key, ct, [0, -1, 0]), uvC, defCeil(ch));
+          ceilShader(key, ct, c, r, stC.vault), uvC, defCeil(ch));
       }
 
       var ff = noFloor ? -1 : flickerNear(c, r);
@@ -1481,6 +1548,9 @@
       bloodSplatWall: decal('bloodSplat'),
       /* ---- P5c エリア2「下水道」 ---- */
       wallBrick: opaque('wallBrick', null, 'wallBrick'),
+      ceilBrick: opaque('wallBrick', null, 'ceilBrick'),
+      ceilStone: opaque('wallStone', null, 'ceilStone'),
+      ceilConcrete: opaque('wallConcreteWet', null, 'ceilConcrete'),
       wallStone: opaque('wallStone', null, 'wallStone'),
       wallConcreteWet: opaque('wallConcreteWet', null, 'wallConcreteWet'),
       floorStoneWet: opaque('floorStoneWet', null, 'floorStoneWet'),
@@ -1524,7 +1594,7 @@
     /* 描画順（不透明 → デカール）。素材は全チャンクで共有する */
     var order = ['floor', 'floorTile', 'floorWet', 'floorMetal',
       'wallBrick', 'wallStone', 'wallConcreteWet', 'floorStoneWet', 'floorBrick', 'floorMud',
-      'waterBed', 'sewerWater', 'ceil',
+      'waterBed', 'sewerWater', 'ceil', 'ceilBrick', 'ceilStone', 'ceilConcrete',
       'wall', 'wall2', 'wall3', 'wallPaint', 'wallMetal', 'metal', 'dark', 'pipe', 'grate',
       'lamp', 'poster',
       'screen', 'paper', 'sheet', 'fluid', 'board', 'monitors', 'bigboard', 'sign', 'zonesign',
@@ -2363,33 +2433,51 @@
       }
       /* glow は什器・造作そのものが発光体なので器具は描かない */
       if (f.kind === 'glow') continue;
-      var sewerLamp = (map.meta && map.meta.lampKit === 'sewer');
-      var lw = sewerLamp ? 0.46 : 1.30, ld = sewerLamp ? 0.46 : 0.30;
-      var sx = (f.axis === 'z') ? ld : lw, sz = (f.axis === 'z') ? lw : ld;
+      var lampStyle = this._style(this._zoneAt(f.col, f.row)).lampStyle;
       var topY = f.fy + f.ch;
-      /* 器具本体 */
-      B.dark.box(f.x, topY - 0.06, f.z, sx + 0.06, 0.12, sz + 0.06, 1.2, sh);
-      if (sewerLamp) {
-        /* P5c: ケージ付きの下水道灯（鋳鉄の笠＋金網）。天井から短い腕で下がる */
-        B.metal.box(f.x, topY - 0.22, f.z, 0.42, 0.24, 0.42, 1.4, sh);
-      }
-      /* 発光面（下向き） */
-      var lo, lu, lv;
-      if (f.axis === 'z') { lo = [f.x - ld / 2, f.y, f.z - lw / 2]; lu = [ld, 0, 0]; lv = [0, 0, lw]; }
-      else { lo = [f.x - lw / 2, f.y, f.z - ld / 2]; lu = [lw, 0, 0]; lv = [0, 0, ld]; }
       var lit = LAMP_EMIT * ((f.state === 'on') ? 1.0 : ((f.state === 'flicker') ? FLICKER_BAKE : 0.06));
       var lampCol = [f.color.r * lit, f.color.g * lit, f.color.b * lit];
-      B.lamp.grid(lo, lu, lv, 1, 1, 1, 1, function () { return lampCol; });
-      if (sewerLamp && f.state !== 'off') {
-        /* 金網（点いている器具だけ＝消灯帯の三角形を増やさない） */
-        var shCage = shader(key, [0.46, 0.46, 0.44]);
-        for (var cg = 0; cg < 3; cg++) {
-          var cgo = (cg - 1) * 0.16;
-          B.dark.box(f.x + cgo, f.y - 0.05, f.z, 0.028, 0.10, 0.44, 2, shCage);
+      var lo, lu, lv;
+      if (lampStyle) {
+        /* P5c: 下水道の灯具。鋳鉄の笠は**暗く**（白い蛍光灯箱に見せない）、
+           発光するのはレンズだけ。'cage' ケージ付き / 'bulb' 裸電球（旧坑）。 */
+        var shIron = shader(key, [0.30, 0.29, 0.28]);
+        var shCage = shader(key, [0.22, 0.22, 0.21]);
+        if (lampStyle === 'bulb') {
+          /* 裸電球: 天井からコード1本で下がる。ソケットは暗く、球だけ光る */
+          B.dark.tube([f.x, topY - 0.02, f.z], [f.x, f.y + 0.12, f.z], 0.018, 4, shCage);
+          B.dark.box(f.x, f.y + 0.10, f.z, 0.09, 0.12, 0.09, 2, shIron);
+          B.lamp.box(f.x, f.y - 0.02, f.z, 0.15, 0.17, 0.15, 2, function () { return lampCol; });
+        } else {
+          /* ケージ付き壁灯（bulkhead）: 背板 → 鋳鉄の笠 → レンズ → 金網3本 */
+          B.dark.box(f.x, topY - 0.07, f.z, 0.40, 0.14, 0.40, 1.6, shIron);
+          B.dark.box(f.x, topY - 0.20, f.z, 0.46, 0.16, 0.46, 1.6, shIron);
+          lo = [f.x - 0.16, f.y + 0.02, f.z - 0.16]; lu = [0.32, 0, 0]; lv = [0, 0, 0.32];
+          B.lamp.grid(lo, lu, lv, 1, 1, 1, 1, function () { return lampCol; });
+          /* 笠の側面（4枚の暗い板）でレンズを囲む＝「裸の発光面」に見せない */
+          for (var sv2 = 0; sv2 < 2; sv2++) {
+            var so2 = (sv2 ? 1 : -1) * 0.20;
+            B.dark.box(f.x + so2, f.y + 0.06, f.z, 0.05, 0.16, 0.44, 2, shIron);
+            B.dark.box(f.x, f.y + 0.06, f.z + so2, 0.44, 0.16, 0.05, 2, shIron);
+          }
+          if (f.state !== 'off') {
+            for (var cg = 0; cg < 3; cg++) {
+              var cgo = (cg - 1) * 0.13;
+              B.dark.box(f.x + cgo, f.y - 0.02, f.z, 0.026, 0.08, 0.36, 2, shCage);
+            }
+          }
         }
-        B.dark.box(f.x, f.y - 0.10, f.z, 0.44, 0.028, 0.44, 2, shCage);
+      } else {
+        var lw = 1.30, ld = 0.30;
+        var sx = (f.axis === 'z') ? ld : lw, sz = (f.axis === 'z') ? lw : ld;
+        /* 器具本体 */
+        B.dark.box(f.x, topY - 0.06, f.z, sx + 0.06, 0.12, sz + 0.06, 1.2, sh);
+        /* 発光面（下向き） */
+        if (f.axis === 'z') { lo = [f.x - ld / 2, f.y, f.z - lw / 2]; lu = [ld, 0, 0]; lv = [0, 0, lw]; }
+        else { lo = [f.x - lw / 2, f.y, f.z - ld / 2]; lu = [lw, 0, 0]; lv = [0, 0, ld]; }
+        B.lamp.grid(lo, lu, lv, 1, 1, 1, 1, function () { return lampCol; });
       }
-      if (f.state === 'flicker' && flickBuilders[f.fgroup]) {
+      if (!lampStyle && f.state === 'flicker' && flickBuilders[f.fgroup]) {
         var addCol = [f.color.r * LAMP_EMIT * (1 - FLICKER_BAKE), f.color.g * LAMP_EMIT * (1 - FLICKER_BAKE),
           f.color.b * LAMP_EMIT * (1 - FLICKER_BAKE)];
         flickBuilders[f.fgroup].lamp.grid([lo[0], lo[1] - 0.004, lo[2]], lu, lv, 1, 1, 1, 1,
@@ -2412,7 +2500,19 @@
       var chL = map.ceilHAt(c, r);
       var py = chL - 0.38, py2 = chL - 0.34;
       setYBias(map.cellFloorY(c, r));
-      if (ns) {
+      /* P5c: 下水道の支線は「金属のケーブルトレイ」でなく錆びた細い導管にする
+         （area1 の平板トレイは近距離で銀色の大きな板に見えるため） */
+      var sewerPipe = (map.meta && map.meta.ceilPipes === 'sewer');
+      if (sewerPipe) {
+        var shR2 = shader(key2, [0.74, 0.62, 0.50]);
+        if (ns) {
+          B.pipe.tube([cx - 0.66, py, z0], [cx - 0.66, py, z0 + T], 0.075, 5, shR2);
+          if (hash2(c, r + 17) < 0.34) B.pipe.tube([cx + 0.68, py2, z0], [cx + 0.68, py2, z0 + T], 0.045, 4, shR2);
+        } else {
+          B.pipe.tube([x0, py, cz - 0.66], [x0 + T, py, cz - 0.66], 0.075, 5, shR2);
+          if (hash2(c + 17, r) < 0.34) B.pipe.tube([x0, py2, cz + 0.68], [x0 + T, py2, cz + 0.68], 0.045, 4, shR2);
+        }
+      } else if (ns) {
         B.dark.tube([cx - 0.62, py, z0], [cx - 0.62, py, z0 + T], 0.085, 4, sh2);
         if (hash2(c, r + 17) < 0.30) B.dark.box(cx + 0.66, py2, cz, 0.34, 0.06, T, 1.2, sh2);
       } else {
@@ -3650,6 +3750,30 @@
         B.wall.gridP([q.o[0] + q.u[0], top, q.o[2] + q.u[2]], [-q.u[0], 0, -q.u[2]],
           [q.n[0] * cw, 0, q.n[2] * cw],
           [0, 1], [0, 1], 1, 1, SH.planeShader(key, [wt[0] * 1.10, wt[1] * 1.12, wt[2] * 1.12], [0, 1, 0]));
+        /* 流入口（契約 P5c⑤「壁の下の暗い開口＋滴り」）。笠石の外面に暗い口を彫り、
+           そこから槽へ細い水の筋が落ちる＝「水が集まる槽」に見せる */
+        if (bs.inlet && ((c * 7 + r * 5 + d) % 2 === 0)) {
+          var mw2 = T * 0.42, mh2 = (top - fy) * 0.62;
+          var mo = [q.o[0] + q.u[0] * 0.5 - q.u[0] * 0.5 * (mw2 / T) - q.n[0] * 0.004,
+            fy + 0.05, q.o[2] + q.u[2] * 0.5 - q.u[2] * 0.5 * (mw2 / T) - q.n[2] * 0.004];
+          var mu = [q.u[0] * (mw2 / T), 0, q.u[2] * (mw2 / T)];
+          /* 暗い口（外から見える） */
+          B.dark.gridP([mo[0] + mu[0], mo[1], mo[2] + mu[2]], [-mu[0], 0, -mu[2]], [0, mh2, 0],
+            [0, 1], [0, 1], 1, 1, SH.planeShader(key, [0.10, 0.11, 0.11], [-q.n[0], 0, -q.n[2]]));
+          /* 落ちる水の筋（加算・下ほど薄い） */
+          var wx0 = q.o[0] + q.u[0] * 0.5 + q.n[0] * 0.03;
+          var wz0 = q.o[2] + q.u[2] * 0.5 + q.n[2] * 0.03;
+          B.beam.gridP([wx0 - mu[0] * 0.28, sy, wz0 - mu[2] * 0.28],
+            [mu[0] * 0.56, 0, mu[2] * 0.56], [0, fy + mh2 * 0.55 - sy, 0], [0, 1], [0, 0.5, 1], 1, 1,
+            (function (y0b, y1b) {
+              return function (x, y) {
+                var a = (y - y0b) / (y1b - y0b);
+                if (a < 0) a = 0; if (a > 1) a = 1;
+                var k = 0.10 + 0.34 * a;
+                return [0.52 * k, 0.66 * k, 0.60 * k];
+              };
+            })(sy, fy + mh2 * 0.55));
+        }
       }
     }
     setYBias(0);
@@ -3735,14 +3859,14 @@
    * 背の高い什器は天井(3.0m)を突き抜けないよう基壇を低くする。 */
   var PLINTH_H = { specTank: 0.14, cageStack: 0.20, machine: 0.20, tank: 0.20, incubator: 0.24,
     /* P5c: 巨大ポンプは胴が見えないと何の部屋か分からない＝基壇を低くする */
-    sewerPump: 0.12 };
+    sewerPump: 0.12, pumpPipe: 0.10 };
   var PLINTH_DEFAULT = 0.30;
   /** 通路側に見せる仕切り板の高さ(m)。腰高＝跨げないと一目で分かる高さ。
    *  背の低い什器（寝台・机・端末台）は什器そのものが隠れないよう少し低くする。 */
   var BAY_H = 1.16;
   var BAY_LOW = { gurney: 0.90, desk: 0.90, console: 0.90, crate: 0.90, benchIsland: 0.90, opTable: 0.90,
     /* P5c: ポンプの胴（高さ 1.3m）を隠さない高さ */
-    sewerPump: 0.58 };
+    sewerPump: 0.52, pumpPipe: 0.52 };
 
   /** 什器マスの基壇と仕切り板。什器本体より先に積む（本体は基壇の上へ乗る） */
   World.prototype._furnBase = function (B, f, shader, ph) {
@@ -3865,22 +3989,40 @@
         }
         break;
       }
+      case 'pumpPipe': {
+        /* P5c: 吸込管の立ち上がり（太い縦管3本＋横継手＋バルブ） */
+        var shP = shader(key, [0.72, 0.62, 0.52]);
+        B.dark.box(cx, 0.10, cz, 1.30, 0.20, 1.30, 1.2, shP);
+        for (var pp = 0; pp < 3; pp++) {
+          var pox = (pp - 1) * 0.42;
+          B.pipe.tube([cx + pox, 0.18, cz - 0.12], [cx + pox, 3.20, cz - 0.12], 0.17, 8, shP);
+          B.pipe.box(cx + pox, 1.28, cz - 0.12, 0.42, 0.14, 0.42, 1.6, shP);
+        }
+        B.pipe.tube([cx - 0.62, 2.42, cz - 0.12], [cx + 0.62, 2.42, cz - 0.12], 0.13, 7, shP);
+        B.metal.box(cx + 0.42, 1.86, cz + 0.16, 0.30, 0.30, 0.30, 1.8, shader(key, [0.90, 0.60, 0.30]));
+        break;
+      }
       case 'sewerPump': {
-        /* P5c: 巨大ポンプ（渦巻ポンプの胴＋電動機＋吐出管）。什器マスの中に収める */
+        /* P5c: 巨大ポンプ（渦巻ポンプの胴＋電動機＋吐出管）。什器マスの中に収める。
+           橙の警告灯の下で木箱に見えないよう、鋼の冷たい色味で塗る。 */
+        var shSteel = shader(key, [0.66, 0.72, 0.80]);
+        var shSteelD = shader(key, [0.40, 0.44, 0.50]);
         var pw = L(1.66, 1.10), pd = L(1.10, 1.66);
-        B.metal.box(cx, 0.62, cz, pw, 1.14, pd, 0.7, sh);
-        B.dark.box(cx, 0.08, cz, pw + 0.10, 0.16, pd + 0.10, 1.2, shD);
+        B.metal.box(cx, 0.62, cz, pw, 1.14, pd, 0.7, shSteel);
+        B.dark.box(cx, 0.08, cz, pw + 0.10, 0.16, pd + 0.10, 1.2, shSteelD);
         /* 渦巻の胴（横に寝た太い筒） */
         var pa = ew ? [1, 0, 0] : [0, 0, 1];
         B.metal.tube([cx - pa[0] * 0.52, 1.32, cz - pa[2] * 0.52],
-          [cx + pa[0] * 0.52, 1.32, cz + pa[2] * 0.52], 0.52, 10, sh);
+          [cx + pa[0] * 0.52, 1.32, cz + pa[2] * 0.52], 0.52, 12, shSteel);
         /* 電動機 */
-        B.dark.box(cx + (ew ? 0 : 0.42), 1.98, cz + (ew ? 0.42 : 0), 0.62, 0.62, 0.62, 1.2, shD);
+        B.dark.box(cx + (ew ? 0 : 0.42), 1.98, cz + (ew ? 0.42 : 0), 0.62, 0.62, 0.62, 1.2, shSteelD);
         /* 吐出管（天井へ抜ける） */
         B.metal.tube([cx - pa[0] * 0.46, 1.84, cz - pa[2] * 0.46],
-          [cx - pa[0] * 0.46, 2.90, cz - pa[2] * 0.46], 0.21, 8, sh);
-        /* 銘板と点検窓 */
-        B.screen.box(cx + (ew ? 0.30 : 0), 1.02, cz + (ew ? 0 : 0.30), 0.30, 0.20, 0.30, 2, sh);
+          [cx - pa[0] * 0.46, 3.20, cz - pa[2] * 0.46], 0.21, 8, shSteel);
+        /* 橙の運転表示灯（機関区画の記号）と銘板 */
+        B.lamp.box(cx + (ew ? 0 : 0.34), 2.34, cz + (ew ? 0.34 : 0), 0.14, 0.14, 0.14, 2,
+          flat([1.20, 0.52, 0.14]));
+        B.screen.box(cx + (ew ? 0.30 : 0), 1.02, cz + (ew ? 0 : 0.30), 0.30, 0.20, 0.30, 2, shSteel);
         break;
       }
       case 'machine': {

@@ -30,47 +30,59 @@
    * 区画A〜Fの景観（world.js は map.meta.zoneStyles があればこれを使う）
    * ========================================================== */
   var zoneStyles = {
-    /* A 流入区画 — 湿った古煉瓦。上の格子から落ちる青白い光だけが頼り */
+    /* A 流入区画 — 湿った暗い古煉瓦。上の格子から落ちる青白い光だけが頼り */
     A: {
-      floor: 'floorBrick', walls: ['wallBrick', 'wallBrick', 'wallStone'], ceil: 'wallBrick',
-      tint: { f: [1.02, 0.90, 0.76], w: [0.92, 0.80, 0.66] },
-      lamp: { r: 0.76, g: 0.90, b: 1.00 },
-      flicker: 0.04, off: -0.14, gain: 2.60, reach: 1.90
+      floor: 'floorBrick', walls: ['wallBrick', 'wallBrick', 'wallStone'], ceil: 'ceilBrick',
+      tint: { f: [0.92, 0.80, 0.65], w: [0.70, 0.60, 0.48] },
+      ceilTint: [0.082, 0.070, 0.058], vault: 0.58, floorRep: 1,
+      lamp: { r: 0.74, g: 0.88, b: 1.00 }, lampStyle: 'cage',
+      flicker: 0.04, off: -0.14, gain: 4.60, reach: 2.55,
+      minSpacing: 3, sideReach: 0.62, sideGain: 0.55
     },
-    /* B 幹線区画 — 暗灰の切石ヴォールト。ナトリウム橙の灯が遠く離れて並ぶ */
+    /* B 幹線区画 — 暗灰の切石ヴォールト。ナトリウム橙の灯が 8〜12 マス間隔で並ぶ */
     B: {
-      floor: 'floorStoneWet', walls: ['wallStone', 'wallStone', 'wallConcreteWet'], ceil: 'wallStone',
-      tint: { f: [0.60, 0.62, 0.58], w: [0.52, 0.56, 0.58] },
-      lamp: { r: 1.00, g: 0.64, b: 0.26 },
-      flicker: 0.04, off: 0.08, gain: 3.60, reach: 2.30
+      floor: 'floorStoneWet', walls: ['wallStone', 'wallStone', 'wallConcreteWet'], ceil: 'ceilStone',
+      tint: { f: [0.74, 0.76, 0.70], w: [0.42, 0.45, 0.47] },
+      ceilTint: [0.068, 0.073, 0.078], vault: 0.66, floorRep: 1,
+      lamp: { r: 1.00, g: 0.62, b: 0.22 }, lampStyle: 'cage',
+      flicker: 0.04, off: -0.04, gain: 6.80, reach: 3.30,
+      minSpacing: 9, sideReach: 0.62, sideGain: 0.55
     },
     /* C 沈殿区画 — 打放しコンクリ。槽の緑の発光が下から壁を舐める */
     C: {
-      floor: 'floorStoneWet', walls: ['wallConcreteWet', 'wallConcreteWet', 'wallStone'], ceil: 'wallConcreteWet',
-      tint: { f: [0.58, 0.68, 0.62], w: [0.70, 0.80, 0.76] },
-      lamp: { r: 0.60, g: 1.00, b: 0.74 },
-      flicker: 0.08, off: -0.18, gain: 2.50, reach: 1.80
+      floor: 'floorStoneWet', walls: ['wallConcreteWet', 'wallConcreteWet', 'wallStone'], ceil: 'ceilConcrete',
+      tint: { f: [0.70, 0.80, 0.74], w: [0.52, 0.60, 0.57] },
+      ceilTint: [0.080, 0.093, 0.087], vault: 0.60, floorRep: 1,
+      lamp: { r: 0.70, g: 1.00, b: 0.80 }, lampStyle: 'cage',
+      flicker: 0.08, off: -0.20, gain: 3.80, reach: 2.50,
+      minSpacing: 5, sideReach: 0.62, sideGain: 0.55
     },
     /* D 機関区画 — 鋼とコンクリ。油膜の浮いた浸水床に橙の警告灯 */
     D: {
-      floor: 'floorStoneWet', walls: ['wallConcreteWet', 'wallStone', 'wallConcreteWet'], ceil: 'wallConcreteWet',
-      tint: { f: [0.58, 0.58, 0.56], w: [0.68, 0.68, 0.72] },
-      lamp: { r: 1.00, g: 0.54, b: 0.18 },
-      flicker: 0.10, off: -0.16, gain: 2.05, reach: 1.55
+      floor: 'floorStoneWet', walls: ['wallConcreteWet', 'wallStone', 'wallConcreteWet'], ceil: 'ceilConcrete',
+      tint: { f: [0.70, 0.70, 0.68], w: [0.52, 0.52, 0.55] },
+      ceilTint: [0.080, 0.080, 0.087], vault: 0.60, floorRep: 1,
+      lamp: { r: 1.00, g: 0.52, b: 0.16 }, lampStyle: 'cage',
+      flicker: 0.10, off: -0.28, gain: 3.50, reach: 2.30,
+      minSpacing: 5, sideReach: 0.62, sideGain: 0.55
     },
-    /* E 旧坑区画 — 崩れかけた煉瓦と泥。灯りはほぼ点かない（最も暗い） */
+    /* E 旧坑区画 — 崩れかけた暗い煉瓦と泥。灯りはほぼ無く、数個の裸電球だけ */
     E: {
-      floor: 'floorMud', walls: ['wallBrick', 'wallBrick', 'wallBrick'], ceil: 'wallBrick',
-      tint: { f: [0.94, 0.82, 0.66], w: [0.90, 0.78, 0.62] },
-      lamp: { r: 1.00, g: 0.82, b: 0.56 },
-      flicker: 0.06, off: 0.18, gain: 3.60, reach: 1.80
+      floor: 'floorMud', walls: ['wallBrick', 'wallBrick', 'wallBrick'], ceil: 'ceilBrick',
+      tint: { f: [0.86, 0.74, 0.58], w: [0.64, 0.54, 0.42] },
+      ceilTint: [0.084, 0.071, 0.059], vault: 0.58, floorRep: 1,
+      lamp: { r: 1.00, g: 0.80, b: 0.50 }, lampStyle: 'bulb',
+      flicker: 0.06, off: 0.20, gain: 5.60, reach: 2.30,
+      minSpacing: 7, sideReach: 0.62, sideGain: 0.58
     },
-    /* F 水門区画 — 打放しコンクリと鋼。赤い回転灯が回る */
+    /* F 水門区画 — 打放しコンクリと鋼。赤い回転灯＋白い作業灯 */
     F: {
-      floor: 'floorStoneWet', walls: ['wallConcreteWet', 'wallConcreteWet', 'wallStone'], ceil: 'wallConcreteWet',
-      tint: { f: [0.64, 0.63, 0.62], w: [0.76, 0.76, 0.78] },
-      lamp: { r: 1.00, g: 0.78, b: 0.54 },
-      flicker: 0.05, off: -0.26, gain: 2.60, reach: 1.80
+      floor: 'floorStoneWet', walls: ['wallConcreteWet', 'wallConcreteWet', 'wallStone'], ceil: 'ceilConcrete',
+      tint: { f: [0.74, 0.73, 0.72], w: [0.58, 0.58, 0.60] },
+      ceilTint: [0.084, 0.084, 0.089], vault: 0.60, floorRep: 1,
+      lamp: { r: 1.00, g: 0.92, b: 0.84 }, lampStyle: 'cage',
+      flicker: 0.05, off: -0.30, gain: 3.60, reach: 2.30,
+      minSpacing: 5, sideReach: 0.62, sideGain: 0.55
     }
   };
 
@@ -136,9 +148,21 @@
 
   /* 「槽」＝実体マスを掘って水を張る（歩けないまま覗き込める）。
      沈殿槽の中心の隔壁列（col 52 / row 18-24）を沈殿池そのものにする。 */
+  /* 「槽」＝実体マスを掘って水を張る（歩けないまま覗き込める）。
+     契約 追補2①: 合流槽9室の中央 2x2 は集水枡。色味は 9 室で全部変える。 */
   var basins = [
-    { c0: 52, r0: 18, c1: 52, r1: 24, depth: 0.55, rgb: [0.70, 1.45, 0.88] },  /* 沈殿槽（緑に光る） */
-    { c0: 46, r0: 52, c1: 49, r1: 52, depth: 0.50, rgb: [0.50, 0.50, 0.54] }   /* ポンプ室の油溜まり */
+    /* 沈殿槽（緑に光る長い沈殿池） */
+    { c0: 52, r0: 18, c1: 52, r1: 24, depth: 0.55, rgb: [0.70, 1.45, 0.88] },
+    /* 合流槽9室の集水枡（中央 2x2・流入口つき） */
+    { c0: 13, r0: 13, c1: 14, r1: 14, depth: 0.62, inlet: true, rgb: [1.30, 0.96, 0.52] },  /* 北西＝琥珀 */
+    { c0: 39, r0: 13, c1: 40, r1: 14, depth: 0.62, inlet: true, rgb: [1.06, 1.20, 0.56] },  /* 北＝枯草 */
+    { c0: 65, r0: 13, c1: 66, r1: 14, depth: 0.62, inlet: true, rgb: [0.52, 1.30, 0.96] },  /* 北東＝青緑 */
+    { c0: 13, r0: 39, c1: 14, r1: 40, depth: 0.62, inlet: true, rgb: [1.26, 0.72, 0.50] },  /* 西＝赤錆 */
+    { c0: 39, r0: 39, c1: 40, r1: 40, depth: 0.70, inlet: true, rgb: [0.72, 0.88, 1.34] },  /* 中央＝鋼の青 */
+    { c0: 65, r0: 39, c1: 66, r1: 40, depth: 0.62, inlet: true, rgb: [0.46, 1.02, 1.36] },  /* 東＝冷たい青 */
+    { c0: 13, r0: 65, c1: 14, r1: 66, depth: 0.62, inlet: true, rgb: [1.30, 0.58, 0.58] },  /* 南西＝血の赤 */
+    { c0: 39, r0: 65, c1: 40, r1: 66, depth: 0.62, inlet: true, rgb: [1.02, 0.76, 1.34] },  /* 南＝藤 */
+    { c0: 65, r0: 65, c1: 66, r1: 66, depth: 0.62, inlet: true, rgb: [0.80, 1.20, 0.66] }   /* 南東＝苔 */
   ];
 
   /* 床の格子（下に暗い水面）。歩ける床マスの上に置く＝薄物なので通行の邪魔にならない */
@@ -172,16 +196,42 @@
   ];
 
   /* 巨大ポンプ（実体マス＝什器。通路は一切塞がない） */
+  /* 巨大ポンプ（契約 追補2②）。柱列を撤去した 13x13 の広間に 6 基を一列に並べる。
+     実体マス（什器）なので通路は塞がない。open:true で四方の壁面を落とし独立機械にする。 */
   var furniture = [
-    { col: 52, row: 47, dir: 'w', type: 'sewerPump' },
-    { col: 52, row: 49, dir: 'e', type: 'sewerPump' },
-    { col: 52, row: 55, dir: 'w', type: 'sewerPump' },
-    { col: 52, row: 57, dir: 'e', type: 'sewerPump' },
-    { col: 54, row: 52, dir: 'n', type: 'sewerPump' },
-    { col: 56, row: 52, dir: 's', type: 'sewerPump' }
+    { col: 46, row: 52, dir: 'n', type: 'sewerPump', open: true },
+    { col: 48, row: 52, dir: 's', type: 'sewerPump', open: true },
+    { col: 50, row: 52, dir: 'n', type: 'sewerPump', open: true },
+    { col: 52, row: 52, dir: 's', type: 'sewerPump', open: true },
+    { col: 54, row: 52, dir: 'n', type: 'sewerPump', open: true },
+    { col: 56, row: 52, dir: 's', type: 'sewerPump', open: true },
+    /* 吸込管の立ち上がり（ポンプ列の北側。row 50 の見通しを切る役も持つ） */
+    { col: 52, row: 50, dir: 'n', type: 'pumpPipe', open: true },
+    /* ランプの正面に残る実体マス（見通しを切る岩盤）も機械にして「柱」に見せない */
+    { col: 50, row: 48, dir: 's', type: 'pumpPipe', open: true }
   ];
 
   /* 器具以外の光源（槽の発光・警告灯・縦坑の落光）。明滅比率の母数には数えない */
+  /* 合流槽9室の集水枡の発光（水が緑〜琥珀に光る＝9室の色味が全部違う「錨」になる）。
+     basins の rgb と対にする。 */
+  var jnGlow = (function () {
+    /* [枡の左上 col, row, 色]。合流槽の左上は (col-3, row-3) */
+    var C = [[13, 13, [1.00, 0.74, 0.34]], [39, 13, [0.86, 0.98, 0.40]], [65, 13, [0.36, 1.00, 0.80]],
+      [13, 39, [1.00, 0.52, 0.34]], [39, 39, [0.52, 0.66, 1.00]], [65, 39, [0.32, 0.80, 1.00]],
+      [13, 65, [1.00, 0.38, 0.38]], [39, 65, [0.76, 0.52, 1.00]], [65, 65, [0.58, 1.00, 0.46]]];
+    var out = [];
+    for (var i = 0; i < C.length; i++) {
+      /* 枡は実体マスなので、光源は**枡の両脇の歩行可能マス**に置く
+         （実体マスの中に置くと遮蔽マップで全方位から遮られて効かない）。
+         水面すれすれの高さに置いて水だけを光らせる。 */
+      var c0 = C[i][0] - 3, r0 = C[i][1] - 3;     /* 合流槽の左上 */
+      out.push({ col: c0 + 2, row: r0 + 3, rgb: C[i][2], y: 0.10, R: 7.0, gain: 0.62 });
+      out.push({ col: c0 + 5, row: r0 + 4, rgb: C[i][2], y: 0.10, R: 7.0, gain: 0.62 });
+      out.push({ col: c0 + 3, row: r0 + 2, rgb: C[i][2], y: 2.2, R: 9.0, gain: 0.20 });
+    }
+    return out;
+  })();
+
   var extraLights = [
     /* 流入縦坑: 上から落ちてくる青白い光 */
     { col: 5, row: 5, rgb: [0.70, 0.86, 1.00], y: 4.6, R: 13.0, gain: 1.05 },
@@ -191,11 +241,15 @@
     { col: 52, row: 21, rgb: [0.36, 1.00, 0.58], y: 0.6, R: 7.5, gain: 0.34 },
     { col: 52, row: 23, rgb: [0.36, 1.00, 0.58], y: 0.6, R: 7.5, gain: 0.34 },
     /* ポンプ室: 橙の警告灯 */
-    { col: 48, row: 50, rgb: [1.00, 0.50, 0.14], y: 2.6, R: 9.0, gain: 0.58 },
-    { col: 56, row: 54, rgb: [1.00, 0.50, 0.14], y: 2.6, R: 9.0, gain: 0.58 },
-    { col: 50, row: 56, rgb: [1.00, 0.52, 0.16], y: 2.6, R: 9.0, gain: 0.52 },
-    { col: 54, row: 48, rgb: [1.00, 0.52, 0.16], y: 2.6, R: 9.0, gain: 0.52 },
-    { col: 52, row: 52, rgb: [1.00, 0.54, 0.18], y: 3.2, R: 10.0, gain: 0.44 },
+    { col: 48, row: 49, rgb: [1.00, 0.50, 0.14], y: 2.8, R: 10.0, gain: 0.62 },
+    { col: 56, row: 55, rgb: [1.00, 0.50, 0.14], y: 2.8, R: 10.0, gain: 0.62 },
+    { col: 48, row: 55, rgb: [1.00, 0.52, 0.16], y: 2.8, R: 10.0, gain: 0.56 },
+    { col: 56, row: 49, rgb: [1.00, 0.52, 0.16], y: 2.8, R: 10.0, gain: 0.56 },
+    { col: 51, row: 51, rgb: [1.00, 0.54, 0.18], y: 3.4, R: 12.0, gain: 0.52 },
+    /* 天井まで届く灯（-2m の広間の天井が真っ黒にならないように） */
+    { col: 49, row: 49, rgb: [1.00, 0.70, 0.40], y: 4.5, R: 13.0, gain: 0.42 },
+    { col: 55, row: 55, rgb: [1.00, 0.70, 0.40], y: 4.5, R: 13.0, gain: 0.42 },
+    { col: 53, row: 53, rgb: [1.00, 0.54, 0.18], y: 3.4, R: 12.0, gain: 0.52 },
     /* 水門: 赤い回転灯の照り返し */
     { col: 70, row: 69, rgb: [1.00, 0.16, 0.10], y: 2.45, R: 8.5, gain: 0.40 },
     { col: 70, row: 71, rgb: [1.00, 0.16, 0.10], y: 2.45, R: 8.5, gain: 0.40 },
@@ -203,7 +257,8 @@
     /* 制御室の盤の灯り */
     { col: 68, row: 70, rgb: [1.00, 0.72, 0.40], y: 1.6, R: 5.5, gain: 0.26 },
     /* 旧坑のハンドル置き場（唯一の手掛かりなので僅かに照らす） */
-    { col: 14, row: 59, rgb: [1.00, 0.88, 0.68], y: 1.8, R: 5.0, gain: 0.24 }
+    { col: 14, row: 59, rgb: [1.00, 0.88, 0.68], y: 1.7, R: 6.5, gain: 0.40 },
+    { col: 14, row: 57, rgb: [1.00, 0.86, 0.64], y: 2.1, R: 6.5, gain: 0.18 }
   ];
 
   /* 合流槽9つは「位置の錨」＝必ず灯りが点いている（消灯帯に埋もれさせない）。
@@ -218,8 +273,8 @@
       for (var c = c0; c <= c0 + 6; c++) if (c % 3 === 1) cs.push(c);
       for (var r = r0; r <= r0 + 6; r++) if (r % 3 === 1) rs.push(r);
       if (!cs.length || !rs.length) continue;
-      out.push({ col: cs[0], row: rs[0], state: 'on', gain: 1.25, reach: 1.15 });
-      out.push({ col: cs[cs.length - 1], row: rs[rs.length - 1], state: 'on', gain: 1.10 });
+      out.push({ col: cs[0], row: rs[0], state: 'on', gain: 1.45, reach: 1.25 });
+      out.push({ col: cs[cs.length - 1], row: rs[rs.length - 1], state: 'on', gain: 1.30, reach: 1.2 });
       if (cs.length > 1) out.push({ col: cs[cs.length - 1], row: rs[0], state: 'flicker' });
     }
     return out;
@@ -232,7 +287,15 @@
     { col: 52, row: 20, state: 'on', gain: 1.10 },
     { col: 46, row: 22, state: 'flicker' },
     { col: 58, row: 19, state: 'flicker' },
-    { col: 49, row: 47, state: 'on', gain: 1.25 },
+    /* ポンプ室は闇だまり dz_D の中だが「見せ場」なので橙の灯を6基だけ点ける */
+    { col: 49, row: 46, state: 'on', gain: 1.55, reach: 1.35 },
+    { col: 55, row: 46, state: 'on', gain: 1.55, reach: 1.35 },
+    { col: 46, row: 52, state: 'on', gain: 1.45, reach: 1.30 },
+    { col: 58, row: 52, state: 'on', gain: 1.45, reach: 1.30 },
+    { col: 49, row: 52, state: 'on', gain: 1.75, reach: 1.45 },
+    { col: 55, row: 52, state: 'on', gain: 1.75, reach: 1.45 },
+    { col: 49, row: 58, state: 'on', gain: 1.55, reach: 1.35 },
+    { col: 55, row: 58, state: 'on', gain: 1.55, reach: 1.35 },
     { col: 55, row: 57, state: 'on', gain: 1.10 },
     { col: 70, row: 73, state: 'on', gain: 1.15 },
     { col: 73, row: 69, state: 'on', gain: 1.05 },
@@ -242,6 +305,9 @@
     /* 旧坑の崩落部だけは見せ場として1灯だけ残す（区画Eの「灯りはほぼ無い」の例外） */
     { col: 22, row: 49, state: 'on', gain: 1.25, reach: 1.20 },
     { col: 19, row: 55, state: 'flicker' },
+    /* ハンドル置き場（鍵の在り処）は必ず読める明るさにする */
+    { col: 13, row: 58, state: 'on', gain: 0.95, reach: 1.15 },
+    { col: 13, row: 61, state: 'on', gain: 0.85, reach: 1.10 },
     /* 流入縦坑・沈殿槽・ポンプ室・制御室の見せ場を確実に点ける */
     { col: 55, row: 22, state: 'on', gain: 1.25, reach: 1.2 },
     { col: 49, row: 19, state: 'on', gain: 1.20, reach: 1.2 },
@@ -273,7 +339,7 @@
     var def = ESCAPE.Maps.load('area2').def;   /* load() の GridMap は捨て、def を掴む */
     if (!def || !def.meta || def.meta.__p5cLook) return;
     var m = def.meta;
-    m.ambientScale = 3.5;              /* 環境光の底上げ（灯具が遠い下水道で「何も見えない」を防ぐ） */
+    m.ambientScale = 4.8;              /* 環境光の底上げ（灯具が遠い下水道で「何も見えない」を防ぐ） */
     m.litterTint = [0.19, 0.17, 0.14]; /* 散乱物は白い書類でなく黒ずんだ泥・木片 */
     m.wallSigns = false;           /* 研究区画の標識（除染注意など）は下水道に出さない */
     m.zoneStyles = zoneStyles;
@@ -285,11 +351,12 @@
     m.wallKit = (m.wallKit || []).concat(wallKit);
     m.ceilKit = (m.ceilKit || []).concat(ceilKit);
     m.furniture = (m.furniture || []).concat(furniture);
-    m.extraLights = (m.extraLights || []).concat(extraLights);
+    m.extraLights = (m.extraLights || []).concat(extraLights).concat(jnGlow);
     m.lightOverrides = (m.lightOverrides || []).concat(lightOverrides);
     m.dripSites = (m.dripSites || []).concat(dripSites);
     /* 造形の差し替え（world.js のスイッチ） */
-    m.lampKit = 'sewer';          /* ケージ付きの下水道灯 */
+    m.lampKit = 'sewer';          /* ケージ付きの下水道灯（形は zoneStyles.lampStyle） */
+    m.ceilPipes = 'sewer';        /* 支線の天井は金属トレイでなく錆びた細い導管 */
     m.doorKit = 'sluice';         /* 鉄の昇降水門（doorOpen で3秒かけて上がる） */
     m.safeKit = 'handleRack';     /* 金庫でなく壁の掛け具に掛かった鉄のハンドル */
     m.gimmickKit = 'controlPanel';/* 制御室の壁面パネル（軸穴・計器・ランプ） */
