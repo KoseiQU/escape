@@ -1078,7 +1078,7 @@
     ['litter', 'poster', 'sign', 'zonesign', 'metal', 'dark', 'lamp', 'screen',
       'paper', 'sheet', 'fluid', 'board', 'monitors', 'water', 'glass', 'hatch', 'blood',
       /* P5c エリア2「下水道」: 水面・水底・格子・ぬめり・配管・銘板（area2 版） */
-      'sewerWater', 'waterBed', 'grate', 'slime', 'pipe', 'zonesignA2',
+      'sewerWater', 'waterBed', 'grate', 'slime', 'pipe', 'zonesignA2', 'beam',
       /* P4.16 レーンA: 大型掲示板の紙面と、増補した血痕3種。
          P4.17 項目1: 壁に貼る飛沫は床デカールと別の集合 'bloodSplatWall' にする
          （床デカールの「全三角形が上を向く」検査の対象は床だけ、という意図を保つため）。 */
@@ -1492,7 +1492,13 @@
       slime: decal('slime'),
       pipe: opaque('pipeRust'),
       /* 区画銘板の area2 版（表記は docs/notes.md「区画名」） */
-      zonesignA2: decal('zonesignA2')
+      zonesignA2: decal('zonesignA2'),
+      /* 縦坑に落ちる光の柱（加算合成・深度書き込みなし） */
+      beam: new THREE.MeshBasicMaterial({
+        map: TX.get('lamp'), vertexColors: true, fog: true, transparent: true,
+        opacity: 0.40, blending: THREE.AdditiveBlending, depthWrite: false,
+        side: THREE.DoubleSide
+      })
     };
     /* P5c: 水面。法線2層スクロール（fallback では静止した Basic に落ちる＝RQ 側の判断）。
        水のあるマップでだけ作る（area1 では uniform の登録もしない＝挙動不変）。
@@ -1517,7 +1523,8 @@
       'lamp', 'poster',
       'screen', 'paper', 'sheet', 'fluid', 'board', 'monitors', 'bigboard', 'sign', 'zonesign',
       'zonesignA2', 'slime',
-      'hatch', 'blood', 'bloodDrag', 'bloodSplat', 'bloodSplatWall', 'bloodHand', 'litter', 'water', 'glass'];
+      'hatch', 'blood', 'bloodDrag', 'bloodSplat', 'bloodSplatWall', 'bloodHand', 'litter', 'water', 'glass',
+      'beam'];
     var matCache = Object.create(null);
     var tris = 0, groups = 0;
     var chunkKeys = Object.keys(chunkBags);
@@ -1607,8 +1614,11 @@
     else { o = [x1, 0, z0]; u = [-T, 0, 0]; }
 
     /* ロッカー・隔壁も背後の壁は張る（張らないと上部が抜けて背景が見える） */
+    /* P5c: 鉄の昇降水門は「壁の前に扉体を置く」のでなく開口そのもの＝平壁は張らない
+       （張ると扉体が壁の裏に隠れる）。まぐさから上は _sluiceGate が塞ぐ。 */
+    var sluiceHere = (tile === TILE.DOOR && map.meta && map.meta.doorKit === 'sluice');
     var isPlain = (tile === TILE.WALL || tile === TILE.NOTE || tile === TILE.GIMMICK ||
-      tile === TILE.LOCKER || tile === TILE.DOOR);
+      tile === TILE.LOCKER || (tile === TILE.DOOR && !sluiceHere));
     if (isPlain) {
       var uvW = uvFlipU(hash2(cc * 5 + nc, rr * 3 + nr));
       /* 壁テクスチャは2種を混ぜる（1種だと欠けタイルの位置が反復して目立つ） */
@@ -1719,8 +1729,12 @@
     var h = hash2(cc * 41 + nr * 7, rr * 29 + nc * 3);
     if (h > 0.21) {
       /* 契約 §3「バイオハザード標識・区画銘板・注意書きで全域を意味づけ」。
-       * 貼り紙より低い頻度で標識を混ぜる（施設全体が研究所だと分かるように） */
-      if (h < 0.272) this._wallSign(B, cc, rr, nc, nr, dir, planeShader, key);
+       * 貼り紙より低い頻度で標識を混ぜる（施設全体が研究所だと分かるように）。
+       * P5c: 標識の絵柄は研究区画の文言（除染注意など）なので、
+       * マップが meta.wallSigns:false を持つ（＝下水道）ときは出さない。 */
+      if (h < 0.272 && !(this.map.meta && this.map.meta.wallSigns === false)) {
+        this._wallSign(B, cc, rr, nc, nr, dir, planeShader, key);
+      }
       return;
     }
     var T = this.map.tileSize;
@@ -1954,9 +1968,9 @@
         fz + dir.n[2] * off + ((along === 'z') ? a : 0)];
     }
     function S(w, d) { return [(along === 'z') ? d : w, (along === 'z') ? w : d]; }
-    /* 背板（木の裏板＋琺瑯の札） */
-    var p0 = P(0.03, 0, -0.10), s0 = S(1.10, 0.06);
-    B.dark.box(p0[0], p0[1], p0[2], s0[0], 0.86, s0[1], 1.0, shPlate);
+    /* 背板（鋼の裏板）。板は小さく暗く＝主役はハンドルそのもの */
+    var p0 = P(0.03, 0, -0.02), s0 = S(0.92, 0.05);
+    B.dark.box(p0[0], p0[1], p0[2], s0[0], 0.70, s0[1], 1.0, shPlate);
     /* 掛け具（2本のフック） */
     for (var k = 0; k < 2; k++) {
       var a = (k - 0.5) * 0.46;
@@ -1977,11 +1991,18 @@
     /* 軸（壁に対して垂直に突き出す）＋4本スポーク＋輪 */
     bld.tube([hub[0] - dir.n[0] * 0.10, hy, hub[2] - dir.n[2] * 0.10],
       [hub[0] + dir.n[0] * 0.04, hy, hub[2] + dir.n[2] * 0.04], 0.06, 6, shH);
-    for (var q = 0; q < 8; q++) {
-      var ang = q / 8 * Math.PI * 2;
-      var ra = Math.cos(ang) * 0.30, rb = Math.sin(ang) * 0.30;
-      var pq = P(0.20, ra, 0.16 + rb), sq = S(0.11, 0.09);
+    /* 輪（16個の箱を重ねて繋がったリングにする）＋十字のスポーク */
+    for (var q = 0; q < 16; q++) {
+      var ang = q / 16 * Math.PI * 2;
+      var ra = Math.cos(ang) * 0.40, rb = Math.sin(ang) * 0.40;
+      var pq = P(0.18, ra, 0.16 + rb), sq = S(0.18, 0.10);
       bld.box(pq[0], pq[1], pq[2], sq[0], 0.11, sq[1], 2, shH);
+    }
+    for (var sp = 0; sp < 4; sp++) {
+      var sa = sp / 4 * Math.PI * 2 + Math.PI / 4;
+      var sra = Math.cos(sa) * 0.20, srb = Math.sin(sa) * 0.20;
+      var ps = P(0.18, sra, 0.16 + srb), ss2 = S(0.40, 0.06);
+      bld.box(ps[0], ps[1], ps[2], ss2[0], 0.06, ss2[1], 2, shH);
     }
     var mesh = buildMesh(bld, this._track(new THREE.MeshBasicMaterial(
       { map: ESCAPE.Textures.get('metal'), vertexColors: true, fog: true })));
@@ -2041,54 +2062,63 @@
 
   /** P5c エリア2: 鉄の昇降水門。枠・案内レール・鎖は静止、扉体だけ別メッシュで上がる */
   World.prototype._sluiceGate = function (B, cc, rr, dir, shader, key, H) {
+    /* 水門は両側の面から呼ばれる（西の歩廊と東の到達パッド）。造形は1回だけ積む
+       ＝枠の二重描画（Zファイト）と扉体メッシュの二重生成を防ぐ。 */
+    if (this._sluice) return;
     var map = this.map, T = map.tileSize;
+    var ch = map.ceilHAt(cc + dir.dc, rr + dir.dr);
     if (H === undefined) H = map.wallHeight;
     var cx = cc * T + T / 2, cz = rr * T + T / 2;
-    var fx = cx + dir.n[0] * T * 0.5, fz = cz + dir.n[2] * T * 0.5;
     var along = (dir.dc !== 0) ? 'z' : 'x';
     var base = map.cellFloorY(cc + dir.dc, rr + dir.dr);
     var shBody = shader(key, [0.92, 0.94, 0.96]);
     var shDark = shader(key, [0.46, 0.48, 0.50]);
+    var shWall = shader(key, [0.86, 0.88, 0.90]);
     function SX(w, d) { return (along === 'z') ? d : w; }
     function SZ(w, d) { return (along === 'z') ? w : d; }
-    /* 開口の枠（上の梁と左右の案内レール） */
-    B.metal.box(cx, base + H - 0.22, cz, SX(T, 0.44), 0.44, SZ(T, 0.44), 0.9, shBody);
+    var OPEN = 2.20;                      /* 開口の高さ(m) */
+    /* まぐさ（開口の上）＝ここへ扉体が引き上がって隠れる。両面ぶんを1つの箱で塞ぐ */
+    var headH = Math.max(0.4, base + ch - (base + OPEN));
+    B.wall.box(cx, base + OPEN + headH / 2, cz, T, headH, T, 0.9, shWall);
+    /* 左右の案内レール（開口の縁。突出は 0.14m） */
     for (var k = 0; k < 2; k++) {
-      var a = (k ? 1 : -1) * (T * 0.5 - 0.14);
-      B.metal.box(cx + ((along === 'z') ? 0 : a), base + H / 2, cz + ((along === 'z') ? a : 0),
-        SX(0.28, 0.44), H, SZ(0.28, 0.44), 1.0, shBody);
+      var a = (k ? 1 : -1) * (T * 0.5 - 0.12);
+      B.metal.box(cx + ((along === 'z') ? 0 : a), base + OPEN / 2, cz + ((along === 'z') ? a : 0),
+        SX(0.24, T), OPEN, SZ(0.24, T), 1.0, shBody);
     }
-    /* 巻き上げの鎖2本（枠の上から扉体へ。扉体が上がっても長さは変えない＝簡略） */
+    /* まぐさの下の巻き上げ機（歯車箱）と鎖2本 */
+    B.dark.box(cx, base + OPEN + 0.26, cz, SX(0.72, 0.40), 0.34, SZ(0.72, 0.40), 1.2, shDark);
     for (var c2 = 0; c2 < 2; c2++) {
-      var ax = (c2 ? 1 : -1) * 0.46;
+      var ax = (c2 ? 1 : -1) * 0.40;
       var px = cx + ((along === 'z') ? 0 : ax), pz = cz + ((along === 'z') ? ax : 0);
-      B.dark.tube([px, base + H - 0.40, pz], [px, base + 2.54, pz], 0.045, 4, shDark);
+      B.dark.tube([px, base + OPEN + 0.22, pz], [px, base + OPEN - 0.14, pz], 0.045, 4, shDark);
     }
 
-    /* 扉体（鉄板＋リブ＋ボルト）＝別メッシュ。doorOpen で 3 秒かけて上がる */
+    /* 扉体（鉄板＋リブ＋ボルト）＝別メッシュ。doorOpen で 3 秒かけてまぐさの中へ上がる */
     var bld = new Builder(false);
     var shG = this.propShader(cc + dir.dc, rr + dir.dr, [1.02, 0.98, 0.92], 0.62);
-    var GW = T - 0.34, GH = 2.46, GD = 0.26;
+    var GW = T - 0.30, GH = OPEN, GD = 0.26;
     bld.box(cx, base + GH / 2, cz, SX(GW, GD), GH, SZ(GW, GD), 0.8, shG);
     for (var rb = 0; rb < 4; rb++) {
-      bld.box(cx + dir.n[0] * 0.16, base + 0.34 + rb * 0.62, cz + dir.n[2] * 0.16,
+      bld.box(cx + (along === 'z' ? (dir.dc * 0.16) : 0), base + 0.30 + rb * 0.56,
+        cz + (along === 'z' ? 0 : (dir.dr * 0.16)),
         SX(GW - 0.10, 0.08), 0.16, SZ(GW - 0.10, 0.08), 1.6, shG);
     }
     for (var bt = 0; bt < 8; bt++) {
       var ba = ((bt & 1) ? 1 : -1) * (GW * 0.42);
-      bld.box(cx + dir.n[0] * 0.15 + ((along === 'z') ? 0 : ba),
-        base + 0.22 + (bt >> 1) * 0.66, cz + dir.n[2] * 0.15 + ((along === 'z') ? ba : 0),
+      bld.box(cx + (along === 'z' ? (dir.dc * 0.15) : ba),
+        base + 0.20 + (bt >> 1) * 0.60,
+        cz + (along === 'z' ? ba : (dir.dr * 0.15)),
         0.10, 0.10, 0.10, 2, shG);
     }
     /* 下端の刃（水を切る縁） */
-    bld.box(cx + dir.n[0] * 0.02, base + 0.07, cz + dir.n[2] * 0.02,
-      SX(GW, GD + 0.08), 0.14, SZ(GW, GD + 0.08), 1.6, shG);
+    bld.box(cx, base + 0.07, cz, SX(GW, GD + 0.08), 0.14, SZ(GW, GD + 0.08), 1.6, shG);
     var mesh = buildMesh(bld, this._track(new THREE.MeshBasicMaterial(
       { map: ESCAPE.Textures.get('metal'), vertexColors: true, fog: true })));
     this._track(mesh.geometry);
     mesh.name = 'sluiceGate';
     this.group.add(mesh);
-    this._sluice = { mesh: mesh, lift: GH + 0.10, t: 0, dur: 3.0 };
+    this._sluice = { mesh: mesh, lift: OPEN + 0.06, t: 0, dur: 3.0 };
   };
 
   World.prototype._locker = function (B, cc, rr, dir, sh, shDim) {
@@ -2229,7 +2259,7 @@
   var WATER_LIP = 0.20;           /* 水面の下へ伸ばす帯(m)。低い視点でも面が抜けない */
   var KERB_H = 0.14, KERB_W = 0.18;  /* 歩廊との境の縁石（突出は水路側＝通行の邪魔にしない） */
   /* 水面のアルベド。暗くして「灯の下だけ光る」を作る。深水は更に落として深さを出す */
-  var WATER_TINT = { shallow: [1.05, 1.12, 1.04], deep: [0.62, 0.74, 0.70] };
+  var WATER_TINT = { shallow: [0.78, 0.86, 0.78], deep: [0.50, 0.60, 0.58] };
   var WDIV2 = [0, 0.5, 1];
 
   /** 境界面の起点・辺（法線が (c,r) の側を向く）。_wallFace と同じ規約で組む */
@@ -2252,6 +2282,9 @@
       var t = map.tileAt(c, r);
       return t === TILE.WATER || t === TILE.DEEP;
     }
+    /* 退避段階（系統X・焼き込みのみ）は水面に実ライトの反射が乗らない＝そのままだと
+       黒い板になる。アルベドを持ち上げて「水がある」ことだけは分かるようにする。 */
+    var WK = Y_ON ? 1 : 4.6;
     var all = [];
     for (var a = 0; a < wcs.length; a++) all.push({ col: wcs[a].col, row: wcs[a].row, deep: false });
     for (var b = 0; b < dcs.length; b++) all.push({ col: dcs[b].col, row: dcs[b].row, deep: true });
@@ -2264,7 +2297,8 @@
       var fy = map.cellFloorY(c, r);
       var sy = fy - WATER_SURF;
       var x0 = c * T, z0 = r * T;
-      var tint = deep ? WATER_TINT.deep : WATER_TINT.shallow;
+      var tint0 = deep ? WATER_TINT.deep : WATER_TINT.shallow;
+      var tint = [tint0[0] * WK, tint0[1] * WK, tint0[2] * WK];
       /* 水面（タイルいっぱい＝隣と継ぎ目なく1枚に見える） */
       B.sewerWater.gridP([x0, sy, z0 + T], [T, 0, 0], [0, 0, -T], WDIV2, WDIV2, 1, 1,
         SH.floorShader(key, tint, [0, 1, 0]));
@@ -3271,14 +3305,14 @@
           var pz = cz + sd * (T * 0.5 - SEWER.pipeInset);
           B.pipe.tube([c * T, py, pz], [(c + 1) * T, py, pz], SEWER.pipeR, SEWER.pipeSeg, sh);
           if (c % SEWER.valveEvery === 1) this._sewerValve(B, cx, py, pz, 'x', sh, shader(key, [1.10, 0.72, 0.34]));
-          if ((c * 7 + r * 3) % 23 === 0) dripSites.push({ x: cx, z: pz, y: py - SEWER.pipeR, col: c, row: r });
+          if ((c * 7 + r * 3) % 7 === 0) dripSites.push({ x: cx, z: pz, y: py - SEWER.pipeR, col: c, row: r });
         } else if (hz && !hx) {
           var sd2 = solid(c - 1, r) ? -1 : (solid(c + 1, r) ? 1 : 0);
           if (!sd2) continue;
           var px = cx + sd2 * (T * 0.5 - SEWER.pipeInset);
           B.pipe.tube([px, py, r * T], [px, py, (r + 1) * T], SEWER.pipeR, SEWER.pipeSeg, sh);
           if (r % SEWER.valveEvery === 1) this._sewerValve(B, px, py, cz, 'z', sh, shader(key, [1.10, 0.72, 0.34]));
-          if ((c * 3 + r * 7) % 23 === 0) dripSites.push({ x: px, z: cz, y: py - SEWER.pipeR, col: c, row: r });
+          if ((c * 3 + r * 7) % 7 === 0) dripSites.push({ x: px, z: cz, y: py - SEWER.pipeR, col: c, row: r });
         }
       }
     }
@@ -3329,16 +3363,36 @@
             B.dark.tube([lx, nfy + nch - 0.02, lz], [lx, nfy + nch - hl, lz], 0.055, 4, shL);
           }
         }
-        /* 崩落した煉瓦の山（旧坑区画。壁の足元に積む＝突出 0.28m 以内） */
-        if (kit.rubble !== false && zoneW === 'E' && h < 0.26) {
-          var shR = shader(keyW, [0.92, 0.78, 0.64]);
-          for (var b2 = 0; b2 < 6; b2++) {
+        /* 崩落した煉瓦の山（旧坑区画。壁の足元に積む＝突出 0.28m 以内）。
+           山は「下が広く上が狭い」3段の帯＋崩れた煉瓦数個。壁伝いなので通行は塞がない。 */
+        if (kit.rubble !== false && zoneW === 'E' && h < 0.52) {
+          var shR = this.propShader(nc, nr, [1.02, 0.86, 0.70], 0.55);
+          var hm = hash2(cc * 7 + 3, rr * 5 + 1);
+          var mw = 0.9 + hm * 0.9;                 /* 壁沿いの幅 */
+          var mc = 0.22 + hm * 0.56;               /* 山の中心（壁に沿った位置 0..1） */
+          var tiers = [[0.28, 0.20, 1.00], [0.20, 0.18, 0.70], [0.13, 0.16, 0.42]];
+          for (var tg = 0; tg < 3; tg++) {
+            var dep = tiers[tg][0], hgt = tiers[tg][1], wid = mw * tiers[tg][2];
+            var mx = q.o[0] + q.u[0] * mc + q.n[0] * (dep * 0.5);
+            var mz = q.o[2] + q.u[2] * mc + q.n[2] * (dep * 0.5);
+            var sxm = Math.abs(q.u[0]) ? wid : dep, szm = Math.abs(q.u[2]) ? wid : dep;
+            B.wall.box(mx, nfy + 0.02 + hgt * 0.5 + tg * 0.17, mz, sxm, hgt, szm, 2.2, shR);
+          }
+          /* 崩れて転がった煉瓦（山の裾） */
+          for (var b2 = 0; b2 < 4; b2++) {
             var hb = hash2(cc * 17 + b2 * 3, rr * 19 + b2);
-            var tb = 0.12 + hb * 0.76;
-            var bx = q.o[0] + q.u[0] * tb + q.n[0] * (0.06 + hb * 0.20);
-            var bz = q.o[2] + q.u[2] * tb + q.n[2] * (0.06 + hb * 0.20);
-            var by2 = nfy + 0.055 + (b2 % 3) * 0.10;
-            B.wall.box(bx, by2, bz, 0.22 + hb * 0.10, 0.10, 0.22 + hb * 0.10, 2.4, shR);
+            var tb = mc + (hb - 0.5) * 0.7;
+            var bx = q.o[0] + q.u[0] * tb + q.n[0] * (0.20 + hb * 0.12);
+            var bz = q.o[2] + q.u[2] * tb + q.n[2] * (0.20 + hb * 0.12);
+            B.wall.box(bx, nfy + 0.06, bz, 0.24, 0.11, 0.24, 2.4, shR);
+          }
+          /* 山に突き刺さった支保工の折れた木材（壁に立てかける） */
+          if (hm > 0.55) {
+            var shTL = this.propShader(nc, nr, [1.00, 0.80, 0.54], 0.55);
+            var lx0 = q.o[0] + q.u[0] * (mc + 0.12) + q.n[0] * 0.06;
+            var lz0 = q.o[2] + q.u[2] * (mc + 0.12) + q.n[2] * 0.06;
+            var lx1 = lx0 + q.n[0] * 0.26, lz1 = lz0 + q.n[2] * 0.26;
+            B.pipe.tube([lx0, nfy + 1.85, lz0], [lx1, nfy + 0.05, lz1], 0.09, 4, shTL);
           }
         }
       }
@@ -3375,7 +3429,7 @@
       if (kit.bones !== false && zone2 === 'E') {
         var deg = 0;
         for (var dd = 0; dd < 4; dd++) if (walk(c2 + D4[dd][0], r2 + D4[dd][1])) deg++;
-        if (deg === 1) {
+        if (deg <= 2 && hash2(c2 * 11 + 7, r2 * 13 + 5) < (deg === 1 ? 1 : 0.22)) {
           bset(c2, r2); setYBias(0);
           var shB2 = this.propShader(c2, r2, [1.32, 1.28, 1.14], 0.90);
           B.sheet.box(cx2 - 0.22, fy2 + 0.07, cz2 + 0.10, 0.62, 0.13, 0.14, 1.6, shB2);
@@ -3387,13 +3441,13 @@
       /* 水面の浮遊ゴミ・油膜（水路マスの上・デカール） */
       if (kit.scum !== false && map.tileAt(c2, r2) === TILE.WATER) {
         var hs = hash2(c2 * 29 + 7, r2 * 31 + 3);
-        if (hs < 0.34) {
+        if (hs < 0.20) {
           bset(c2, r2); setYBias(0);
           var sz2 = 0.9 + hs * 2.2;
           var ox3 = (hash2(c2 + 5, r2 + 2) - 0.5) * 0.5, oz3 = (hash2(c2 + 2, r2 + 5) - 0.5) * 0.5;
           B.litter.gridP([cx2 + ox3 - sz2 / 2, fy2 - WATER_SURF + 0.012, cz2 + oz3 + sz2 / 2],
             [sz2, 0, 0], [0, 0, -sz2], [0, 1], [0, 1], 1, 1,
-            planeShader(c2 + ',' + r2, [0.30, 0.30, 0.26], [0, 1, 0]),
+            planeShader(c2 + ',' + r2, [0.13, 0.13, 0.11], [0, 1, 0]),
             (function (u0, v0) {
               return function (ss, tt) { return [u0 + ss * 0.5, v0 + tt * 0.5]; };
             })(((hash2(c2 + 61, r2 + 13) * 2) | 0) * 0.5, ((hash2(c2 + 13, r2 + 61) * 2) | 0) * 0.5));
@@ -3554,7 +3608,9 @@
       var cr = keys[i].split(','), c = +cr[0], r = +cr[1];
       var bs = at[keys[i]];
       var depth = (bs.depth === undefined) ? BASIN_DEPTH : bs.depth;
-      var tint = bs.rgb || [0.52, 0.86, 0.62];
+      var k0 = Y_ON ? 1 : 4.6;
+      var t0 = bs.rgb || [0.52, 0.86, 0.62];
+      var tint = [t0[0] * k0, t0[1] * k0, t0[2] * k0];
       bset(c, r); setYBias(0);
       var key = this._ownerOf(c, r);
       var fy = map.cellFloorY(c, r);
@@ -3612,6 +3668,25 @@
           flat([0.92, 0.98, 1.10]));
         B.grate.gridP([cx - 0.92, gy, cz + 0.92], [1.84, 0, 0], [0, 0, -1.84], [0, 1], [0, 1], 1, 1,
           flat([0.38, 0.42, 0.48]));
+        /* 落ちてくる光の柱（加算・下へ向かって消える）。3枚の交差面で立体に見せる */
+        var fyS = map.cellFloorY(k.col, k.row);
+        var beamTop = gy - 0.08, beamBot = fyS + 0.02;
+        for (var bm = 0; bm < 3; bm++) {
+          var ang = bm / 3 * Math.PI;
+          var ux = Math.cos(ang) * 0.86, uz = Math.sin(ang) * 0.86;
+          B.beam.gridP([cx - ux, beamTop, cz - uz], [ux * 2, 0, uz * 2],
+            [0, beamBot - beamTop, 0], [0, 1], [0, 0.35, 0.7, 1], 1, 1,
+            (function (top, bot, ox, oz) {
+              return function (x, y, z) {
+                var u = (top - y) / (top - bot);
+                var rr2 = Math.hypot(x - ox, z - oz) / 0.90;
+                if (rr2 > 1) rr2 = 1;
+                /* 下へ行くほど・芯から離れるほど薄い＝柱の縁を出さない */
+                var a = (1 - u) * (1 - u) * (1 - rr2 * rr2) * 0.92;
+                return [0.56 * a, 0.68 * a, 0.92 * a];
+              };
+            })(beamTop, beamBot, cx, cz));
+        }
         /* 桁（枠）＝天井の穴の縁 */
         for (var fr = 0; fr < 4; fr++) {
           var sxf = (fr < 2) ? 2.10 : 0.14, szf = (fr < 2) ? 0.14 : 2.10;
@@ -3650,12 +3725,16 @@
    *   仕切り板(bay) 側面・背面の板。什器同士・什器と壁の隙間を塞ぐ（正面だけ開ける）
    * 什器そのものは基壇の上に載せる（脚が床に埋まらない）。
    * 背の高い什器は天井(3.0m)を突き抜けないよう基壇を低くする。 */
-  var PLINTH_H = { specTank: 0.14, cageStack: 0.20, machine: 0.20, tank: 0.20, incubator: 0.24 };
+  var PLINTH_H = { specTank: 0.14, cageStack: 0.20, machine: 0.20, tank: 0.20, incubator: 0.24,
+    /* P5c: 巨大ポンプは胴が見えないと何の部屋か分からない＝基壇を低くする */
+    sewerPump: 0.12 };
   var PLINTH_DEFAULT = 0.30;
   /** 通路側に見せる仕切り板の高さ(m)。腰高＝跨げないと一目で分かる高さ。
    *  背の低い什器（寝台・机・端末台）は什器そのものが隠れないよう少し低くする。 */
   var BAY_H = 1.16;
-  var BAY_LOW = { gurney: 0.90, desk: 0.90, console: 0.90, crate: 0.90, benchIsland: 0.90, opTable: 0.90 };
+  var BAY_LOW = { gurney: 0.90, desk: 0.90, console: 0.90, crate: 0.90, benchIsland: 0.90, opTable: 0.90,
+    /* P5c: ポンプの胴（高さ 1.3m）を隠さない高さ */
+    sewerPump: 0.58 };
 
   /** 什器マスの基壇と仕切り板。什器本体より先に積む（本体は基壇の上へ乗る） */
   World.prototype._furnBase = function (B, f, shader, ph) {
