@@ -168,7 +168,15 @@
     var g = ESCAPE.game;
     this.erases++;
     if (g && g.input) g.input.releaseRun('title');
+    /* P5: eraseAllData は全エリアの保存と `escape.area` を消す（js/progress.js）。
+       いま area1 以外を開いているなら、エリアはページ再読込でしか戻せない。 */
+    var home = ESCAPE.DEFAULT_AREA || 'area1';
     if (g && g.progress && g.progress.eraseAllData) g.progress.eraseAllData();
+    if (g && g.mapId && g.mapId !== home) {
+      if (ESCAPE.gotoArea) ESCAPE.gotoArea(home);
+      else if (ESCAPE.reloadPage) ESCAPE.reloadPage();
+      return true;
+    }
     if (ESCAPE.Title && ESCAPE.Title.show) ESCAPE.Title.show();
     return true;
   };

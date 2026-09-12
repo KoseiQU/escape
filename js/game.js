@@ -13,7 +13,12 @@
   var BASE_FOV = 75;      // 通常時の視野角。追跡中だけ音響ディレクタが少し広げる
 
   function Game() {
-    this.mapId = 'area1';
+    /* P5 エリア接続: 現在のエリアは `?area=` ＞ localStorage `escape.area` ＞ 'area1'
+       （決定は js/map.js の ESCAPE.currentArea。ページ再読込でしか変わらない）。 */
+    this.mapId = (ESCAPE.currentArea ? ESCAPE.currentArea() : 'area1');
+    /* 開いたエリアを覚えておく（`?area=` で直接開いた場合も、次の素の再読込と
+       タイトルの `続きから` が同じエリアに戻る）。 */
+    if (ESCAPE.setArea) ESCAPE.setArea(this.mapId);
     this.running = false;
     this.frameCount = 0;
     this.renderCount = 0;
@@ -207,7 +212,10 @@
     /* P4.10b: 音の罠（空き缶・軋む床板・ワイヤー・倒れかけの什器）。
        Stealth（音地盤・センサー）と同じく「敵が知覚する前」に鳴らす＝同フレームで伝わる。 */
     if (this.traps) this.traps.step(dt);
-    if (this.ai) this.ai.step(dt);
+    /* P5: 敵0体（meta.enemyCount:0）のとき game.ai は null になる。音イベントの回収
+       （AIManager.dispatchNoise）は敵が居なくても回す必要があるので窓口は ais 側。 */
+    if (this.ais) this.ais.step(dt);
+    else if (this.ai) this.ai.step(dt);
     if (this.progress) this.progress.step(dt);
     /* P4.8: ロープの明滅と fog of war の記録（地図は「変わった時だけ」描き直す） */
     if (this.rope) this.rope.step(dt);
@@ -318,7 +326,8 @@
     if (this.traps) this.traps.reset();
     if (ESCAPE.noise) ESCAPE.noise.reset();
     if (this.stealth) this.stealth.reset();
-    if (this.ai) this.ai.reset();
+    if (this.ais) this.ais.reset();
+    else if (this.ai) this.ai.reset();
     /* P4.5: 音響ディレクタ・恐怖演出も初期状態へ（連続音の鳴りっぱなしを止める） */
     if (ESCAPE.audio && ESCAPE.audio.reset) ESCAPE.audio.reset();
     this.syncCamera();

@@ -231,16 +231,26 @@
     font-family:-apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
     font-size:14.5px; line-height:1.9; white-space:pre-wrap; letter-spacing:.02em;
   }
-  #ending-inner { padding:20px; }
-  #ending-mark { font-size:15px; letter-spacing:.5em; color:rgba(180,200,210,.6); }
-  #ending-clear {
-    margin-top:10px; font-size:44px; font-weight:800; letter-spacing:.14em; color:#eaf4fb;
-    text-shadow:0 0 22px rgba(140,210,230,.55);
+  /* --- P5 エリア接続: 到達パッドの画面（黒地に白文字・ボタンで進む） --- */
+  #ending-overlay { background:rgba(2,3,4,.97); }
+  #ending-inner { padding:24px; width:min(88vw, 560px); text-align:center; }
+  #ending-title {
+    font-size:26px; font-weight:800; letter-spacing:.22em; color:#e8f1f7;
+    text-shadow:0 0 20px rgba(140,190,210,.35);
   }
-  #ending-sub {
-    margin-top:18px; font-size:12px; letter-spacing:.3em; color:rgba(150,168,182,.55);
-    border-top:1px dashed rgba(150,168,182,.35); padding-top:14px; display:inline-block;
+  #ending-body {
+    margin:26px auto 0; font-family:inherit; font-size:14.5px; line-height:2.0;
+    letter-spacing:.06em; color:rgba(206,218,228,.88); white-space:pre-wrap; text-align:left;
+    display:inline-block;
   }
+  #ending-btn {
+    display:block; margin:34px auto 0; min-width:180px; height:48px;
+    font:inherit; font-size:14px; letter-spacing:.24em; color:#dce8f2;
+    background:rgba(24,31,38,.72); border:1px solid rgba(170,195,215,.42); border-radius:3px;
+    cursor:pointer; touch-action:manipulation; pointer-events:auto;
+    -webkit-tap-highlight-color:transparent;
+  }
+  #ending-btn:active { background:rgba(48,60,72,.86); }
 
   /* --- P4.6: ゲームオーバー（3回目の捕獲＝食われる）。正文は docs/notes.md「回収完了」節 --- */
   #gameover-overlay {
@@ -509,12 +519,14 @@
     </div>
   </div>
 
-  <!-- P4: エリア1クリア（次エリアはP5未実装のため仮画面） -->
+  <!-- P5 エリア接続: 到達パッドの画面。見出し・本文・ボタンは js/progress.js が
+       マップ別に書き込む（area1＝遷移画面「隔壁の向こう」/ area2＝クリア仮画面「深部へ」）。
+       正文は docs/notes.md「エリア2『下水道』」の「遷移画面」「エリア2クリア画面」。 -->
   <div id="ending-overlay" class="modal-overlay">
     <div id="ending-inner">
-      <div id="ending-mark">AREA 1</div>
-      <div id="ending-clear">CLEAR</div>
-      <div id="ending-sub">— to be continued —</div>
+      <div id="ending-title"></div>
+      <pre id="ending-body"></pre>
+      <button id="ending-btn" type="button"></button>
     </div>
   </div>
 
@@ -579,6 +591,8 @@
   <script src="js/maps/test.js"></script>
   <script src="js/maps/area1.js"></script>
   <script src="js/maps/area1_story.js"></script>
+  <script src="js/maps/area2.js"></script>
+  <script src="js/maps/area2_story.js"></script>
   <script src="js/textures.js"></script>
   <script src="js/input.js"></script>
   <script src="js/player.js"></script>
@@ -599,5 +613,6 @@
   <script src="js/wake.js"></script>
   <script src="js/title.js"></script>
   <script src="js/test.js"></script>
+  <script src="js/test_area2.js"></script>
 </body>
 </html>

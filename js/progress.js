@@ -33,7 +33,7 @@
    * memo1 / memo4 / memo5 は「エリア1 v3 アリアドネ方式」節の差し替え本文が正。
    * memo2 / memo3 / memo6 は旧本文のまま（v3節「旧本文のまま」）。
    * ============================================================== */
-  var NOTE_TEXTS = {
+  var NOTE_TEXTS_A1 = {
     /* memo1 — 受入ホール（v3差し替え／P4.12改訂: 末行を「ロープの色が濁ったら…」へ。
        ロープ無制限化で旧「ロープが張ったら、それ以上は行くな。戻れ。」は失効） */
     a1_n5: {
@@ -137,15 +137,101 @@
     }
   };
 
-  /* docs/notes.md「区画名」の正文。銘板の表記は `A　受入区画` 形式（間は全角空白） */
-  var ZONE_NAMES = {
-    A: '受入区画', B: '実験区画', C: '検体区画',
-    D: '拘束区画', E: '記録区画', F: '機械区画'
+  /* ================================================================
+   * P5 エリア2「下水道」の正文（docs/notes.md「エリア2『下水道』」。一字一句変更禁止）
+   * 壁メモ6枚 a2_n1〜a2_n6 ＋ 強制メモ＝作業員の日誌2枚 a2_diary1 / a2_diary2。
+   * ============================================================== */
+  var NOTE_TEXTS_A2 = {
+    /* a2_n1 — 流入区画・縦坑の下 */
+    a2_n1: {
+      title: '保守作業員の申し送り',
+      body: '保守作業員の申し送り\n\n' +
+        '上の隔壁は施設側からしか開かない。降りたら戻れない。\n' +
+        'ここから出るには水門を上げるしかない。水門は制御室の操作盤で上げる。\n' +
+        '操作ハンドルは持ち歩き式だ。最後の当番が持ったまま、旧坑道の方へ逃げた。'
+    },
+    /* a2_n2 — 幹線区画 */
+    a2_n2: {
+      title: '第三幹線 水位記録',
+      body: '第三幹線 水位記録\n\n' +
+        '歩廊が崩れた区間は水路を渡れ。膝までだ。\n' +
+        'ただし水の中は遅い。音も立つ。走るな。\n' +
+        '幹線は一つの環だ。どこまで行っても、いつか同じ場所に戻る。'
+    },
+    /* a2_n3 — 沈殿区画 */
+    a2_n3: {
+      title: '沈殿槽 点検記録',
+      body: '沈殿槽 点検記録\n\n' +
+        '槽の水は覗くな。緑に光るのは薬剤じゃない。\n' +
+        '上の研究所から流れてきたものだ。\n' +
+        '歩廊の鉄板は音が響く。走れば槽の底まで聞こえる。'
+    },
+    /* a2_n4 — 機関区画・ポンプ室 */
+    a2_n4: {
+      title: 'ポンプ室 停止手順',
+      body: 'ポンプ室 停止手順\n\n' +
+        'ポンプは全停止。窪地の水はもう抜けない。\n' +
+        'ここは下水道の一番低い場所だ。どの幹線もここへ戻ってくる。\n' +
+        '迷ったら流れを見ろ。水は水門へ向かって流れる。'
+    },
+    /* a2_n5 — 旧坑区画 */
+    a2_n5: {
+      title: '立入禁止 通知',
+      body: '立入禁止 通知\n\n' +
+        '旧坑道は崩落の恐れあり。支保工に触れるな。灯りは点かない。\n\n' +
+        '……骨がある。人のだ。\n' +
+        '研究所ができるより前から、ここにある。'
+    },
+    /* a2_n6 — 水門区画・制御室 */
+    a2_n6: {
+      title: '制御室 引継ぎ',
+      body: '制御室 引継ぎ\n\n' +
+        '水門はハンドルで上げる。軸に嵌めて、止まるまで回せ。\n' +
+        '上がりきったら先へ進め。水門の先は本管だ。\n' +
+        '—— 戻れない。上がった水門は、下ろす者がいない。'
+    },
+    /* 強制メモ1 — スタート区画を出た直後（自動表示の id＝DIARY_ID_BY_MAP.area2） */
+    a2_diary1: {
+      title: '作業員の日誌',
+      body: '梯子を降りた。上の隔壁は、もう開かない。\n\n' +
+        'ここは施設の下水道だ。研究所の排水が、全部ここへ落ちてくる。\n' +
+        '出るには水門を上げるしかない。操作ハンドルは制御室に無い。\n' +
+        '最後の当番が持ち出した。旧坑道に逃げ込んだと聞いた。\n\n' +
+        '水の中は膝まで。歩ける。だが遅くなる。音も立つ。'
+    },
+    /* 強制メモ2 — ポンプ室へ降りる直前（地点は js/maps/area2_story.js） */
+    a2_diary2: {
+      title: '作業員の日誌',
+      body: 'ポンプ室に降りる。ここが一番低い。\n' +
+        '全部の水がここに集まって、ここから水門へ流れていく。\n\n' +
+        '迷ったら流れを見ろ。流れの先に水門がある。\n\n' +
+        '暗い。灯りの間隔が広い。\n' +
+        '歩いて点けて、止まって消せ。'
+    }
   };
+
+  /* 現在のマップ（ページの寿命の間は固定。決定は js/map.js の ESCAPE.currentArea） */
+  var MAP_ID = (ESCAPE.currentArea ? ESCAPE.currentArea() : 'area1');
+  var NOTE_TEXTS_BY_MAP = { area1: NOTE_TEXTS_A1, area2: NOTE_TEXTS_A2 };
+  var NOTE_TEXTS = NOTE_TEXTS_BY_MAP[MAP_ID] || NOTE_TEXTS_A1;
+
+  /* docs/notes.md「区画名」の正文。銘板の表記は `A　受入区画` 形式（間は全角空白）。
+     P5: マップ別（area2 は「エリア2『下水道』」節の区画名）。 */
+  var ZONE_NAMES_BY_MAP = {
+    area1: {
+      A: '受入区画', B: '実験区画', C: '検体区画',
+      D: '拘束区画', E: '記録区画', F: '機械区画'
+    },
+    area2: {
+      A: '流入区画', B: '幹線区画', C: '沈殿区画',
+      D: '機関区画', E: '旧坑区画', F: '水門区画'
+    }
+  };
+  var ZONE_NAMES = ZONE_NAMES_BY_MAP[MAP_ID] || ZONE_NAMES_BY_MAP.area1;
   function zoneLabel(zone) { return zone + '　' + (ZONE_NAMES[zone] || ''); }
 
   /* docs/notes.md「UI文言」（v3節）の正文 */
-  var UI_TEXT = {
+  var UI_TEXT_A1 = {
     note: 'メモを読む',
     regionSign: '区画銘板を読む',
     safe: '金庫を開ける',
@@ -162,8 +248,31 @@
     mapTitle: '地図'
   };
 
+  /* P5 エリア2の UI文言（docs/notes.md「エリア2『下水道』」の「UI文言」が正文）。
+     メモ・銘板・セーブ端末の汎用文言は area1 と同じものを使い回す。 */
+  var UI_TEXT_A2 = {
+    note: UI_TEXT_A1.note,
+    regionSign: UI_TEXT_A1.regionSign,
+    /* ハンドル置き場（role 'safe' を流用） */
+    safe: 'ハンドルを取る',
+    keyGot: '水門の操作ハンドルを手に入れた',
+    /* 制御室の操作盤（role 'bulkhead' を流用） */
+    bulkheadLook: '操作盤を調べる',
+    bulkheadLocked: '軸が空だ —— ハンドルがいる',
+    bulkheadUnlock: 'ハンドルを嵌めて回す',
+    doorOpened: '水門が上がった',
+    /* 水路に入った時（一度だけ・短く） */
+    waterNoRun: '水の中では走れない',
+    savePoint: UI_TEXT_A1.savePoint,
+    savedNow: UI_TEXT_A1.savedNow,
+    savedAlready: UI_TEXT_A1.savedAlready,
+    mapTitle: UI_TEXT_A1.mapTitle
+  };
+  var UI_TEXT_BY_MAP = { area1: UI_TEXT_A1, area2: UI_TEXT_A2 };
+  var UI_TEXT = UI_TEXT_BY_MAP[MAP_ID] || UI_TEXT_A1;
+
   /* docs/notes.md「目的表示（画面上部1行）」の正文 */
-  var OBJECTIVE = {
+  var OBJECTIVE_A1 = {
     findKey: '出口の鍵を探す —— 施設の一番奥へ',
     haveKey: '鍵を手に入れた —— 北の隔壁へ戻る',
     /* 【P4.12 失効】taut: 'ロープが張った —— 来た道を戻れ' ／
@@ -173,6 +282,17 @@
     /* 赤（遠回り率超過）に入った瞬間の一時表示。P4.12 でも維持（docs/notes.md P4.12追加） */
     ropeDetour: '遠回りしすぎだ —— 戻って巻き戻せ'
   };
+
+  /* P5 エリア2の目的表示（docs/notes.md「エリア2『下水道』」の「目的表示」が正文）。
+     area2 だけ3段（水門開放後の行がある）。area1 に doorOpen は無い＝挙動不変。 */
+  var OBJECTIVE_A2 = {
+    findKey: '水門の操作ハンドルを探す —— 旧坑道の奥へ',
+    haveKey: 'ハンドルを手に入れた —— 水門の制御室へ',
+    doorOpen: '水門が上がった —— 先へ',
+    ropeDetour: OBJECTIVE_A1.ropeDetour
+  };
+  var OBJECTIVE_BY_MAP = { area1: OBJECTIVE_A1, area2: OBJECTIVE_A2 };
+  var OBJECTIVE = OBJECTIVE_BY_MAP[MAP_ID] || OBJECTIVE_A1;
 
   /* P4.12 HUD文言（docs/notes.md「P4.12追加（罠の案内・HUD）」）。
      メートル表示は廃止し、ラベル＋色だけで方向判定を伝える。
@@ -194,9 +314,39 @@
 
   /* 壁の掲示（docs/notes.md「掲示（短文・使い回し可のフレーバー）」の正文）。
    * P4.8: 配電順序・制御室・排水路・12秒開放の掲示は失効（該当の仕掛けが無い）。 */
-  var SIGN_TEXT = {
-    sg_store: '保管庫　硝子片散乱　走行厳禁',
-    sg_bulkhead: '非常隔壁 手動開放は解錠後のみ可 / 開放中は大音響に注意'
+  var SIGN_TEXT_BY_MAP = {
+    area1: {
+      sg_store: '保管庫　硝子片散乱　走行厳禁',
+      sg_bulkhead: '非常隔壁 手動開放は解錠後のみ可 / 開放中は大音響に注意'
+    },
+    /* P5 エリア2（docs/notes.md「UI文言」の「掲示（飾り・使い回し可）」4種の正文） */
+    area2: {
+      sg_a2_main: '第三幹線 —— 水位注意',
+      sg_a2_old: '立入禁止 旧坑道 崩落の恐れ',
+      sg_a2_pump: 'ポンプ室 全停止中',
+      sg_a2_settle: '沈殿槽 覗き込み禁止'
+    }
+  };
+  var SIGN_TEXT = SIGN_TEXT_BY_MAP[MAP_ID] || SIGN_TEXT_BY_MAP.area1;
+
+  /* P5 エリア接続: 到達パッドで出す画面（docs/notes.md「遷移画面」「エリア2クリア画面」の正文）。
+     area1 は**クリア画面の代わりに遷移画面**（押すと escape.area=area2 を保存してページ再読込）、
+     area2 は P6 までの仮のクリア画面（押すとタイトルへ）。 */
+  var ENDING_BY_MAP = {
+    area1: {
+      title: '隔壁の向こう',
+      body: '隔壁の先に、地上へ続く階段はなかった。\n' +
+        'あったのは、錆びた梯子と、下から上がってくる水の匂いだけだ。\n' +
+        '—— 降りるしかない。',
+      button: '降りる',
+      action: 'nextArea', next: 'area2'
+    },
+    area2: {
+      title: '深部へ',
+      body: '水門の先は、さらに下へ続いていた。\n（エリア3は制作中）',
+      button: 'タイトルへ',
+      action: 'title'
+    }
   };
 
   var NOTE_RANGE = 2.4;
@@ -218,10 +368,13 @@
      スタート部屋（＝spawn を含む「部屋」region）の外へ出た最初のフレームに1回だけ開く。
      ROOM_MAX は js/minimap.js の部屋判定と同じ値。minimap が居ない構成でも
      同じ規則で部屋を選べるようにここにも置く（判定の実体は minimap.roomRegions()）。 */
-  var DIARY_ID = 'a1_diary';
+  var DIARY_ID_BY_MAP = { area1: 'a1_diary', area2: 'a2_diary1' };
+  var DIARY_ID = DIARY_ID_BY_MAP[MAP_ID] || DIARY_ID_BY_MAP.area1;
   var ROOM_MAX_FALLBACK = 14;
 
-  var SAVE_KEY = 'escape.save.area1.v2';
+  /* P5: セーブキーはマップ別（`escape.save.<mapId>.v2`）。
+     area1 のキー名は従来と一字も変わらない＝既存のセーブがそのまま読める。 */
+  var SAVE_KEY = (ESCAPE.saveKeyOf ? ESCAPE.saveKeyOf(MAP_ID) : 'escape.save.area1.v2');
   var SAVE_KEY_OLD = 'escape.save.area1.v1';   /* P4.7 以前のセーブ（読まずに消す） */
 
   /** 音響フックの共通口（P4.5）。音響モジュールが無くても落ちない */
@@ -278,6 +431,9 @@
       memoTitle: document.getElementById('memo-title'),
       memoBody: document.getElementById('memo-body'),
       endingOverlay: document.getElementById('ending-overlay'),
+      endingTitle: document.getElementById('ending-title'),
+      endingBody: document.getElementById('ending-body'),
+      endingBtn: document.getElementById('ending-btn'),
       dark: document.getElementById('fx-dark')
       /* 【P4.18 項目3 失効】eraseBtn（プレイ画面の `データ全消去`）。
          データ消去はタイトル画面の `データを消す` へ移設（js/menu.js）。DOMも削除済み。 */
@@ -336,6 +492,9 @@
     this.storyRead = Object.create(null);
     this._storyQueue = [];
     this._storyCell = null;
+    /* P5: 水路に初めて入った時の案内（正文「水の中では走れない」）は一度だけ */
+    this.waterHinted = false;
+    this._wasInWater = false;
     this._t = 0;
     this._saveHintT = 0;
     this._saveHintId = null;
@@ -368,7 +527,7 @@
        焼いた分は上のループで拾える（＝既存の壁メモと同じ造形・同じ「調べる」経路）。
        焼けなかった構成（壁が '#' でない等）の保険として、ここでも meta.notes 相当として索引する。 */
     this._storyWallAt = Object.create(null);
-    var sgs = ESCAPE.STORY_GATES || [];
+    var sgs = this.storyGates();
     for (var sg = 0; sg < sgs.length; sg++) {
       var sw = sgs[sg].wall;
       if (!sw) continue;
@@ -489,9 +648,18 @@
     return !!(this.storyRead[id] || this.notesRead[id]);
   };
 
+  /** 現在のマップの物語ゲート（P5: マップ別。ESCAPE.STORY_GATES は現在マップの別名） */
+  Progress.prototype.storyGates = function () {
+    var byMap = ESCAPE.STORY_GATES_BY_MAP;
+    var id = this.game.mapId;
+    if (byMap && byMap[id]) return byMap[id];
+    if (byMap) return [];
+    return ESCAPE.STORY_GATES || [];
+  };
+
   Progress.prototype._checkStoryGates = function () {
     if (!this.diaryAuto) return false;
-    var gates = ESCAPE.STORY_GATES || [];
+    var gates = this.storyGates();
     if (!gates.length) return false;
     var p = this.game.player, c = p.col(), r = p.row(), key = c + ',' + r;
     if (key !== this._storyCell) {
@@ -573,8 +741,16 @@
       var cp = list[i];
       var v = FACE[cp.dir] || FACE.n;
       var cc = map.cellCenter(cp.col, cp.row);
+      /* P5: 区画は meta.regions（マスの矩形）から引く。帯構造でないマップ（area2）でも
+         正しい区画になる。area1 は region の zone と帯の zone が一致するので値は不変。 */
       var zone = null;
-      for (var b = 0; b < bands.length; b++) {
+      var rgs = meta.regions || [];
+      for (var rg = 0; rg < rgs.length; rg++) {
+        var q = rgs[rg];
+        if (!q.zone) continue;
+        if (cp.col >= q.c0 && cp.col <= q.c1 && cp.row >= q.r0 && cp.row <= q.r1) { zone = q.zone; break; }
+      }
+      for (var b = 0; zone === null && b < bands.length; b++) {
         if (cp.row >= bands[b].r0 && cp.row <= bands[b].r1) { zone = bands[b].zone; break; }
       }
       var dd = dist[cp.row * W + cp.col];
@@ -782,7 +958,8 @@
   /* ---------------- 「調べる」（stepFrame から呼ばれる。処理したら true） ---------------- */
   Progress.prototype.onInteract = function () {
     if (this.modal === 'memo') { this._closeModal(); return true; }
-    if (this.modal === 'ending') return true;
+    /* P5: 到達パッドの画面は「調べる」でも進める（タップ/クリックと同じ経路） */
+    if (this.modal === 'ending') { this.onEndingTap(); return true; }
 
     /* 【P4.13 失効】ここにあった「落ちたロープの結び目を拾って結ぶ」処理は失効。
        捕獲は Rope 側で「周回ごとの軌跡」に切り替わり、復帰後は拾い直し不要で
@@ -823,6 +1000,9 @@
         this.gimmick.doorOpen = true;
         sfx('doorRoar', { x: c.x, z: c.z });
         ESCAPE.noise.emit(c.x, c.z, ESCAPE.ENEMY_TUNING.hearMax, 'bulkhead');
+        /* P5 エリア2: 正文「ハンドルを嵌めて回す」→ 画面表示『水門が上がった』。
+           area1 は UI_TEXT.doorOpened を持たない＝表示なし（挙動不変）。 */
+        if (UI_TEXT.doorOpened) this._flash(UI_TEXT.doorOpened);
         this.save();
       }
       return true;
@@ -850,6 +1030,8 @@
     this._checkDiary();
     /* P4.17 項目2: 進行路上の3地点で日記2〜4を強制表示（それぞれ初回のみ・既読は永続） */
     this._checkStoryGates();
+    /* P5: 水路に初めて入った時だけ「水の中では走れない」を出す */
+    this._checkWater();
     this._checkClear();
     this._updateNoteGlow(dt);
     this._updatePrompt();
@@ -857,6 +1039,20 @@
     this._updateRopeHud();
     this._updateTrapHint();
     this._syncHud();
+  };
+
+  /** P5 水路の案内（docs/notes.md「水路に入った時（一度だけ・短く）」の正文）。
+   *  水路へ**入った遷移**で1回だけ。area1 には TILE.WATER が無いので何も起きない。 */
+  Progress.prototype._checkWater = function () {
+    var p = this.game.player;
+    var now = !!(p.inWaterNow && p.inWaterNow());
+    var entered = now && !this._wasInWater;
+    this._wasInWater = now;
+    if (!entered || this.waterHinted || this.modal) return false;
+    if (!UI_TEXT.waterNoRun) return false;
+    this.waterHinted = true;
+    this._flash(UI_TEXT.waterNoRun);
+    return true;
   };
 
   Progress.prototype._checkClear = function () {
@@ -921,6 +1117,8 @@
     /* P4.12: 赤（＝大きな遠回り）に入った直後だけ目的表示を差し替える。
        赤の理由は遠回り率のみ＝分岐は1本（旧「余裕不足」の ropeShort は失効）。 */
     if (rope && rope.redT > 0) return OBJECTIVE.ropeDetour;
+    /* P5 エリア2: 水門を開けた後の3段目（area1 は doorOpen を持たない＝挙動不変） */
+    if (OBJECTIVE.doorOpen && this.gimmick.doorOpen) return OBJECTIVE.doorOpen;
     /* 鍵を得たら以後はずっとこの行（クリア画面が出た後も戻さない） */
     if (this.gimmick.key) return OBJECTIVE.haveKey;
     return OBJECTIVE.findKey;
@@ -1081,10 +1279,44 @@
     this.save();
   };
 
-  /* ---------------- モーダル: クリア ---------------- */
+  /* ---------------- モーダル: 到達パッドの画面（遷移 / クリア仮） ----------------
+   * P5 エリア接続: area1 は「エンディング画面の代わりに遷移画面」、area2 は仮のクリア画面。
+   * 正文は docs/notes.md「遷移画面」「エリア2クリア画面」。DOM は #ending-overlay を
+   * そのまま使い回す（見出し・本文・ボタンだけ差し替える）。 */
+  Progress.prototype.endingSpec = function () {
+    return ENDING_BY_MAP[this.game.mapId] || null;
+  };
+
   Progress.prototype._openEnding = function () {
+    var spec = this.endingSpec();
+    var d = this.dom;
+    if (spec) {
+      if (d.endingTitle) d.endingTitle.textContent = spec.title;
+      if (d.endingBody) d.endingBody.textContent = spec.body;
+      if (d.endingBtn) d.endingBtn.textContent = spec.button;
+    }
     this.modal = 'ending';
     this._syncModalDom();
+  };
+
+  /** 到達パッドの画面のボタン。area1＝次のエリアへ（保存＋再読込）／area2＝タイトルへ */
+  Progress.prototype.onEndingTap = function () {
+    if (this.modal !== 'ending') return false;
+    var spec = this.endingSpec();
+    if (!spec) return false;
+    if (spec.action === 'nextArea') {
+      this.endingAdvanced = spec.next;          /* 機械テストが読む（再読込を差し替えられる） */
+      if (this.reloadPage) { if (ESCAPE.setArea) ESCAPE.setArea(spec.next); this.reloadPage(); }
+      else if (ESCAPE.gotoArea) ESCAPE.gotoArea(spec.next);
+      return true;
+    }
+    /* タイトルへ（進行は記録済みのまま残す＝タイトルは `続きから` を出す） */
+    this.modal = null;
+    this._syncModalDom();
+    this.save();
+    if (ESCAPE.Menu && ESCAPE.Menu.backToTitle) ESCAPE.Menu.backToTitle();
+    else if (ESCAPE.Title && ESCAPE.Title.show) ESCAPE.Title.show();
+    return true;
   };
 
   Progress.prototype._closeModal = function () {
@@ -1206,8 +1438,12 @@
   /** 契約 §2「永続フラグには必ずリセット経路」。暫定UI（設定/タイトル前）から呼ぶ */
   Progress.prototype.eraseAllData = function () {
     try {
+      /* P5: 全エリアの保存 ＋ 現在エリアの記憶（escape.area）を消す */
+      var keys = ESCAPE.saveKeysAll ? ESCAPE.saveKeysAll() : [SAVE_KEY];
+      for (var i = 0; i < keys.length; i++) global.localStorage.removeItem(keys[i]);
       global.localStorage.removeItem(SAVE_KEY);
       global.localStorage.removeItem(SAVE_KEY_OLD);
+      if (ESCAPE.AREA_KEY) global.localStorage.removeItem(ESCAPE.AREA_KEY);
     } catch (e) { /* 無視 */ }
     if (ESCAPE.audio && ESCAPE.audio.eraseSettings) ESCAPE.audio.eraseSettings();
     this.game.reset();
@@ -1220,6 +1456,8 @@
        閉じるのは「紙の外側のタップ」と `閉じる` ボタンだけにし、紙の中は指を動かしてスクロールできるようにする。 */
     bindBackdropTap(this.dom.memoOverlay, document.getElementById('memo-paper'), function () { self.onCloseTap(); });
     bindTap(document.getElementById('memo-close'), function () { self.onCloseTap(); });
+    /* P5: 到達パッドの画面のボタン（`降りる` / `タイトルへ`）。背景タップでは進めない */
+    bindTap(document.getElementById('ending-btn'), function () { self.onEndingTap(); });
 
     /* 【P4.18 項目3 失効】プレイ画面の `データ全消去` の結線（window.confirm 経由）。
        消去はタイトルの `データを消す` → 既存モーダル様式の確認 → eraseAllData()（js/menu.js）。 */
@@ -1244,6 +1482,15 @@
   ESCAPE.ZONE_NAMES = ZONE_NAMES;
   ESCAPE.zoneLabel = zoneLabel;
   ESCAPE.PROGRESS_SAVE_KEY = SAVE_KEY;
+  /* P5: マップ別の表（機械テストと他モジュールが引く） */
+  ESCAPE.PROGRESS_NOTE_TEXTS_BY_MAP = NOTE_TEXTS_BY_MAP;
+  ESCAPE.PROGRESS_UI_TEXT_BY_MAP = UI_TEXT_BY_MAP;
+  ESCAPE.PROGRESS_OBJECTIVE_BY_MAP = OBJECTIVE_BY_MAP;
+  ESCAPE.PROGRESS_SIGN_TEXT_BY_MAP = SIGN_TEXT_BY_MAP;
+  ESCAPE.ZONE_NAMES_BY_MAP = ZONE_NAMES_BY_MAP;
+  ESCAPE.PROGRESS_DIARY_ID_BY_MAP = DIARY_ID_BY_MAP;
+  ESCAPE.PROGRESS_ENDING_BY_MAP = ENDING_BY_MAP;
+  ESCAPE.PROGRESS_MAP_ID = MAP_ID;
   /* P4.16 項目1: 自動表示する日記のid（機械テストが参照する） */
   ESCAPE.PROGRESS_DIARY_ID = DIARY_ID;
 
@@ -1265,6 +1512,8 @@
         saved: Object.keys(pr.saved), seen: Object.keys(pr.savePointsSeen),
         respawn: pr.respawnPoint(),
         /* P4.16 項目1: 日記の自動表示 */
+        mapId: pr.game.mapId, waterHinted: pr.waterHinted,
+        inWater: !!(pr.game.player.inWaterNow && pr.game.player.inWaterNow()),
         diaryRead: pr.diaryRead, inSpawnRoom: pr.inSpawnRoom(),
         diaryArmed: pr._diaryArmed, diaryAuto: pr.diaryAuto,
         spawnRoom: pr.spawnRoom ? pr.spawnRoom.id : null

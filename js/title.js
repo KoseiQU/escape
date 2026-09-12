@@ -5,8 +5,9 @@
  *   1 起動時に黒背景のタイトル `Escape` を最前面に出す（字体の崩しと滲みは index.html の CSS）。
  *   2 数秒に一度だけグリッチ（3〜6秒間隔で 0.2〜0.4秒。常時ではない）。
  *   3 タップ/クリック/キーで AudioContext を解錠 → 1秒の暗転 → ゲーム開始。
- *   4 セーブ（escape.save.area1.v2）がある時は `続きから`／`最初から` の2択。
- *     `最初から` はセーブを消して新規開始（確認なし＝契約）。
+ *   4 セーブ（escape.save.<mapId>.v2）がある時は `続きから`／`最初から` の2択。
+ *     `最初から` は**全エリアの**セーブを消し、`escape.area` を area1 に戻して新規開始
+ *     （確認なし＝契約）。`続きから` は `escape.area` のエリアをそのまま続ける。
  *   5 タイトル中はゲームの更新を止める（js/game.js stepFrame の頭でゲート）。
  *     ＝ step が回らないので声・鼓動・環境音は鳴らない（voice.js/audio.js は編集しない）。
  *
@@ -182,17 +183,35 @@
     }
     /* P4.18 項目4: ここから目覚めの演出へ入る。
        `続きから` は短い瞬き(1.2秒)、それ以外（`最初から`／セーブ無しの開始＝新規）は
-       約4秒の起床演出。捕獲後の復帰は現行の暗転のまま（こちらは通らない）。 */
+       約4秒の起床演出。捕獲後の復帰は現行の暗転のまま（こちらは通らない）。
+       P5 エリア接続: **エリア1以外は起床演出を出さない**（契約「エリア2は起床演出なし＝
+       『続きから』と同じ 1.2 秒の瞬き」）。目を覚ますのはエリア1の導入だけ。 */
     if (ESCAPE.Wake && ESCAPE.Wake.begin) {
-      ESCAPE.Wake.begin(this.mode === 'continue' ? 'blink' : 'new');
+      var home = ESCAPE.DEFAULT_AREA || 'area1';
+      var firstArea = !g || !g.mapId || g.mapId === home;
+      ESCAPE.Wake.begin((this.mode === 'continue' || !firstArea) ? 'blink' : 'new');
     }
   };
 
+  /** P5 エリア接続: `最初から` は **全エリアの保存**を消し、`escape.area` を area1 に戻す。
+   *  いま別のエリアを開いているなら、エリアはページ再読込でしか変わらないので読み直す。 */
   Title.prototype._eraseSave = function () {
-    try { global.localStorage.removeItem(ESCAPE.PROGRESS_SAVE_KEY || 'escape.save.area1.v2'); } catch (e) { /* 無視 */ }
+    try {
+      var keys = ESCAPE.saveKeysAll ? ESCAPE.saveKeysAll()
+        : [ESCAPE.PROGRESS_SAVE_KEY || 'escape.save.area1.v2'];
+      for (var i = 0; i < keys.length; i++) global.localStorage.removeItem(keys[i]);
+      global.localStorage.removeItem(ESCAPE.PROGRESS_SAVE_KEY || 'escape.save.area1.v2');
+    } catch (e) { /* 無視 */ }
+    var home = ESCAPE.DEFAULT_AREA || 'area1';
+    if (ESCAPE.setArea) ESCAPE.setArea(home);
     /* 音量などの設定は消さない（消すのは「データ全消去」ボタンの領分）。
        セーブを消したうえで進行・地図・ロープ・敵を製品初期状態へ戻す＝新規開始。 */
     var g = this.game || (ESCAPE && ESCAPE.game);
+    if (g && g.mapId && g.mapId !== home) {
+      if (ESCAPE.gotoArea) ESCAPE.gotoArea(home);
+      else if (ESCAPE.reloadPage) ESCAPE.reloadPage();
+      return;
+    }
     if (g && g.reset) g.reset();
   };
 

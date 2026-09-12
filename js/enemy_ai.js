@@ -1327,14 +1327,27 @@
     this.noiseEvents = 0;
     this.graces = 0;
     this.clearGrace();
-    var n = Math.max(1, ENEMY_TUNING.enemyCount | 0);
-    var plans = this._plan(game.map, n);
-    for (var i = 0; i < n; i++) {
-      var ai = new EnemyAI(game, { index: i, plan: plans[i], tuning: tuningFor(i) });
-      ai.manager = this;
-      this.list.push(ai);
+    /* P5: 体数はマップ meta の enemyCount（未指定＝ENEMY_TUNING.enemyCount＝2）。
+       0 のときは1体も作らない＝捕獲・声・鼓動・センサー後の「敵が来る」処理は
+       すべて「敵が居ない」経路に落ちる（例外は出ない）。 */
+    var n = AIManager.countFor(game.map);
+    this.territories = [];
+    if (n > 0) {
+      var plans = this._plan(game.map, n);
+      for (var i = 0; i < n; i++) {
+        var ai = new EnemyAI(game, { index: i, plan: plans[i], tuning: tuningFor(i) });
+        ai.manager = this;
+        this.list.push(ai);
+      }
     }
   }
+
+  /** そのマップで稼働する敵の体数。meta.enemyCount が最優先（0 を許す） */
+  AIManager.countFor = function (map) {
+    var mc = map && map.meta && map.meta.enemyCount;
+    if (typeof mc === 'number' && isFinite(mc)) return Math.max(0, mc | 0);
+    return Math.max(1, ENEMY_TUNING.enemyCount | 0);
+  };
 
   /** 個体差の定数（原型鎖で ENEMY_TUNING に落ちる） */
   function tuningFor(i) {
@@ -1351,6 +1364,13 @@
   };
 
   AIManager.prototype.reset = function () {
+    if (!this.list.length) {         /* P5: 敵0体のマップ。音イベントの窓口だけ初期化する */
+      this.territories = [];
+      this.noiseEvents = 0;
+      this.graces = 0;
+      this.clearGrace();
+      return;
+    }
     var plans = this._plan(this.game.map, this.list.length);
     for (var i = 0; i < this.list.length; i++) {
       this.list[i].plan = plans[i];
@@ -1479,6 +1499,7 @@
 
   ESCAPE.EnemyAI = EnemyAI;
   ESCAPE.AIManager = AIManager;
+  ESCAPE.AIManager = AIManager;
   ESCAPE.Territory = Territory;
   ESCAPE.ENEMY_TUNING = ENEMY_TUNING;
 
@@ -1584,9 +1605,12 @@
     /* 走っている時だけ音が出る。歩き・しゃがみは無音（契約） */
     if (p.mode !== 'run' || p.speed < 0.5) return;
     var tile = map.tileAt(col, row);
-    if (tile !== TILE.NOISE && tile !== TILE.SENSOR) return;
+    /* P5: 水路 TILE.WATER は「水たまりの音地盤」と同じ扱い（kind:'water'・同じ音量規則）。
+       ただし水路の上では走れない（js/player.js）ので、実際にはここまで来ない。 */
+    var isNoise = (tile === TILE.NOISE) || (TILE.WATER !== undefined && tile === TILE.WATER);
+    if (!isNoise && tile !== TILE.SENSOR) return;
     var c = map.cellCenter(col, row);
-    if (tile === TILE.NOISE) {
+    if (isNoise) {
       /* P4.11 項目3「罠は道の端で回避可能」: 音地盤（ガラス片・金属板・水たまり）も
          造形と発火をマス中央の60%幅に限る。両端 0.4m は素の床＝端を走っても鳴らない。
          幅の定数は js/traps.js の TRAP_TUNING.stepBand が正（造形も同じ値を読む）。 */
@@ -1608,6 +1632,8 @@
 
   /** 音地盤マスの材質（meta.noise の kind。既定は水たまり） */
   Stealth.prototype._noiseKindAt = function (col, row) {
+    var TILE = ESCAPE.TILE;
+    if (TILE.WATER !== undefined && this.map.tileAt(col, row) === TILE.WATER) return 'water';
     if (!this._noiseKinds) {
       this._noiseKinds = Object.create(null);
       var list = (this.map.meta && this.map.meta.noise) || [];
@@ -2177,7 +2203,9 @@
     /* P4.10: 敵は複数体（縄張り制）。game.ai は従来どおり先頭個体を指す＝
        game.js / 既存の検証フックはそのまま動き、全体の駆動は list[0] が回す。 */
     g.ais = new AIManager(g);
-    g.ai = g.ais.list[0];
+    /* P5: 敵0体のマップでは game.ai は null。既存の呼び出し側はすべて
+       `if (g.ai)` か `g.ais.list` 経由なので、ここが唯一の分岐になる。 */
+    g.ai = g.ais.list[0] || null;
     /* P4.6: 捕獲シネマティック。Stealth より先に作る（Stealth.reset が参照する） */
     if (ESCAPE.CaptureCinematic) g.cinematic = new ESCAPE.CaptureCinematic(g);
     g.stealth = new Stealth(g);
@@ -2188,6 +2216,7 @@
       ai: function () { return ESCAPE.game.ai; },
       stealth: function () { return ESCAPE.game.stealth; },
       info: function () {
+        if (!ESCAPE.game.ai) return { enemies: 0, stealth: ESCAPE.game.stealth.info() };
         var o = ESCAPE.game.ai.info();
         o.stealth = ESCAPE.game.stealth.info();
         var p = ESCAPE.game.player;

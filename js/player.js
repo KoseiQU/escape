@@ -9,6 +9,9 @@
   var SPEED_WALK = 2.6;    // m/s
   var SPEED_RUN = 4.6;     // m/s
   var SPEED_CROUCH = 1.25; // m/s
+  /* P5 エリア2: 水路（TILE.WATER）の上は遅くなり、走れない（DESIGN.md §4「P5」／
+     docs/notes.md「水の中では走れない」）。HUD の一度きりの案内は js/progress.js が出す。 */
+  var WATER_SPEED_MUL = 0.75;
   var RADIUS = 0.32;       // m（通路幅2mに対して余裕あり）
   var EYE_STAND = 1.62;    // m
   var EYE_CROUCH = 0.95;   // m
@@ -26,6 +29,8 @@
     this.eyeHeight = EYE_STAND;
     this.speed = 0;          // 直近フレームの実速度(m/s)
     this.mode = 'walk';      // 'walk' | 'run' | 'crouch'
+    /* P5: 直近フレームで水路の上に居たか（HUD案内・機械テストが読む） */
+    this.inWater = false;
     this.reset();
   }
 
@@ -40,6 +45,18 @@
     this.eyeHeight = EYE_STAND;
     this.speed = 0;
     this.mode = 'walk';
+    this.inWater = false;
+  };
+
+  /** そのマスが水路（TILE.WATER）か。タイルが無い構成（P4以前）では常に false */
+  Player.prototype.isWaterCell = function (col, row) {
+    var T = ESCAPE.TILE;
+    if (!T || T.WATER === undefined) return false;
+    return this.map.tileAt(col, row) === T.WATER;
+  };
+  /** いま立っているマスが水路か */
+  Player.prototype.inWaterNow = function () {
+    return this.isWaterCell(this.col(), this.row());
   };
 
   /** yaw から前方ベクトル（Three.jsの既定: yaw=0 で -Z を向く） */
@@ -118,10 +135,16 @@
     var mag = Math.hypot(mx, my);
     if (mag > 1) { mx /= mag; my /= mag; mag = 1; }
 
+    /* P5: 水路の上は走行不可＋速度 x0.75。走るトグル／Shift長押しの状態は変えず、
+       「効かない」だけにする（水から出れば元どおり走り出す）。 */
+    var wet = this.inWaterNow();
+    this.inWater = wet;
+
     var speed;
     if (this.crouching) { speed = SPEED_CROUCH; this.mode = 'crouch'; }
-    else if (cmd.run) { speed = SPEED_RUN; this.mode = 'run'; }
+    else if (cmd.run && !wet) { speed = SPEED_RUN; this.mode = 'run'; }
     else { speed = SPEED_WALK; this.mode = 'walk'; }
+    if (wet) speed *= WATER_SPEED_MUL;
 
     if (mag < 1e-6) { this.speed = 0; return; }
 
@@ -137,6 +160,7 @@
   Player.SPEED_WALK = SPEED_WALK;
   Player.SPEED_RUN = SPEED_RUN;
   Player.SPEED_CROUCH = SPEED_CROUCH;
+  Player.WATER_SPEED_MUL = WATER_SPEED_MUL;
   Player.EYE_STAND = EYE_STAND;
   Player.EYE_CROUCH = EYE_CROUCH;
   Player.RADIUS = RADIUS;
