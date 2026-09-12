@@ -36,7 +36,7 @@
       tint: { f: [0.92, 0.80, 0.65], w: [0.70, 0.60, 0.48] },
       ceilTint: [0.082, 0.070, 0.058], vault: 0.58, floorRep: 1,
       lamp: { r: 0.74, g: 0.88, b: 1.00 }, lampStyle: 'cage',
-      flicker: 0.04, off: -0.14, gain: 4.60, reach: 2.55,
+      flicker: 0.04, off: -0.06, gain: 3.90, reach: 2.55,
       minSpacing: 3, sideReach: 0.62, sideGain: 0.55
     },
     /* B 幹線区画 — 暗灰の切石ヴォールト。ナトリウム橙の灯が 8〜12 マス間隔で並ぶ */
