@@ -43,7 +43,10 @@
     /* 9 */ { key: 'CHECKPOINT', solid: false, walkable: true,  phase: 'P4' },
     /* 10*/ { key: 'CELL',       solid: false, walkable: true,  phase: 'P3' }, // 拘束室（牢）
     /* 11*/ { key: 'SENSOR',     solid: false, walkable: true,  phase: 'P3' },
-    /* 12*/ { key: 'EXIT',       solid: false, walkable: true,  phase: 'P4' }
+    /* 12*/ { key: 'EXIT',       solid: false, walkable: true,  phase: 'P4' },
+    /* P5 エリア2「下水道」。既存タイルの番号・挙動は不変（末尾に足すだけ） */
+    /* 13*/ { key: 'WATER',      solid: false, walkable: true,  phase: 'P5' }, // 水路（歩行可・速度x0.75・走行不可・足音は水）
+    /* 14*/ { key: 'DEEP',       solid: true,  walkable: false, phase: 'P5' }  // 深水（渡れない。見た目は水面＝P5c）
   ];
 
   var TILE = {};
@@ -302,6 +305,95 @@
   /* ---------------------------------------------------------------- */
 
   var registry = Object.create(null);
+
+  /* ================================================================
+   * P5 エリア接続（DESIGN.md §4「P5 エリア2『下水道』」の「エリア接続」）
+   *
+   * 現在のエリア = URL `?area=<id>` ＞ localStorage `escape.area` ＞ 既定 `area1`。
+   * 存在しない id は area1 に落とす。ページ再読込でしかエリアは変わらないので、
+   * 1ページの寿命の間は1回だけ解決して固定する（progress.js / game.js が同じ値を見る）。
+   * ============================================================== */
+  var AREA_IDS = ['area1', 'area2'];
+  var AREA_KEY = 'escape.area';
+  var DEFAULT_AREA = 'area1';
+
+  /** 純関数。search は '?area=area2' のようなクエリ文字列、stored は localStorage の値 */
+  function resolveArea(search, stored) {
+    var q = null;
+    if (typeof search === 'string' && search) {
+      var mm = /[?&]area=([^&#]*)/.exec(search);
+      if (mm) { try { q = decodeURIComponent(mm[1]); } catch (e) { q = mm[1]; } }
+    }
+    if (q && AREA_IDS.indexOf(q) >= 0) return q;
+    if (q) return DEFAULT_AREA;                       /* 不正な id は既定へ落とす */
+    if (stored && AREA_IDS.indexOf(stored) >= 0) return stored;
+    return DEFAULT_AREA;
+  }
+
+  var _area = null;
+  function currentArea() {
+    if (_area) return _area;
+    var stored = null;
+    try { stored = global.localStorage.getItem(AREA_KEY); } catch (e) { stored = null; }
+    var search = (global.location && global.location.search) || '';
+    _area = resolveArea(search, stored);
+    return _area;
+  }
+  /** 次のページ読込で開くエリアを決める（遷移画面・タイトルの「最初から」から呼ぶ） */
+  function setArea(id) {
+    try {
+      if (id) global.localStorage.setItem(AREA_KEY, id);
+      else global.localStorage.removeItem(AREA_KEY);
+    } catch (e) { /* private モード等は無視 */ }
+    return id;
+  }
+  /** マップ別のセーブキー。area1 は従来と同じ 'escape.save.area1.v2'（互換） */
+  function saveKeyOf(mapId) { return 'escape.save.' + (mapId || DEFAULT_AREA) + '.v2'; }
+
+  ESCAPE.AREA_IDS = AREA_IDS;
+  ESCAPE.AREA_KEY = AREA_KEY;
+  ESCAPE.DEFAULT_AREA = DEFAULT_AREA;
+  ESCAPE.resolveArea = resolveArea;
+  ESCAPE.currentArea = currentArea;
+  ESCAPE.setArea = setArea;
+  ESCAPE.saveKeyOf = saveKeyOf;
+  /** ページ再読込（エリアはこれでしか変わらない）。機械テストは差し替えられる */
+  ESCAPE.reloadPage = function () {
+    try { global.location.reload(); } catch (e) { /* 無視 */ }
+  };
+  /** URL から `?area=` を取り除いた同じページのアドレス（`escape.area` を効かせるため） */
+  function urlWithoutArea(href) {
+    var s2 = String(href || '');
+    var hash = '', hi = s2.indexOf('#');
+    if (hi >= 0) { hash = s2.slice(hi); s2 = s2.slice(0, hi); }
+    var qi = s2.indexOf('?');
+    if (qi >= 0) {
+      var base = s2.slice(0, qi);
+      var parts = s2.slice(qi + 1).split('&'), keep = [];
+      for (var i = 0; i < parts.length; i++) {
+        if (parts[i] && parts[i].split('=')[0] !== 'area') keep.push(parts[i]);
+      }
+      s2 = base + (keep.length ? ('?' + keep.join('&')) : '');
+    }
+    return s2 + hash;
+  }
+  ESCAPE.urlWithoutArea = urlWithoutArea;
+  /** 指定のエリアでページを開き直す（保存 → `?area=` を落として再読込）。
+   *  `?area=` を残したまま reload すると、そのクエリが `escape.area` より強いので戻ってしまう。 */
+  ESCAPE.gotoArea = function (id) {
+    setArea(id);
+    try {
+      var want = urlWithoutArea(global.location.href);
+      if (want !== global.location.href) { global.location.replace(want); return true; }
+    } catch (e) { /* 無視 */ }
+    ESCAPE.reloadPage();
+    return true;
+  };
+  ESCAPE.saveKeysAll = function () {
+    var out = [];
+    for (var i = 0; i < AREA_IDS.length; i++) out.push(saveKeyOf(AREA_IDS[i]));
+    return out;
+  };
 
   ESCAPE.TILE = TILE;
   ESCAPE.TILE_DEFS = TILE_DEFS;
