@@ -129,6 +129,54 @@
   };
   var DEFAULT_TINT = { f: [0.92, 0.93, 0.92], w: [0.96, 0.97, 0.97] };
 
+  /* ================================================================
+   * P5c: 区画の景観をマップのデータで差し替える（契約 §4 P5「zoneStyles の形」）
+   *   map.meta.zoneStyles があれば ZONE_TEX / ZONE_TINT / ZONE_LAMP /
+   *   ZONE_FLICKER / ZONE_OFF / ZONE_GAIN の代わりに使う。
+   *   map.meta.regionTints があれば REGION_TINT の代わりに使う。
+   *   **無ければ上の表をそのまま使う**＝ area1 の見た目は1ピクセルも変わらない。
+   * ============================================================== */
+  var ZONE_KEYS = ['A', 'B', 'C', 'D', 'E', 'F'];
+  /** 1区画ぶんの景観を正規化する（欠けた項目は既存の表で埋める） */
+  function normZoneStyle(z, s) {
+    var base = {
+      ceil: 'ceil',
+      tex: ZONE_TEX[z] || DEFAULT_TEX,
+      tint: ZONE_TINT[z] || DEFAULT_TINT,
+      lamp: ZONE_LAMP[z] || LAMP_COLORS[0],
+      flicker: ZONE_FLICKER[z] || 0,
+      off: ZONE_OFF[z] || 0,
+      gain: (ZONE_GAIN[z] === undefined) ? 1 : ZONE_GAIN[z],
+      reach: 1
+    };
+    if (!s) return base;
+    var tex = base.tex;
+    if (s.floor || s.walls) {
+      tex = { floor: s.floor || base.tex.floor, walls: s.walls || base.tex.walls };
+    }
+    return {
+      ceil: s.ceil || base.ceil,
+      tex: tex,
+      tint: s.tint || base.tint,
+      lamp: s.lamp || base.lamp,
+      flicker: (s.flicker === undefined) ? base.flicker : s.flicker,
+      off: (s.off === undefined) ? base.off : s.off,
+      gain: (s.gain === undefined) ? base.gain : s.gain,
+      /* 灯具の到達半径の倍率。下水道は器具が遠いので広く投げる（既定 1＝area1 不変） */
+      reach: (s.reach === undefined) ? base.reach : s.reach
+    };
+  }
+  /** マップ1枚ぶんの景観表（World の生成時に1回だけ作る） */
+  function buildStyles(meta) {
+    var zs = (meta && meta.zoneStyles) || null;
+    var out = Object.create(null);
+    for (var i = 0; i < ZONE_KEYS.length; i++) {
+      var z = ZONE_KEYS[i];
+      out[z] = normZoneStyle(z, zs ? zs[z] : null);
+    }
+    return out;
+  }
+
   /* ---- UVの向き替え（同じテクスチャの反復が目立たないようにする） ---- */
   /** 床・天井用: 90度単位の回転＋反転（8通り） */
   function uvVariant(seed) {
@@ -217,7 +265,14 @@
   /* 大面＝Y で PBR・X でライトマップを張る素材キー */
   var BIG_TEX = {
     floor: 1, floorTile: 1, floorWet: 1, floorMetal: 1, ceil: 1,
-    wall: 1, wall2: 1, wall3: 1, wallPaint: 1, wallMetal: 1
+    wall: 1, wall2: 1, wall3: 1, wallPaint: 1, wallMetal: 1,
+    /* P5c エリア2「下水道」の大面（素材は js/textures.js / js/render_quality.js の P5b-B 製） */
+    wallBrick: 1, wallStone: 1, wallConcreteWet: 1,
+    floorStoneWet: 1, floorBrick: 1, floorMud: 1,
+    /* 水底も大面（壁床と同じ明るさ系統に乗せる）。水面は専用材質なので別扱い */
+    waterBed: 1,
+    /* 水面は RQ.waterMaterial（法線2層）。bakedLight 属性を持たせるためここに入れる */
+    sewerWater: 1
   };
   /**
    * shade() が「アルベド」と「焼き込み光」を分けて渡すための一時領域。
@@ -462,6 +517,11 @@
    * ============================================================== */
   function World(map) {
     this.map = map;
+    /* P5c: 区画の景観（zoneStyles / regionTints）。無ければ既存の表＝area1 は不変 */
+    this.styles = buildStyles(map.meta);
+    this.regionTints = (map.meta && map.meta.regionTints) || REGION_TINT;
+    /* 環境光の倍率（マップ別。既定 1＝area1 は不変）。下水道は器具が遠いので底を少し上げる */
+    this._ambK = (map.meta && map.meta.ambientScale) || 1;
     this.group = new THREE.Group();
     this.disposables = [];
     this.flickers = [];
@@ -634,13 +694,13 @@
           state = 'off';                                /* 闇だまり */
         } else {
           var v = bandNoise(c, r);
-          var zz = this._zoneAt(c, r);
-          var offL = OFF_LEVEL + (ZONE_OFF[zz] || 0);
-          var fl = offL + (FLICKER_LEVEL - OFF_LEVEL) + (ZONE_FLICKER[zz] || 0);
+          var st0 = this._style(this._zoneAt(c, r));
+          var offL = OFF_LEVEL + st0.off;
+          var fl = offL + (FLICKER_LEVEL - OFF_LEVEL) + st0.flicker;
           state = (v < offL) ? 'off' : ((v < fl) ? 'flicker' : 'on');
         }
         /* 区画ごとの色温度（契約 §4「区画ごとの景観差」）。管の劣化で更に個体差をつける */
-        var zl = ZONE_LAMP[this._zoneAt(c, r)] || LAMP_COLORS[0];
+        var zl = this._style(this._zoneAt(c, r)).lamp;
         var wob = (hash2(c + 5, r + 3) < 0.20) ? -0.08 : ((hash2(c + 91, r + 7) < 0.12) ? 0.07 : 0.00);
         var lampCol = { r: Math.min(1, zl.r * (1 + wob)), g: Math.min(1, zl.g), b: Math.min(1, zl.b * (1 - wob)) };
         var fy = map.cellFloorY(c, r), ch = map.ceilHAt(c, r);
@@ -648,7 +708,9 @@
           kind: 'lamp',
           col: c, row: r, x: (c + 0.5) * T, z: (r + 0.5) * T,
           fy: fy, ch: ch, y: fy + ch - LIGHT_DROP,
-          state: state, color: lampCol, R: LIGHT_R, gain: LIGHT_GAIN * (ZONE_GAIN[this._zoneAt(c, r)] || 1),
+          state: state, color: lampCol,
+          R: LIGHT_R * this._style(this._zoneAt(c, r)).reach,
+          gain: LIGHT_GAIN * this._style(this._zoneAt(c, r)).gain,
           axis: ns ? 'z' : 'x', phase: hash2(c * 3 + 1, r * 7 + 2) * 6.283
         });
       }
@@ -664,8 +726,8 @@
       if (best >= 0 && bd <= 3) {
         list[best].state = ov[o].state;
         /* gain/reach は「ここだけは明るく」を作るための局所ブースト */
-        if (ov[o].gain) list[best].gain = LIGHT_GAIN * (ZONE_GAIN[this._zoneAt(list[best].col, list[best].row)] || 1) * ov[o].gain;
-        if (ov[o].reach) list[best].R = LIGHT_R * ov[o].reach;
+        if (ov[o].gain) list[best].gain = LIGHT_GAIN * this._style(this._zoneAt(list[best].col, list[best].row)).gain * ov[o].gain;
+        if (ov[o].reach) list[best].R = LIGHT_R * this._style(this._zoneAt(list[best].col, list[best].row)).reach * ov[o].reach;
       }
     }
     /* 非常灯: 闇だまりでも「向こうに何かある」ことだけは分かる微光。漆黒区画には置かない */
@@ -848,7 +910,7 @@
     if (onlyIdx === undefined) {
       /* 上向き面は床の反射を、下向き面は落ち込みを表現する */
       var up = (ny + 1) * 0.5;
-      var amb = 0.62 + 0.5 * up;
+      var amb = (0.62 + 0.5 * up) * this._ambK;
       r = AMBIENT.r * amb; g = AMBIENT.g * amb; b = AMBIENT.b * amb;
       if (X_AMB > 0) { r += X_AMB * 0.82; g += X_AMB * 0.94; b += X_AMB * 1.18; }
     } else {
@@ -905,11 +967,16 @@
     for (var b = 0; b < bs.length; b++) if (row >= bs[b].r0 && row <= bs[b].r1) return bs[b].zone;
     return 'A';
   };
-  World.prototype._zoneTex = function (col, row) { return ZONE_TEX[this._zoneAt(col, row)] || DEFAULT_TEX; };
+  /** その区画の景観（zoneStyles か既存の表）。必ず全項目が埋まっている */
+  World.prototype._style = function (zone) {
+    return this.styles[zone] || this.styles.A;
+  };
+  World.prototype._zoneTex = function (col, row) { return this._style(this._zoneAt(col, row)).tex; };
   World.prototype._tintAt = function (col, row) {
     var id = this._regionAt(col, row);
-    if (id && REGION_TINT[id]) return REGION_TINT[id];
-    return ZONE_TINT[this._zoneAt(col, row)] || DEFAULT_TINT;
+    var rt = this.regionTints;
+    if (id && rt[id]) return rt[id];
+    return this._style(this._zoneAt(col, row)).tint;
   };
 
   /* ---------------- 本体 ---------------- */
@@ -1002,12 +1069,16 @@
       return g2[texKey] || (g2[texKey] = new Builder(Y_ON && !!BIG_TEX[texKey]));
     }
     var B = {};
-    Object.defineProperty(B, 'floor', { get: function () { return bag((ZONE_TEX[curZone] || DEFAULT_TEX).floor); } });
-    Object.defineProperty(B, 'wall', { get: function () { return bag((ZONE_TEX[curZone] || DEFAULT_TEX).walls[0]); } });
-    Object.defineProperty(B, 'wall2', { get: function () { return bag((ZONE_TEX[curZone] || DEFAULT_TEX).walls[1]); } });
-    Object.defineProperty(B, 'wall3', { get: function () { return bag((ZONE_TEX[curZone] || DEFAULT_TEX).walls[2]); } });
-    ['ceil', 'litter', 'poster', 'sign', 'zonesign', 'metal', 'dark', 'lamp', 'screen',
+    Object.defineProperty(B, 'floor', { get: function () { return bag(self._style(curZone).tex.floor); } });
+    Object.defineProperty(B, 'wall', { get: function () { return bag(self._style(curZone).tex.walls[0]); } });
+    Object.defineProperty(B, 'wall2', { get: function () { return bag(self._style(curZone).tex.walls[1]); } });
+    Object.defineProperty(B, 'wall3', { get: function () { return bag(self._style(curZone).tex.walls[2]); } });
+    /* 天井も区画ごとに差し替えられる（既定 'ceil'＝area1 の白い天井） */
+    Object.defineProperty(B, 'ceil', { get: function () { return bag(self._style(curZone).ceil); } });
+    ['litter', 'poster', 'sign', 'zonesign', 'metal', 'dark', 'lamp', 'screen',
       'paper', 'sheet', 'fluid', 'board', 'monitors', 'water', 'glass', 'hatch', 'blood',
+      /* P5c エリア2「下水道」: 水面・水底・格子・ぬめり・配管・銘板（area2 版） */
+      'sewerWater', 'waterBed', 'grate', 'slime', 'pipe', 'zonesignA2',
       /* P4.16 レーンA: 大型掲示板の紙面と、増補した血痕3種。
          P4.17 項目1: 壁に貼る飛沫は床デカールと別の集合 'bloodSplatWall' にする
          （床デカールの「全三角形が上を向く」検査の対象は床だけ、という意図を保つため）。 */
@@ -1105,6 +1176,8 @@
       return -1;
     }
 
+    /* 床の散乱物の色味（マップ別。既定は area1 の白い書類のまま＝挙動不変） */
+    var litterTint = (map.meta && map.meta.litterTint) || [1.25, 1.25, 1.25];
     var furnAt = Object.create(null);
     var furn = (map.meta && map.meta.furniture) || [];
     for (var fu = 0; fu < furn.length; fu++) furnAt[furn[fu].col + ',' + furn[fu].row] = furn[fu];
@@ -1114,6 +1187,36 @@
      * 抜けて背景が見える。歩行可能マス＋什器マスを対象にする。 */
     var cells = map.walkableCells();
     for (var fz = 0; fz < furn.length; fz++) cells.push({ col: furn[fz].col, row: furn[fz].row });
+    /* P5c: 深水 V（solid・歩けない）は「穴」にしてはいけない。天井だけ張り、
+     * 床の代わりに水面を張る（_sewerWater）。水路 W は歩行可だが床の代わりに水面を張る。 */
+    var waterCells = [], deepCells = [];
+    if (map.meta && map.meta.water !== false) {
+      for (var wr = 0; wr < map.height; wr++) {
+        for (var wc = 0; wc < map.width; wc++) {
+          var wt0 = map.tileAt(wc, wr);
+          if (wt0 === TILE.WATER) waterCells.push({ col: wc, row: wr });
+          else if (wt0 === TILE.DEEP) deepCells.push({ col: wc, row: wr });
+        }
+      }
+    }
+    this._waterCells = waterCells; this._deepCells = deepCells;
+    for (var dz = 0; dz < deepCells.length; dz++) {
+      cells.push({ col: deepCells[dz].col, row: deepCells[dz].row, ceilOnly: true });
+    }
+    /* P5c: 沈殿槽などの「槽」（meta.basins）。実体マスを掘って水を張る＝歩けないまま
+     * 覗き込める窪み。壁は張らず（_wallFace を飛ばす）天井だけ張る。 */
+    var basinAt = this._basinAt = Object.create(null);
+    var basins = (map.meta && map.meta.basins) || [];
+    for (var bi = 0; bi < basins.length; bi++) {
+      var bs = basins[bi];
+      for (var br = bs.r0; br <= bs.r1; br++) {
+        for (var bc = bs.c0; bc <= bs.c1; bc++) {
+          if (!map.isSolid(bc, br)) continue;
+          basinAt[bc + ',' + br] = bs;
+          cells.push({ col: bc, row: br, ceilOnly: true });
+        }
+      }
+    }
     /* 床は floorYAt に、天井は floorYAt + そのマスの天井高に貼る（高低差対応） */
     function defFloor(x, z) { return map.floorYAt(x, z); }
     function defFloorLift(dy) { return function (x, z) { return map.floorYAt(x, z) + dy; }; }
@@ -1121,6 +1224,8 @@
 
     for (var i = 0; i < cells.length; i++) {
       var c = cells[i].col, r = cells[i].row;
+      /* P5c: 水面を張るマス（水路 W・深水 V）は床を張らない（水面が覆う＝面の重なりを作らない） */
+      var noFloor = !!cells[i].ceilOnly || (map.tileAt(c, r) === TILE.WATER);
       bset(c, r);
       var key = this._ownerOf(c, r);
       var tint = this._tintAt(c, r).f;
@@ -1135,12 +1240,14 @@
       if (atlas) {
         /* 系統X: 照明はテクセルへ移るので、頂点分割は接地AOのために細かくしなくてよい
          * （＝三角形が減る。床16→4・天井9→4 クアッド） */
-        var shF = floorShader(key, ft, [0, 1, 0]);
-        var rF = lmBegin(LMR, LMR);
-        B.floor.gridP([x0, 0, z1], [T, 0, 0], [0, 0, -T], XDIV, XDIV, 1, 1,
-          lmWhiteShade, uvF, defFloor);
-        lmEnd();
-        lmJob(rF, [x0, 0, z1], [T, 0, 0], [0, 0, -T], defFloor, shF);
+        if (!noFloor) {
+          var shF = floorShader(key, ft, [0, 1, 0]);
+          var rF = lmBegin(LMR, LMR);
+          B.floor.gridP([x0, 0, z1], [T, 0, 0], [0, 0, -T], XDIV, XDIV, 1, 1,
+            lmWhiteShade, uvF, defFloor);
+          lmEnd();
+          lmJob(rF, [x0, 0, z1], [T, 0, 0], [0, 0, -T], defFloor, shF);
+        }
         var shC = floorShader(key, ct, [0, -1, 0]);
         var dC = defCeil(ch);
         var rC = lmBegin(LMR, LMR);
@@ -1149,19 +1256,21 @@
         lmEnd();
         lmJob(rC, [x0, 0, z0], [T, 0, 0], [0, 0, T], dC, shC);
       } else {
-        B.floor.gridP([x0, 0, z1], [T, 0, 0], [0, 0, -T], FDIV, FDIV, 1, 1,
-          floorShader(key, ft, [0, 1, 0]), uvF, defFloor);
+        if (!noFloor) {
+          B.floor.gridP([x0, 0, z1], [T, 0, 0], [0, 0, -T], FDIV, FDIV, 1, 1,
+            floorShader(key, ft, [0, 1, 0]), uvF, defFloor);
+        }
         B.ceil.gridP([x0, 0, z0], [T, 0, 0], [0, 0, T], CDIV, CDIV, 1, 1,
           floorShader(key, ct, [0, -1, 0]), uvC, defCeil(ch));
       }
 
-      var ff = flickerNear(c, r);
+      var ff = noFloor ? -1 : flickerNear(c, r);
       if (ff >= 0 && litBy(c, r, ff)) {
         fbOf(ff).floor.gridP([x0, 0, z1], [T, 0, 0], [0, 0, -T], ADIV, ADIV, 1, 1,
           floorShader(key, ft, [0, 1, 0], ff), uvF, defFloorLift(0.008));
       }
       /* 床の散乱物（デカール・コリジョン無し）。契約 §3「通路マスの3割程度」 */
-      if (map.isWalkable(c, r)) {
+      if (map.isWalkable(c, r) && !noFloor) {
         var lh = hash2(c * 31 + 5, r * 17 + 9);
         if (lh < 0.36) {
           var lsz = 1.15 + lh * 2.0;
@@ -1171,7 +1280,7 @@
           var lu = (quad & 1) * 0.5, lv = (quad >> 1) * 0.5;
           B.litter.gridP([lx - lsz / 2, 0, lz + lsz / 2], [lsz, 0, 0], [0, 0, -lsz],
             [0, 1], [0, 1], 1, 1,
-            floorShader(key, [1.25, 1.25, 1.25], [0, 1, 0]),
+            floorShader(key, litterTint, [0, 1, 0]),
             function (ss, tt) { return [lu + ss * 0.5, lv + tt * 0.5]; },
             defFloorLift(0.02));
         }
@@ -1225,6 +1334,7 @@
     for (var rr = 0; rr < map.height; rr++) {
       for (var cc = 0; cc < map.width; cc++) {
         if (!map.isSolid(cc, rr)) continue;
+        if (basinAt[cc + ',' + rr]) continue;    /* 槽のマスは壁でなく水面（_sewerBasins） */
         bset(cc, rr);
         var t = map.tileAt(cc, rr);
         var furnHere = furnAt[cc + ',' + rr];
@@ -1246,6 +1356,12 @@
     }
     this.wallCells = wallCells;
 
+    /* ---- P5c: 水路・深水の水面（契約 §4 P5「水路マス W」「深水 V」）---- */
+    this._sewerWater(B, { shader: shader, planeShader: planeShader,
+      floorShader: floorShader, wallShader: wallShader });
+    this._sewerBasins(B, { shader: shader, planeShader: planeShader,
+      floorShader: floorShader, wallShader: wallShader });
+
     /* ---- 天井の設備（蛍光灯・配管・ケーブルラック） ---- */
     this._ceilingKit(B, flickBuilders, shader, planeShader);
 
@@ -1264,6 +1380,8 @@
     this._bigBoard(B, shader, planeShader);
     this._regionSigns(B, shader, planeShader);
     this._ceilKit(B, shader);
+    /* ---- P5c エリア2「下水道」の造形（meta.sewerKit のあるマップだけ） ---- */
+    this._sewerKit(B, shader, planeShader);
 
     /* ---- 系統X: ライトマップを焼く（面を全部積んでから一括） ---- */
     var lmTex = null;
@@ -1354,12 +1472,51 @@
       bigboard: opaque('bigboard'),
       bloodHand: decal('bloodHand'), bloodDrag: decal('bloodDrag'), bloodSplat: decal('bloodSplat'),
       /* P4.17 項目1: 壁の飛沫。絵は bloodSplat と同じで、集合（メッシュ名）だけ分ける */
-      bloodSplatWall: decal('bloodSplat')
+      bloodSplatWall: decal('bloodSplat'),
+      /* ---- P5c エリア2「下水道」 ---- */
+      wallBrick: opaque('wallBrick', null, 'wallBrick'),
+      wallStone: opaque('wallStone', null, 'wallStone'),
+      wallConcreteWet: opaque('wallConcreteWet', null, 'wallConcreteWet'),
+      floorStoneWet: opaque('floorStoneWet', null, 'floorStoneWet'),
+      floorBrick: opaque('floorBrick', null, 'floorBrick'),
+      floorMud: opaque('floorMud', null, 'floorMud'),
+      waterBed: opaque('floorMud', null, 'waterBed'),
+      /* 水面（sewerWater）は水のあるマップでだけ作る＝MATS の直後で条件付きに入れる */
+      /* 床の格子（下に暗い水面が見える）＝アルファ抜き。デカールでなく実体面なので
+         depthWrite は残し alphaTest で抜く（半透明の並び順に依存しない） */
+      grate: new THREE.MeshBasicMaterial({
+        map: TX.get('metalGrate'), vertexColors: true, fog: true,
+        transparent: false, alphaTest: 0.5, side: THREE.DoubleSide
+      }),
+      /* 水位線のぬめり帯（壁に貼る帯・床の縁） */
+      slime: decal('slime'),
+      pipe: opaque('pipeRust'),
+      /* 区画銘板の area2 版（表記は docs/notes.md「区画名」） */
+      zonesignA2: decal('zonesignA2')
     };
+    /* P5c: 水面。法線2層スクロール（fallback では静止した Basic に落ちる＝RQ 側の判断）。
+       水のあるマップでだけ作る（area1 では uniform の登録もしない＝挙動不変）。
+       退避素材（自動退避 setLightingMode('baked') の行き先）も同時に作る。 */
+    if ((this._waterCells && this._waterCells.length) || (this._deepCells && this._deepCells.length)) {
+      var RQW = ESCAPE.RQ;
+      MATS.sewerWater = (RQW && RQW.waterMaterial)
+        ? RQW.waterMaterial({ baked: true, vertexColors: true })
+        : opaque('waterSewer');
+      this._waterMat = MATS.sewerWater;
+      if (MATS.sewerWater.isMeshStandardMaterial) {
+        bigMats.dynamic.sewerWater = MATS.sewerWater;
+        bigMats.baked.sewerWater = RQW.patchBasic(new THREE.MeshBasicMaterial(
+          { map: TX.get('waterSewer'), vertexColors: true, fog: true }));
+      }
+    }
     /* 描画順（不透明 → デカール）。素材は全チャンクで共有する */
-    var order = ['floor', 'floorTile', 'floorWet', 'floorMetal', 'ceil',
-      'wall', 'wall2', 'wall3', 'wallPaint', 'wallMetal', 'metal', 'dark', 'lamp', 'poster',
+    var order = ['floor', 'floorTile', 'floorWet', 'floorMetal',
+      'wallBrick', 'wallStone', 'wallConcreteWet', 'floorStoneWet', 'floorBrick', 'floorMud',
+      'waterBed', 'sewerWater', 'ceil',
+      'wall', 'wall2', 'wall3', 'wallPaint', 'wallMetal', 'metal', 'dark', 'pipe', 'grate',
+      'lamp', 'poster',
       'screen', 'paper', 'sheet', 'fluid', 'board', 'monitors', 'bigboard', 'sign', 'zonesign',
+      'zonesignA2', 'slime',
       'hatch', 'blood', 'bloodDrag', 'bloodSplat', 'bloodSplatWall', 'bloodHand', 'litter', 'water', 'glass'];
     var matCache = Object.create(null);
     var tris = 0, groups = 0;
@@ -1381,7 +1538,7 @@
     }
     /* 未使用の素材は破棄しておく（テクスチャは Textures 側のキャッシュが持つ） */
     for (var mk in MATS) {
-      if (matCache[mk]) continue;
+      if (matCache[mk] || !MATS[mk]) continue;
       MATS[mk].dispose();
       if (bigMats.baked[mk]) { bigMats.baked[mk].dispose(); delete bigMats.baked[mk]; }
       delete bigMats.dynamic[mk];
@@ -1523,8 +1680,17 @@
       (function (e) {
         return !e || !e.dir || (FACE_VEC[e.dir][0] === dir.dc && FACE_VEC[e.dir][2] === dir.dr);
       })(this._gimmickAt(cc, rr))) {
-      /* P4.8 所長室の金庫（唯一の鍵の在り処）。厚い鋼扉＋ダイヤル＋レバー把手 */
-      this._safe(B, cc, rr, dir, shader, key);
+      /* P4.8 所長室の金庫（唯一の鍵の在り処）。厚い鋼扉＋ダイヤル＋レバー把手。
+         P5c エリア2 は金庫でなく「壁の掛け具に掛かった鉄のハンドル」（meta.safeKit）。 */
+      if (map.meta && map.meta.safeKit === 'handleRack') this._handleRack(B, cc, rr, dir, shader, key);
+      else this._safe(B, cc, rr, dir, shader, key);
+    } else if (tile === TILE.GIMMICK && this._gimmickRoleAt(cc, rr) === 'bulkhead' &&
+      map.meta && map.meta.gimmickKit === 'controlPanel' &&
+      (function (e) {
+        return !e || !e.dir || (FACE_VEC[e.dir][0] === dir.dc && FACE_VEC[e.dir][2] === dir.dr);
+      })(this._gimmickAt(cc, rr))) {
+      /* P5c エリア2: 制御室の操作盤（軸穴・計器・ランプ） */
+      this._controlPanel(B, cc, rr, dir, shader, key);
     } else if (tile === TILE.GIMMICK) {
       /* 仕掛け端末: 筐体＋発光画面＋レバー（P4.8 で失効した仕掛けの造形もこれで残る） */
       var by = 1.24;
@@ -1539,7 +1705,8 @@
     } else if (tile === TILE.LOCKER) {
       this._locker(B, cc, rr, dir, sh, shDim);
     } else if (tile === TILE.DOOR) {
-      this._bulkhead(B, cc, rr, dir, sh, shDim, H);
+      if (map.meta && map.meta.doorKit === 'sluice') this._sluiceGate(B, cc, rr, dir, shader, key, H);
+      else this._bulkhead(B, cc, rr, dir, sh, shDim, H);
     }
     setYBias(0);
   };
@@ -1656,7 +1823,9 @@
     }
     if (d4 >= 3 && !openHere) {
       var rid = this._regionAt(nc, nr);
-      var mk = (rid && REGION_MARK[rid]) || [0.7, 0.72, 0.7];
+      /* P5c: 交差点の色帯もマップ別に持てる（meta.regionMarks。無ければ area1 の表） */
+      var mkTbl = (map.meta && map.meta.regionMarks) || REGION_MARK;
+      var mk = (rid && mkTbl[rid]) || [0.7, 0.72, 0.7];
       var shMark = shader(key, [mk[0] * 1.6, mk[1] * 1.6, mk[2] * 1.6]);
       B.metal.box(fx - dir.n[0] * 0.012, 1.52, fz - dir.n[2] * 0.012,
         (along === 'z') ? 0.03 : T - 0.06, 0.17, (along === 'z') ? T - 0.06 : 0.03, 1.2, shMark);
@@ -1766,6 +1935,160 @@
     /* 蝶番 */
     put(B.dark, 0.105, -0.46, 0.36, 0.13, 0.16, 0.09, 2, shBody);
     put(B.dark, 0.105, -0.46, -0.36, 0.13, 0.16, 0.09, 2, shBody);
+  };
+
+  /** P5c エリア2: 水門の操作ハンドル置き場（役割 safe）。金庫でなく**壁の掛け具**。
+   *  取得後は空の掛け具だけが残る（ハンドルは別メッシュで visible を落とす）。
+   *  壁からの突出は 0.26m（掛け具 0.16 ＋ ハンドルの軸 0.10）。 */
+  World.prototype._handleRack = function (B, cc, rr, dir, shader, key) {
+    var T = this.map.tileSize;
+    var cx = cc * T + T / 2, cz = rr * T + T / 2;
+    var fx = cx + dir.n[0] * T * 0.5, fz = cz + dir.n[2] * T * 0.5;
+    var along = (dir.dc !== 0) ? 'z' : 'x';
+    var base = this.map.cellFloorY(cc + dir.dc, rr + dir.dr);
+    var y0 = base + 1.36;
+    var shPlate = shader(key, [0.92, 0.94, 0.96]);
+    var shHook = shader(key, [1.30, 1.26, 1.12]);
+    function P(off, a, b) {
+      return [fx + dir.n[0] * off + ((along === 'z') ? 0 : a), y0 + b,
+        fz + dir.n[2] * off + ((along === 'z') ? a : 0)];
+    }
+    function S(w, d) { return [(along === 'z') ? d : w, (along === 'z') ? w : d]; }
+    /* 背板（木の裏板＋琺瑯の札） */
+    var p0 = P(0.03, 0, -0.10), s0 = S(1.10, 0.06);
+    B.dark.box(p0[0], p0[1], p0[2], s0[0], 0.86, s0[1], 1.0, shPlate);
+    /* 掛け具（2本のフック） */
+    for (var k = 0; k < 2; k++) {
+      var a = (k - 0.5) * 0.46;
+      var pk = P(0.10, a, 0.14), sk = S(0.07, 0.14);
+      B.metal.box(pk[0], pk[1], pk[2], sk[0], 0.07, sk[1], 2, shHook);
+      var pk2 = P(0.16, a, 0.08), sk2 = S(0.07, 0.07);
+      B.metal.box(pk2[0], pk2[1], pk2[2], sk2[0], 0.18, sk2[1], 2, shHook);
+    }
+    /* 「ハンドル置き場」の札 */
+    var pl = P(0.05, 0, -0.44), sl = S(0.60, 0.02);
+    B.metal.box(pl[0], pl[1], pl[2], sl[0], 0.16, sl[1], 2, shHook);
+
+    /* 掛かっている鉄のハンドル（取得すると消える）＝別メッシュ */
+    var bld = new Builder(false);
+    var shH = this.propShader(cc + dir.dc, rr + dir.dr, [1.16, 1.06, 0.92], 0.80);
+    var hy = y0 + 0.16;
+    var hub = P(0.20, 0, 0.16);
+    /* 軸（壁に対して垂直に突き出す）＋4本スポーク＋輪 */
+    bld.tube([hub[0] - dir.n[0] * 0.10, hy, hub[2] - dir.n[2] * 0.10],
+      [hub[0] + dir.n[0] * 0.04, hy, hub[2] + dir.n[2] * 0.04], 0.06, 6, shH);
+    for (var q = 0; q < 8; q++) {
+      var ang = q / 8 * Math.PI * 2;
+      var ra = Math.cos(ang) * 0.30, rb = Math.sin(ang) * 0.30;
+      var pq = P(0.20, ra, 0.16 + rb), sq = S(0.11, 0.09);
+      bld.box(pq[0], pq[1], pq[2], sq[0], 0.11, sq[1], 2, shH);
+    }
+    var mesh = buildMesh(bld, this._track(new THREE.MeshBasicMaterial(
+      { map: ESCAPE.Textures.get('metal'), vertexColors: true, fog: true })));
+    this._track(mesh.geometry);
+    mesh.name = 'sewerHandle';
+    this.group.add(mesh);
+    this._handleMesh = mesh;
+  };
+
+  /** P5c エリア2: 制御室の操作盤（役割 bulkhead）。軸穴・計器・ランプ。突出 0.26m */
+  World.prototype._controlPanel = function (B, cc, rr, dir, shader, key) {
+    var T = this.map.tileSize;
+    var cx = cc * T + T / 2, cz = rr * T + T / 2;
+    var fx = cx + dir.n[0] * T * 0.5, fz = cz + dir.n[2] * T * 0.5;
+    var along = (dir.dc !== 0) ? 'z' : 'x';
+    var base = this.map.cellFloorY(cc + dir.dc, rr + dir.dr);
+    var y0 = base + 1.32;
+    var shBody = shader(key, [1.00, 1.04, 1.08]);
+    var shDark = shader(key, [0.42, 0.44, 0.46]);
+    var shTrim = shader(key, [1.90, 1.60, 0.90]);
+    var shLamp = shader(key, [2.40, 0.70, 0.40]);
+    function P(off, a, b) {
+      return [fx + dir.n[0] * off + ((along === 'z') ? 0 : a), y0 + b,
+        fz + dir.n[2] * off + ((along === 'z') ? a : 0)];
+    }
+    function S(w, d) { return [(along === 'z') ? d : w, (along === 'z') ? w : d]; }
+    function box(bld, off, a, b, w, h, d, uv, sh) {
+      var p = P(off, a, b), q = S(w, d);
+      bld.box(p[0], p[1], p[2], q[0], h, q[1], uv, sh);
+    }
+    /* 盤の筐体＋前面パネル */
+    box(B.dark, 0.03, 0, 0, 1.56, 1.34, 0.08, 0.9, shDark);
+    box(B.metal, 0.10, 0, 0, 1.38, 1.16, 0.08, 0.8, shBody);
+    /* 上段: 計器3つ（丸窓） */
+    for (var g = 0; g < 3; g++) {
+      var ga = (g - 1) * 0.42;
+      box(B.dark, 0.15, ga, 0.34, 0.30, 0.30, 0.04, 1.6, shDark);
+      box(B.screen, 0.175, ga, 0.34, 0.24, 0.24, 0.02, 2, shTrim);
+      box(B.dark, 0.19, ga, 0.34, 0.13, 0.02, 0.02, 2, shDark);
+    }
+    /* 中段: 軸穴（ハンドルを嵌める四角い穴）＝奥が暗い */
+    box(B.metal, 0.15, -0.30, -0.14, 0.40, 0.40, 0.05, 1.6, shBody);
+    box(B.dark, 0.13, -0.30, -0.14, 0.17, 0.17, 0.09, 2.4, shDark);
+    /* 中段: 表示灯2つ（赤・橙） */
+    box(B.lamp, 0.16, 0.22, -0.10, 0.13, 0.13, 0.03, 2, shLamp);
+    box(B.dark, 0.16, 0.44, -0.10, 0.13, 0.13, 0.03, 2, shDark);
+    /* 下段: レバー2本と銘板 */
+    for (var l = 0; l < 2; l++) {
+      box(B.metal, 0.16, 0.14 + l * 0.34, -0.42, 0.06, 0.24, 0.06, 2, shTrim);
+      box(B.dark, 0.13, 0.14 + l * 0.34, -0.52, 0.16, 0.07, 0.07, 2, shDark);
+    }
+    box(B.metal, 0.14, -0.36, -0.46, 0.50, 0.14, 0.02, 2, shTrim);
+    /* 盤へ降りる配管 */
+    var pt = P(0.06, 0.62, 0.60), pb = P(0.06, 0.62, 0.72);
+    B.pipe.tube([pt[0], pt[1], pt[2]], [pb[0], pb[1] + 1.2, pb[2]], 0.07, 5, shDark);
+  };
+
+  /** P5c エリア2: 鉄の昇降水門。枠・案内レール・鎖は静止、扉体だけ別メッシュで上がる */
+  World.prototype._sluiceGate = function (B, cc, rr, dir, shader, key, H) {
+    var map = this.map, T = map.tileSize;
+    if (H === undefined) H = map.wallHeight;
+    var cx = cc * T + T / 2, cz = rr * T + T / 2;
+    var fx = cx + dir.n[0] * T * 0.5, fz = cz + dir.n[2] * T * 0.5;
+    var along = (dir.dc !== 0) ? 'z' : 'x';
+    var base = map.cellFloorY(cc + dir.dc, rr + dir.dr);
+    var shBody = shader(key, [0.92, 0.94, 0.96]);
+    var shDark = shader(key, [0.46, 0.48, 0.50]);
+    function SX(w, d) { return (along === 'z') ? d : w; }
+    function SZ(w, d) { return (along === 'z') ? w : d; }
+    /* 開口の枠（上の梁と左右の案内レール） */
+    B.metal.box(cx, base + H - 0.22, cz, SX(T, 0.44), 0.44, SZ(T, 0.44), 0.9, shBody);
+    for (var k = 0; k < 2; k++) {
+      var a = (k ? 1 : -1) * (T * 0.5 - 0.14);
+      B.metal.box(cx + ((along === 'z') ? 0 : a), base + H / 2, cz + ((along === 'z') ? a : 0),
+        SX(0.28, 0.44), H, SZ(0.28, 0.44), 1.0, shBody);
+    }
+    /* 巻き上げの鎖2本（枠の上から扉体へ。扉体が上がっても長さは変えない＝簡略） */
+    for (var c2 = 0; c2 < 2; c2++) {
+      var ax = (c2 ? 1 : -1) * 0.46;
+      var px = cx + ((along === 'z') ? 0 : ax), pz = cz + ((along === 'z') ? ax : 0);
+      B.dark.tube([px, base + H - 0.40, pz], [px, base + 2.54, pz], 0.045, 4, shDark);
+    }
+
+    /* 扉体（鉄板＋リブ＋ボルト）＝別メッシュ。doorOpen で 3 秒かけて上がる */
+    var bld = new Builder(false);
+    var shG = this.propShader(cc + dir.dc, rr + dir.dr, [1.02, 0.98, 0.92], 0.62);
+    var GW = T - 0.34, GH = 2.46, GD = 0.26;
+    bld.box(cx, base + GH / 2, cz, SX(GW, GD), GH, SZ(GW, GD), 0.8, shG);
+    for (var rb = 0; rb < 4; rb++) {
+      bld.box(cx + dir.n[0] * 0.16, base + 0.34 + rb * 0.62, cz + dir.n[2] * 0.16,
+        SX(GW - 0.10, 0.08), 0.16, SZ(GW - 0.10, 0.08), 1.6, shG);
+    }
+    for (var bt = 0; bt < 8; bt++) {
+      var ba = ((bt & 1) ? 1 : -1) * (GW * 0.42);
+      bld.box(cx + dir.n[0] * 0.15 + ((along === 'z') ? 0 : ba),
+        base + 0.22 + (bt >> 1) * 0.66, cz + dir.n[2] * 0.15 + ((along === 'z') ? ba : 0),
+        0.10, 0.10, 0.10, 2, shG);
+    }
+    /* 下端の刃（水を切る縁） */
+    bld.box(cx + dir.n[0] * 0.02, base + 0.07, cz + dir.n[2] * 0.02,
+      SX(GW, GD + 0.08), 0.14, SZ(GW, GD + 0.08), 1.6, shG);
+    var mesh = buildMesh(bld, this._track(new THREE.MeshBasicMaterial(
+      { map: ESCAPE.Textures.get('metal'), vertexColors: true, fog: true })));
+    this._track(mesh.geometry);
+    mesh.name = 'sluiceGate';
+    this.group.add(mesh);
+    this._sluice = { mesh: mesh, lift: GH + 0.10, t: 0, dur: 3.0 };
   };
 
   World.prototype._locker = function (B, cc, rr, dir, sh, shDim) {
@@ -1894,6 +2217,94 @@
 
   /* ---------------- 天井まわり ---------------- */
 
+  /* ================================================================
+   * P5c 水（契約 §4「P5 エリア2『下水道』」＞「下水道の通路語彙」「見た目・細部」）
+   *   W 水路 … 歩行可。床の代わりに「少し下げた水面」を張る（膝まで浸かって歩く）。
+   *   V 深水 … solid。**穴にしない**。同じ高さの水面を張り、周りの壁面も張る
+   *             ＝「向こう岸が見えているのに行けない」を成立させる。
+   *   水面は RQ.waterMaterial（法線2層スクロール＋粗さ低め＋暗いアルベド）なので、
+   *   灯の下だけが光る。fallback では静止した Basic に落ちる（RQ 側の判断）。
+   * ============================================================== */
+  var WATER_SURF = 0.14;          /* 歩廊の床面から水面までの下がり(m) */
+  var WATER_LIP = 0.20;           /* 水面の下へ伸ばす帯(m)。低い視点でも面が抜けない */
+  var KERB_H = 0.14, KERB_W = 0.18;  /* 歩廊との境の縁石（突出は水路側＝通行の邪魔にしない） */
+  /* 水面のアルベド。暗くして「灯の下だけ光る」を作る。深水は更に落として深さを出す */
+  var WATER_TINT = { shallow: [1.05, 1.12, 1.04], deep: [0.62, 0.74, 0.70] };
+  var WDIV2 = [0, 0.5, 1];
+
+  /** 境界面の起点・辺（法線が (c,r) の側を向く）。_wallFace と同じ規約で組む */
+  function boundaryOU(T, c, r, dc, dr) {
+    var cc = c + dc, rr = r + dr;
+    var x0 = cc * T, x1 = x0 + T, z0 = rr * T, z1 = z0 + T;
+    if (dc === -1) return { o: [x1, 0, z1], u: [0, 0, -T], n: [1, 0, 0] };
+    if (dc === 1) return { o: [x0, 0, z0], u: [0, 0, T], n: [-1, 0, 0] };
+    if (dr === -1) return { o: [x0, 0, z1], u: [T, 0, 0], n: [0, 0, 1] };
+    return { o: [x1, 0, z0], u: [-T, 0, 0], n: [0, 0, -1] };
+  }
+
+  World.prototype._sewerWater = function (B, SH) {
+    var wcs = this._waterCells || [], dcs = this._deepCells || [];
+    if (!wcs.length && !dcs.length) return;
+    var map = this.map, T = map.tileSize, TILE = ESCAPE.TILE;
+    var bset = this._bset || function () {};
+    var D4 = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+    function isWaterTile(c, r) {
+      var t = map.tileAt(c, r);
+      return t === TILE.WATER || t === TILE.DEEP;
+    }
+    var all = [];
+    for (var a = 0; a < wcs.length; a++) all.push({ col: wcs[a].col, row: wcs[a].row, deep: false });
+    for (var b = 0; b < dcs.length; b++) all.push({ col: dcs[b].col, row: dcs[b].row, deep: true });
+
+    for (var i = 0; i < all.length; i++) {
+      var c = all[i].col, r = all[i].row, deep = all[i].deep;
+      bset(c, r);
+      setYBias(0);
+      var key = this._ownerOf(c, r);
+      var fy = map.cellFloorY(c, r);
+      var sy = fy - WATER_SURF;
+      var x0 = c * T, z0 = r * T;
+      var tint = deep ? WATER_TINT.deep : WATER_TINT.shallow;
+      /* 水面（タイルいっぱい＝隣と継ぎ目なく1枚に見える） */
+      B.sewerWater.gridP([x0, sy, z0 + T], [T, 0, 0], [0, 0, -T], WDIV2, WDIV2, 1, 1,
+        SH.floorShader(key, tint, [0, 1, 0]));
+      /* 水際（隣が水でない4方向） */
+      var wt = this._tintAt(c, r).w;
+      for (var d = 0; d < 4; d++) {
+        var dc = D4[d][0], dr = D4[d][1];
+        var nc = c + dc, nr = r + dr;
+        if (isWaterTile(nc, nr)) continue;
+        var solidN = map.isSolid(nc, nr);
+        var q = boundaryOU(T, c, r, dc, dr);
+        var top, tall = false;
+        if (solidN) {
+          /* 深水の向こうが壁: 壁面は誰も張らない（深水は歩行不可）＝ここで張らないと穴になる */
+          top = deep ? (fy + map.ceilHAt(c, r)) : fy;
+          tall = deep;
+        } else {
+          top = map.cellFloorY(nc, nr);
+        }
+        var by = sy - WATER_LIP;
+        var hh = top - by;
+        if (hh <= 0.001) continue;
+        var o = [q.o[0], by, q.o[2]];
+        var shW = tall
+          ? SH.wallShader(key, wt, q.n, undefined, by, hh)
+          : SH.planeShader(key, [wt[0] * 0.62, wt[1] * 0.66, wt[2] * 0.66], q.n);
+        B.wall.gridP(o, q.u, [0, hh, 0], [0, 1], tall ? [0, 0.5, 1] : [0, 1], 1, hh / 3, shW);
+        /* 歩廊との境の縁石（水路側へ 0.09m だけ出す＝コリジョンは水平2Dなので影響なし） */
+        if (!solidN) {
+          var kx = (c + 0.5) * T + dc * (T * 0.5 - KERB_W * 0.5);
+          var kz = (r + 0.5) * T + dr * (T * 0.5 - KERB_W * 0.5);
+          B.wall.box(kx, top + KERB_H * 0.5 - 0.02, kz,
+            dc ? KERB_W : T, KERB_H, dr ? KERB_W : T, 1.2,
+            SH.shader(key, [wt[0] * 0.92, wt[1] * 0.95, wt[2] * 0.95]));
+        }
+      }
+    }
+    setYBias(0);
+  };
+
   World.prototype._ceilingKit = function (B, flickBuilders, shader, planeShader) {
     var map = this.map, T = map.tileSize, H = map.wallHeight;
     var self = this;
@@ -1912,11 +2323,16 @@
       }
       /* glow は什器・造作そのものが発光体なので器具は描かない */
       if (f.kind === 'glow') continue;
-      var lw = 1.30, ld = 0.30;
+      var sewerLamp = (map.meta && map.meta.lampKit === 'sewer');
+      var lw = sewerLamp ? 0.46 : 1.30, ld = sewerLamp ? 0.46 : 0.30;
       var sx = (f.axis === 'z') ? ld : lw, sz = (f.axis === 'z') ? lw : ld;
       var topY = f.fy + f.ch;
       /* 器具本体 */
       B.dark.box(f.x, topY - 0.06, f.z, sx + 0.06, 0.12, sz + 0.06, 1.2, sh);
+      if (sewerLamp) {
+        /* P5c: ケージ付きの下水道灯（鋳鉄の笠＋金網）。天井から短い腕で下がる */
+        B.metal.box(f.x, topY - 0.22, f.z, 0.42, 0.24, 0.42, 1.4, sh);
+      }
       /* 発光面（下向き） */
       var lo, lu, lv;
       if (f.axis === 'z') { lo = [f.x - ld / 2, f.y, f.z - lw / 2]; lu = [ld, 0, 0]; lv = [0, 0, lw]; }
@@ -1924,6 +2340,15 @@
       var lit = LAMP_EMIT * ((f.state === 'on') ? 1.0 : ((f.state === 'flicker') ? FLICKER_BAKE : 0.06));
       var lampCol = [f.color.r * lit, f.color.g * lit, f.color.b * lit];
       B.lamp.grid(lo, lu, lv, 1, 1, 1, 1, function () { return lampCol; });
+      if (sewerLamp && f.state !== 'off') {
+        /* 金網（点いている器具だけ＝消灯帯の三角形を増やさない） */
+        var shCage = shader(key, [0.46, 0.46, 0.44]);
+        for (var cg = 0; cg < 3; cg++) {
+          var cgo = (cg - 1) * 0.16;
+          B.dark.box(f.x + cgo, f.y - 0.05, f.z, 0.028, 0.10, 0.44, 2, shCage);
+        }
+        B.dark.box(f.x, f.y - 0.10, f.z, 0.44, 0.028, 0.44, 2, shCage);
+      }
       if (f.state === 'flicker' && flickBuilders[f.fgroup]) {
         var addCol = [f.color.r * LAMP_EMIT * (1 - FLICKER_BAKE), f.color.g * LAMP_EMIT * (1 - FLICKER_BAKE),
           f.color.b * LAMP_EMIT * (1 - FLICKER_BAKE)];
@@ -2465,6 +2890,43 @@
             fz + m[2] * 0.115 + ((along === 'z') ? fo : 0),
             (along === 'z') ? 0.01 : 0.28, 0.66, (along === 'z') ? 0.28 : 0.01, 2, shD);
         }
+      } else if (k.type === 'ladder') {
+        /* P5c: 鋼の梯子（縦坑・沈殿槽）。壁からの突出 0.26m */
+        var shLad = shader(key, [1.10, 1.04, 0.92]);
+        var topL = (k.h === undefined ? map.ceilHAt(k.col, k.row) : k.h);
+        for (var lr = 0; lr < 2; lr++) {
+          var la = (lr ? 1 : -1) * 0.24;
+          var lx0 = fx + m[0] * 0.20 + ((along === 'z') ? 0 : la);
+          var lz0 = fz + m[2] * 0.20 + ((along === 'z') ? la : 0);
+          B.metal.box(lx0, topL / 2, lz0, 0.07, topL, 0.07, 1.2, shLad);
+        }
+        for (var lg = 0; lg * 0.32 < topL - 0.2; lg++) {
+          B.metal.box(fx + m[0] * 0.20, 0.22 + lg * 0.32, fz + m[2] * 0.20,
+            (along === 'z') ? 0.06 : 0.54, 0.055, (along === 'z') ? 0.54 : 0.06, 2, shLad);
+        }
+      } else if (k.type === 'beacon') {
+        /* P5c: 赤い回転灯（水門）。台座は静止、回る反射鏡だけ別メッシュ */
+        var shBc = shader(key, [0.70, 0.72, 0.74]);
+        var by0 = (k.y === undefined ? 2.30 : k.y);
+        B.metal.box(fx + m[0] * 0.10, by0 - 0.26, fz + m[2] * 0.10,
+          (along === 'z') ? 0.20 : 0.30, 0.16, (along === 'z') ? 0.30 : 0.20, 1.6, shBc);
+        B.dark.box(fx + m[0] * 0.16, by0 - 0.15, fz + m[2] * 0.16, 0.30, 0.06, 0.30, 1.6, shBc);
+        B.lamp.box(fx + m[0] * 0.16, by0, fz + m[2] * 0.16, 0.28, 0.24, 0.28, 1.4,
+          flat([1.30, 0.16, 0.10]));
+        B.dark.box(fx + m[0] * 0.16, by0 + 0.15, fz + m[2] * 0.16, 0.32, 0.06, 0.32, 1.6, shBc);
+        this._addBeacon(fx + m[0] * 0.16, map.cellFloorY(k.col, k.row) + by0, fz + m[2] * 0.16);
+      } else if (k.type === 'gaugeRow') {
+        /* P5c: 計器の列（制御室・ポンプ室）。突出 0.16m */
+        var shG2 = shader(key, [0.96, 0.98, 1.00]);
+        B.dark.box(fx + m[0] * 0.05, 1.66, fz + m[2] * 0.05,
+          (along === 'z') ? 0.10 : 1.64, 0.66, (along === 'z') ? 1.64 : 0.10, 1.2, shD);
+        for (var gg = 0; gg < 4; gg++) {
+          var go = (gg - 1.5) * 0.38;
+          B.metal.box(fx + m[0] * 0.11 + ((along === 'z') ? 0 : go), 1.66,
+            fz + m[2] * 0.11 + ((along === 'z') ? go : 0), 0.26, 0.26, 0.26, 1.8, shG2);
+          B.screen.box(fx + m[0] * 0.14 + ((along === 'z') ? 0 : go), 1.66,
+            fz + m[2] * 0.14 + ((along === 'z') ? go : 0), 0.19, 0.19, 0.19, 2, shG2);
+        }
       } else if (k.type === 'supplyShelf') {
         /* P4.7 保管庫の棚（B-2 / B-3）。突出0.30m以内＝通行の邪魔にならない */
         var shWood = shader(key, [0.86, 0.78, 0.62]);
@@ -2716,6 +3178,8 @@
     var map = this.map, T = map.tileSize;
     var list = (map.meta && map.meta.regionSigns) || [];
     var ORDER = { A: 0, B: 1, C: 2, D: 3, E: 4, F: 5 };
+    /* P5c: 銘板の表記はマップ別（area2 は『A　流入区画』）。既定は area1 の 'zonesign' */
+    var signKey = (map.meta && map.meta.zoneSignTex) || 'zonesign';
     for (var i = 0; i < list.length; i++) {
       var k = list[i];
       var idx = ORDER[k.zone];
@@ -2732,10 +3196,399 @@
       /* 金属の額縁 → 銘板面。銘板は迷路の錨なので明るめに焼く */
       B.metal.box(fx + m[0] * 0.018, 1.66, fz + m[2] * 0.018,
         (along === 'z') ? 0.04 : 1.02, 1.02, (along === 'z') ? 1.02 : 0.04, 1.1, shD);
-      facePanel(B.zonesign, fx + m[0] * 0.052, 1.66, fz + m[2] * 0.052, m, 0.92, 0.92,
+      facePanel(B[signKey], fx + m[0] * 0.052, 1.66, fz + m[2] * 0.052, m, 0.92, 0.92,
         planeShader(key, [1.55, 1.52, 1.44], m), atlasUVR(idx % 3, (idx / 3) | 0, 3, 2));
       setYBias(0);
     }
+  };
+
+  /* ================================================================
+   * P5c エリア2「下水道」の造形（契約 §4「P5 エリア2『下水道』」＞「造形の語彙」）
+   *   すべて meta.sewerKit があるマップでだけ動く＝ area1 は1ピクセルも変わらない。
+   *   **移動の障害にしない**: 壁付きの突出は 0.30m 以下、床置きは薄物だけ。
+   *   （プレイヤーの当たりはマス単位の水平2Dなので造形は当たりを持たないが、
+   *     「通れそうに見えて通れない」を作らないため見た目の側でも守る）
+   * ============================================================== */
+  var SEWER = {
+    pipeR: 0.25,            /* 大径配管の半径(m) ＝ Φ0.50 */
+    pipeSeg: 6,
+    pipeInset: 0.44,        /* 壁面からの芯の距離(m) */
+    pipeDrop: 0.46,         /* 天井からの下がり(m) */
+    valveEvery: 9,          /* バルブの間隔(マス) */
+    slimeY: 0.30, slimeH: 0.34,   /* 水位線のぬめり帯 */
+    timberEvery: 5,         /* 旧坑の支保工の間隔(マス) */
+    dripMax: 200            /* 滴りの粒子総数の上限（契約） */
+  };
+
+  /** 4近傍 */
+  var D4 = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+
+  World.prototype._sewerKit = function (B, shader, planeShader) {
+    var map = this.map, meta = map.meta || {}, T = map.tileSize, TILE = ESCAPE.TILE;
+    var kit = meta.sewerKit;
+    if (!kit) return;
+    var self = this;
+    var bset = this._bset || function () {};
+    function walk(c, r) { return map.isWalkable(c, r); }
+    function solid(c, r) { return map.isSolid(c, r); }
+    function isWater(c, r) { var t = map.tileAt(c, r); return t === TILE.WATER || t === TILE.DEEP; }
+    function nearWater(c, r) {
+      if (isWater(c, r)) return true;
+      for (var i = 0; i < 4; i++) if (isWater(c + D4[i][0], r + D4[i][1])) return true;
+      return false;
+    }
+    /** その位置が「部屋の中（2x2 が全部通れる）」か */
+    function openAt(c, r) {
+      for (var oc = c - 1; oc <= c; oc++) {
+        for (var orr = r - 1; orr <= r; orr++) {
+          if (walk(oc, orr) && walk(oc + 1, orr) && walk(oc, orr + 1) && walk(oc + 1, orr + 1)) return true;
+        }
+      }
+      return false;
+    }
+    var cells = map.walkableCells();
+    var dripSites = [];
+
+    /* ---- ① 天井隅の大径配管とバルブ（幹線に連続）---- */
+    if (kit.pipes !== false) {
+      var pch = kit.pipeCeil || 4.3;
+      for (var i = 0; i < cells.length; i++) {
+        var c = cells[i].col, r = cells[i].row;
+        var ch = map.ceilHAt(c, r);
+        if (ch < pch) continue;
+        var fy = map.cellFloorY(c, r);
+        var py = fy + ch - SEWER.pipeDrop;
+        var hx = walk(c - 1, r) && walk(c + 1, r);
+        var hz = walk(c, r - 1) && walk(c, r + 1);
+        bset(c, r);
+        setYBias(0);
+        var key = this._ownerOf(c, r);
+        var sh = shader(key, [0.86, 0.80, 0.74]);
+        var cx = c * T + T / 2, cz = r * T + T / 2;
+        if (hx && !hz) {
+          var sd = solid(c, r - 1) ? -1 : (solid(c, r + 1) ? 1 : 0);
+          if (!sd) continue;
+          var pz = cz + sd * (T * 0.5 - SEWER.pipeInset);
+          B.pipe.tube([c * T, py, pz], [(c + 1) * T, py, pz], SEWER.pipeR, SEWER.pipeSeg, sh);
+          if (c % SEWER.valveEvery === 1) this._sewerValve(B, cx, py, pz, 'x', sh, shader(key, [1.10, 0.72, 0.34]));
+          if ((c * 7 + r * 3) % 23 === 0) dripSites.push({ x: cx, z: pz, y: py - SEWER.pipeR, col: c, row: r });
+        } else if (hz && !hx) {
+          var sd2 = solid(c - 1, r) ? -1 : (solid(c + 1, r) ? 1 : 0);
+          if (!sd2) continue;
+          var px = cx + sd2 * (T * 0.5 - SEWER.pipeInset);
+          B.pipe.tube([px, py, r * T], [px, py, (r + 1) * T], SEWER.pipeR, SEWER.pipeSeg, sh);
+          if (r % SEWER.valveEvery === 1) this._sewerValve(B, px, py, cz, 'z', sh, shader(key, [1.10, 0.72, 0.34]));
+          if ((c * 3 + r * 7) % 23 === 0) dripSites.push({ x: px, z: cz, y: py - SEWER.pipeR, col: c, row: r });
+        }
+      }
+    }
+
+    /* ---- ② 壁の細部（ぬめり帯・鎖・石灰の垂れ・崩落煉瓦）---- */
+    var wc = this.wallCells || [];
+    for (var w = 0; w < wc.length; w++) {
+      var cc = wc[w].col, rr = wc[w].row;
+      var zoneW = this._zoneAt(cc, rr);
+      for (var d = 0; d < 4; d++) {
+        var nc = cc + D4[d][0], nr = rr + D4[d][1];
+        if (!walk(nc, nr)) continue;
+        bset(cc, rr);
+        var nfy = map.cellFloorY(nc, nr);
+        var nch = map.ceilHAt(nc, nr);
+        var q = boundaryOU(T, nc, nr, D4[d][0] * -1, D4[d][1] * -1);
+        var keyW = nc + ',' + nr;
+        var h = hash2(cc * 13 + nc * 5, rr * 11 + nr * 3);
+        /* ぬめり帯: 水路の際の壁は必ず、それ以外は時々（水位が下がった跡） */
+        var wet = nearWater(nc, nr);
+        if (kit.slime !== false && (wet || h < 0.30)) {
+          var sy0 = nfy + (wet ? SEWER.slimeY : SEWER.slimeY + 0.22);
+          var so = [q.o[0] + q.n[0] * 0.012, sy0, q.o[2] + q.n[2] * 0.012];
+          B.slime.gridP(so, q.u, [0, SEWER.slimeH, 0], [0, 1], [0, 1], 1, 1,
+            planeShader(keyW, wet ? [1.20, 1.18, 1.06] : [0.86, 0.88, 0.82], q.n));
+        }
+        /* 鎖・垂れたケーブル（壁から 0.12m。天井から腰の高さまで） */
+        if (kit.chains !== false && h > 0.82 && nch > 3.2) {
+          var ncnt = (h > 0.93) ? 2 : 1;
+          var shC = shader(keyW, [0.52, 0.52, 0.50]);
+          for (var k = 0; k < ncnt; k++) {
+            var t0 = 0.3 + k * 0.4;
+            var chx = q.o[0] + q.u[0] * t0 + q.n[0] * 0.12;
+            var chz = q.o[2] + q.u[2] * t0 + q.n[2] * 0.12;
+            var bot = nfy + 0.9 + (hash2(cc + k, rr + k) * 0.9);
+            B.dark.tube([chx, nfy + nch - 0.15, chz], [chx, bot, chz], 0.035, 4, shC);
+            B.dark.box(chx, bot - 0.06, chz, 0.09, 0.12, 0.09, 2, shC);
+          }
+        }
+        /* 石灰の垂れ（つらら状）＝天井際から 0.4m ほど */
+        if (kit.lime !== false && h > 0.62 && h < 0.70) {
+          var shL = shader(keyW, [1.26, 1.22, 1.10]);
+          for (var l = 0; l < 3; l++) {
+            var tl = 0.22 + l * 0.28;
+            var lx = q.o[0] + q.u[0] * tl + q.n[0] * 0.07;
+            var lz = q.o[2] + q.u[2] * tl + q.n[2] * 0.07;
+            var hl = 0.22 + hash2(cc * 3 + l, rr * 5 + l) * 0.34;
+            B.dark.tube([lx, nfy + nch - 0.02, lz], [lx, nfy + nch - hl, lz], 0.055, 4, shL);
+          }
+        }
+        /* 崩落した煉瓦の山（旧坑区画。壁の足元に積む＝突出 0.28m 以内） */
+        if (kit.rubble !== false && zoneW === 'E' && h < 0.26) {
+          var shR = shader(keyW, [0.92, 0.78, 0.64]);
+          for (var b2 = 0; b2 < 6; b2++) {
+            var hb = hash2(cc * 17 + b2 * 3, rr * 19 + b2);
+            var tb = 0.12 + hb * 0.76;
+            var bx = q.o[0] + q.u[0] * tb + q.n[0] * (0.06 + hb * 0.20);
+            var bz = q.o[2] + q.u[2] * tb + q.n[2] * (0.06 + hb * 0.20);
+            var by2 = nfy + 0.055 + (b2 % 3) * 0.10;
+            B.wall.box(bx, by2, bz, 0.22 + hb * 0.10, 0.10, 0.22 + hb * 0.10, 2.4, shR);
+          }
+        }
+      }
+    }
+
+    /* ---- ③ 旧坑の支保工・骨、床の格子、水面のゴミ ---- */
+    for (var j = 0; j < cells.length; j++) {
+      var c2 = cells[j].col, r2 = cells[j].row;
+      var zone2 = this._zoneAt(c2, r2);
+      var fy2 = map.cellFloorY(c2, r2);
+      var ch2 = map.ceilHAt(c2, r2);
+      var cx2 = c2 * T + T / 2, cz2 = r2 * T + T / 2;
+      /* 支保工（旧坑の幅1の坑道に一定間隔で。柱は壁付き・突出 0.22m） */
+      if (kit.timbers !== false && zone2 === 'E' && !openAt(c2, r2)) {
+        var nsT = solid(c2 - 1, r2) && solid(c2 + 1, r2);
+        var ewT = solid(c2, r2 - 1) && solid(c2, r2 + 1);
+        var hit = (nsT && r2 % SEWER.timberEvery === 2) || (ewT && !nsT && c2 % SEWER.timberEvery === 2);
+        if (hit) {
+          bset(c2, r2); setYBias(0);
+          var keyT = c2 + ',' + r2;
+          var shT = shader(keyT, [0.98, 0.80, 0.56]);
+          var topT = fy2 + Math.min(ch2 - 0.14, 2.26);
+          var ax = nsT ? 1 : 0;          /* 柱が左右（X）に立つ＝南北の坑道 */
+          var ox2 = ax ? (T * 0.5 - 0.13) : 0, oz2 = ax ? 0 : (T * 0.5 - 0.13);
+          B.pipe.box(cx2 - ox2, fy2 + (topT - fy2) / 2, cz2 - oz2,
+            ax ? 0.22 : 0.26, topT - fy2, ax ? 0.26 : 0.22, 1.1, shT);
+          B.pipe.box(cx2 + ox2, fy2 + (topT - fy2) / 2, cz2 + oz2,
+            ax ? 0.22 : 0.26, topT - fy2, ax ? 0.26 : 0.22, 1.1, shT);
+          B.pipe.box(cx2, topT - 0.10, cz2,
+            ax ? T : 0.26, 0.20, ax ? 0.26 : T, 1.1, shT);
+        }
+      }
+      /* 骨（旧坑の行き止まり）。床置きは薄物だけ */
+      if (kit.bones !== false && zone2 === 'E') {
+        var deg = 0;
+        for (var dd = 0; dd < 4; dd++) if (walk(c2 + D4[dd][0], r2 + D4[dd][1])) deg++;
+        if (deg === 1) {
+          bset(c2, r2); setYBias(0);
+          var shB2 = this.propShader(c2, r2, [1.32, 1.28, 1.14], 0.90);
+          B.sheet.box(cx2 - 0.22, fy2 + 0.07, cz2 + 0.10, 0.62, 0.13, 0.14, 1.6, shB2);
+          B.sheet.box(cx2 - 0.10, fy2 + 0.07, cz2 - 0.16, 0.56, 0.12, 0.13, 1.6, shB2);
+          B.sheet.box(cx2 + 0.30, fy2 + 0.11, cz2 + 0.02, 0.24, 0.22, 0.22, 1.8, shB2);
+          B.dark.box(cx2 + 0.30, fy2 + 0.13, cz2 - 0.09, 0.14, 0.08, 0.05, 2, shB2);
+        }
+      }
+      /* 水面の浮遊ゴミ・油膜（水路マスの上・デカール） */
+      if (kit.scum !== false && map.tileAt(c2, r2) === TILE.WATER) {
+        var hs = hash2(c2 * 29 + 7, r2 * 31 + 3);
+        if (hs < 0.34) {
+          bset(c2, r2); setYBias(0);
+          var sz2 = 0.9 + hs * 2.2;
+          var ox3 = (hash2(c2 + 5, r2 + 2) - 0.5) * 0.5, oz3 = (hash2(c2 + 2, r2 + 5) - 0.5) * 0.5;
+          B.litter.gridP([cx2 + ox3 - sz2 / 2, fy2 - WATER_SURF + 0.012, cz2 + oz3 + sz2 / 2],
+            [sz2, 0, 0], [0, 0, -sz2], [0, 1], [0, 1], 1, 1,
+            planeShader(c2 + ',' + r2, [0.30, 0.30, 0.26], [0, 1, 0]),
+            (function (u0, v0) {
+              return function (ss, tt) { return [u0 + ss * 0.5, v0 + tt * 0.5]; };
+            })(((hash2(c2 + 61, r2 + 13) * 2) | 0) * 0.5, ((hash2(c2 + 13, r2 + 61) * 2) | 0) * 0.5));
+        }
+      }
+    }
+
+    /* ---- ④ 床の格子（下に暗い水面）---- */
+    var grates = meta.grates || [];
+    for (var gi = 0; gi < grates.length; gi++) this._sewerGrate(B, grates[gi], shader, planeShader);
+
+    /* ---- ⑤ 滴り（落下する雫＋水面の波紋）と回転灯 ---- */
+    this._sewerFx = { drips: [], beacons: [] };
+    var sites = (meta.dripSites || []).concat(dripSites);
+    var want = Math.min(SEWER.dripMax, kit.drips === undefined ? 160 : kit.drips);
+    var step = Math.max(1, Math.floor(sites.length / Math.max(1, want)));
+    for (var si = 0, n2 = 0; si < sites.length && n2 < want; si += step, n2++) {
+      var st = sites[si];
+      var gy = map.cellFloorY(st.col, st.row);
+      this._sewerFx.drips.push({
+        x: st.x, z: st.z, y0: st.y, y1: gy + 0.02,
+        period: 1.5 + hash2(st.col * 7 + 1, st.row * 5 + 3) * 2.6,
+        phase: hash2(st.col + 3, st.row + 11)
+      });
+    }
+    this._buildDrips();
+    setYBias(0);
+  };
+
+  /** 大径配管のバルブ（車輪＋フランジ）。軸 'x' / 'z' */
+  World.prototype._sewerValve = function (B, x, y, z, axis, sh, shWheel) {
+    var ax = (axis === 'x');
+    B.pipe.box(x, y, z, ax ? 0.22 : 0.62, 0.62, ax ? 0.62 : 0.22, 1.4, sh);
+    /* 車輪: 上に立てた輪（8本のスポークで輪郭を作る＝面の穴が出ない箱組み） */
+    var wy = y + 0.44;
+    B.metal.tube([x, y + 0.14, z], [x, wy, z], 0.05, 5, shWheel);
+    for (var k = 0; k < 8; k++) {
+      var a = k / 8 * Math.PI * 2;
+      var dx = Math.cos(a) * 0.26, dz = Math.sin(a) * 0.26;
+      B.metal.box(x + (ax ? 0 : dx), wy + dz * (ax ? 0 : 1) + (ax ? dz : 0), z + (ax ? dx : 0),
+        0.09, 0.09, 0.09, 2, shWheel);
+    }
+  };
+
+  /** 床の格子（metalGrate・下に暗い水面が見える） */
+  World.prototype._sewerGrate = function (B, g, shader, planeShader) {
+    var map = this.map, T = map.tileSize;
+    if (this._bset) this._bset(g.col, g.row);
+    setYBias(0);
+    var fy = map.cellFloorY(g.col, g.row);
+    var cx = g.col * T + T / 2, cz = g.row * T + T / 2;
+    var key = this._ownerOf(g.col, g.row);
+    var W = 1.72, D = 0.52;
+    /* 下の暗い水（穴の底）。桝の側面4枚で穴を閉じる */
+    var shD = shader(key, [0.26, 0.30, 0.30]);
+    B.dark.box(cx, fy - D / 2, cz, W, D, W, 1.0, shD);
+    /* 格子面（アルファ抜き・床から 2cm 上） */
+    B.grate.gridP([cx - W / 2, fy + 0.02, cz + W / 2], [W, 0, 0], [0, 0, -W], [0, 1], [0, 1], 1, 1,
+      planeShader(key, [1.06, 1.06, 1.04], [0, 1, 0]));
+    /* 縁の鋼枠 */
+    var shF = shader(key, [0.88, 0.90, 0.90]);
+    for (var k = 0; k < 4; k++) {
+      var sx = (k < 2) ? W + 0.16 : 0.10, sz = (k < 2) ? 0.10 : W + 0.16;
+      var ox = (k < 2) ? 0 : ((k === 2) ? -(W / 2 + 0.05) : (W / 2 + 0.05));
+      var oz = (k < 2) ? ((k === 0) ? -(W / 2 + 0.05) : (W / 2 + 0.05)) : 0;
+      B.metal.box(cx + ox, fy + 0.03, cz + oz, sx, 0.08, sz, 1.6, shF);
+    }
+  };
+
+  /** 滴り（落下する雫）を InstancedMesh 1体にまとめる。総数は契約の 200 以下 */
+  World.prototype._buildDrips = function () {
+    var fx = this._sewerFx;
+    if (!fx || !fx.drips.length || typeof THREE.InstancedMesh !== 'function') return;
+    var geo = this._track(new THREE.BoxGeometry(0.035, 0.13, 0.035));
+    var mat = this._track(new THREE.MeshBasicMaterial({
+      color: 0x9fc4cc, fog: true, transparent: true, opacity: 0.72, depthWrite: false
+    }));
+    var mesh = new THREE.InstancedMesh(geo, mat, fx.drips.length);
+    mesh.name = 'sewerDrips';
+    mesh.frustumCulled = false;
+    this._dripMesh = mesh;
+    this.group.add(mesh);
+    this.stats.drips = fx.drips.length;
+  };
+
+  /** 滴り・回転灯・水門・ハンドルの更新（ゲーム内時刻駆動＝__pump でも同じ絵になる） */
+  World.prototype._updateSewerFx = function (t) {
+    /* 水門: doorOpen になったら 3 秒かけて上がる（上がりきったら戻らない） */
+    var sl = this._sluice;
+    if (sl) {
+      var pr = ESCAPE.game && ESCAPE.game.progress;
+      var wantOpen = this.sluiceForceOpen || !!(pr && pr.gimmick && pr.gimmick.doorOpen);
+      var dt = (this._sluiceT === undefined) ? 0 : (t - this._sluiceT);
+      this._sluiceT = t;
+      if (wantOpen && sl.t < sl.dur) sl.t = Math.min(sl.dur, sl.t + (dt > 0 && dt < 1 ? dt : 0));
+      var u0 = sl.t / sl.dur;
+      u0 = u0 * u0 * (3 - 2 * u0);                 /* ゆるやかに動き出して止まる */
+      sl.mesh.position.y = sl.lift * u0;
+    }
+    /* ハンドル: 取得したら掛け具から消える */
+    if (this._handleMesh) {
+      var pr2 = ESCAPE.game && ESCAPE.game.progress;
+      this._handleMesh.visible = !(pr2 && pr2.gimmick && pr2.gimmick.key);
+    }
+    var fx = this._sewerFx;
+    if (!fx) return;
+    var m = this._dripMesh;
+    if (m) {
+      var L = fx.drips, m4 = DRIP_M4;
+      for (var i = 0; i < L.length; i++) {
+        var d = L[i];
+        var u = ((t / d.period) + d.phase) % 1;
+        var y = d.y0 + (d.y1 - d.y0) * (u * u);   /* 自由落下＝二次で加速 */
+        m4.makeScale(1, 1, 1);
+        m4.setPosition(d.x, y, d.z);
+        m.setMatrixAt(i, m4);
+      }
+      m.instanceMatrix.needsUpdate = true;
+    }
+    for (var b = 0; b < fx.beacons.length; b++) {
+      var bc = fx.beacons[b];
+      bc.mesh.rotation.y = t * bc.speed;
+    }
+  };
+  var DRIP_M4 = new THREE.Matrix4();
+
+  /** 回転灯の回る反射鏡（別メッシュ・毎フレーム y 回転） */
+  World.prototype._addBeacon = function (x, y, z) {
+    if (!this._sewerFx) this._sewerFx = { drips: [], beacons: [] };
+    var bld = new Builder(false);
+    bld.box(x, y, z, 0.10, 0.20, 0.26, 2, flat([2.60, 0.42, 0.26]));
+    bld.box(x, y, z, 0.26, 0.20, 0.10, 2, flat([0.60, 0.10, 0.08]));
+    var mesh = buildMesh(bld, this._track(new THREE.MeshBasicMaterial(
+      { map: ESCAPE.Textures.get('lamp'), vertexColors: true, fog: true })));
+    this._track(mesh.geometry);
+    mesh.name = 'sewerBeacon';
+    /* 回転の中心をランプの位置に置く（頂点は原点周りに寄せ直す） */
+    mesh.geometry.translate(-x, -y, -z);
+    mesh.position.set(x, y, z);
+    this.group.add(mesh);
+    this._sewerFx.beacons.push({ mesh: mesh, speed: 2.2 });
+  };
+
+  /* P5c「槽」（沈殿槽・沈砂池）。実体マスを掘り下げて水を張り、縁に笠石を回す。
+   * 歩けないまま覗き込める＝正文「槽の水は覗くな」の絵をそのまま作る。 */
+  var BASIN_DEPTH = 0.85;     /* 縁の天端から水面までの深さ(m) */
+  var BASIN_PARA = 0.52;      /* 笠石の立ち上がり(m) */
+  var BASIN_COPE = 0.34;      /* 笠石の天端の幅(m) */
+
+  World.prototype._sewerBasins = function (B, SH) {
+    var at = this._basinAt;
+    if (!at) return;
+    var keys = Object.keys(at);
+    if (!keys.length) return;
+    var map = this.map, T = map.tileSize;
+    var bset = this._bset || function () {};
+    for (var i = 0; i < keys.length; i++) {
+      var cr = keys[i].split(','), c = +cr[0], r = +cr[1];
+      var bs = at[keys[i]];
+      var depth = (bs.depth === undefined) ? BASIN_DEPTH : bs.depth;
+      var tint = bs.rgb || [0.52, 0.86, 0.62];
+      bset(c, r); setYBias(0);
+      var key = this._ownerOf(c, r);
+      var fy = map.cellFloorY(c, r);
+      var sy = fy - depth;
+      var top = fy + BASIN_PARA;
+      var x0 = c * T, z0 = r * T;
+      /* 水面（緑に光る） */
+      B.sewerWater.gridP([x0, sy, z0 + T], [T, 0, 0], [0, 0, -T], WDIV2, WDIV2, 1, 1,
+        SH.floorShader(key, tint, [0, 1, 0]));
+      var wt = this._tintAt(c, r).w;
+      for (var d = 0; d < 4; d++) {
+        var dc = D4[d][0], dr = D4[d][1];
+        var nc = c + dc, nr = r + dr;
+        if (at[nc + ',' + nr]) continue;               /* 槽の中どうしは continue */
+        var open = map.isWalkable(nc, nr);
+        var q = boundaryOU(T, c, r, dc, dr);
+        /* 内壁（笠石の幅だけ内側へ寄せる＝外面と同一平面にしない） */
+        var ix = -q.n[0] * BASIN_COPE, iz = -q.n[2] * BASIN_COPE;
+        B.wall.gridP([q.o[0] + ix, sy - 0.18, q.o[2] + iz], q.u, [0, top - sy + 0.18, 0],
+          [0, 1], [0, 0.5, 1], 1, (top - sy) / 3,
+          SH.planeShader(key, [wt[0] * 0.66, wt[1] * 0.70, wt[2] * 0.70], q.n));
+        if (!open) continue;
+        /* 外面（通路側から見える笠石の立ち上がり） */
+        var on = [-q.n[0], 0, -q.n[2]];
+        B.wall.gridP([q.o[0] + q.u[0], fy, q.o[2] + q.u[2]], [-q.u[0], 0, -q.u[2]],
+          [0, top - fy, 0], [0, 1], [0, 1], 1, (top - fy) / 3,
+          SH.planeShader(key, [wt[0] * 0.98, wt[1] * 1.00, wt[2] * 1.00], on));
+        /* 天端（笠石の上面） */
+        var cw = BASIN_COPE;
+        B.wall.gridP([q.o[0], top, q.o[2]], q.u, [-q.n[0] * cw, 0, -q.n[2] * cw],
+          [0, 1], [0, 1], 1, 1, SH.planeShader(key, [wt[0] * 1.10, wt[1] * 1.12, wt[2] * 1.12], [0, 1, 0]));
+      }
+    }
+    setYBias(0);
   };
 
   /** meta.ceilKit の描画（手術灯など天井付け） */
@@ -2751,7 +3604,22 @@
       var ch = map.ceilHAt(k.col, k.row);
       var sh = shader(key, [0.94, 0.95, 0.96]);
       var shD = shader(key, [0.58, 0.60, 0.62]);
-      if (k.type === 'surgicalLamp') {
+      if (k.type === 'shaftGrate') {
+        /* P5c: 縦坑の天端の格子（上から青白い光が落ちてくる）。
+           格子の上に自発光面を置く＝「地上の灯り」。滴りはここから落ちる。 */
+        var gy = ch - 0.06;
+        B.lamp.grid([cx - 0.92, gy + 0.10, cz + 0.92], [1.84, 0, 0], [0, 0, -1.84], 1, 1, 1, 1,
+          flat([0.92, 0.98, 1.10]));
+        B.grate.gridP([cx - 0.92, gy, cz + 0.92], [1.84, 0, 0], [0, 0, -1.84], [0, 1], [0, 1], 1, 1,
+          flat([0.38, 0.42, 0.48]));
+        /* 桁（枠）＝天井の穴の縁 */
+        for (var fr = 0; fr < 4; fr++) {
+          var sxf = (fr < 2) ? 2.10 : 0.14, szf = (fr < 2) ? 0.14 : 2.10;
+          var oxf = (fr < 2) ? 0 : ((fr === 2) ? -0.98 : 0.98);
+          var ozf = (fr < 2) ? ((fr === 0) ? -0.98 : 0.98) : 0;
+          B.metal.box(cx + oxf, gy - 0.05, cz + ozf, sxf, 0.16, szf, 1.4, shD);
+        }
+      } else if (k.type === 'surgicalLamp') {
         /* 天井から降りるアーム＋皿状の手術灯（下面が自発光） */
         B.dark.box(cx, ch - 0.09, cz, 0.42, 0.18, 0.42, 1.2, shD);
         B.dark.tube([cx, ch - 0.18, cz], [cx, 2.62, cz], 0.055, 5, shD);
@@ -2908,6 +3776,24 @@
           if (h < 0.5) B.dark.tube([cx + ox, lvl + 0.03, cz + oz], [cx + ox, lvl + 0.27, cz + oz], 0.09, 6, sh);
           else B.sheet.box(cx + ox, lvl + 0.15, cz + oz, 0.28, 0.24, 0.22, 2, shCard);
         }
+        break;
+      }
+      case 'sewerPump': {
+        /* P5c: 巨大ポンプ（渦巻ポンプの胴＋電動機＋吐出管）。什器マスの中に収める */
+        var pw = L(1.66, 1.10), pd = L(1.10, 1.66);
+        B.metal.box(cx, 0.62, cz, pw, 1.14, pd, 0.7, sh);
+        B.dark.box(cx, 0.08, cz, pw + 0.10, 0.16, pd + 0.10, 1.2, shD);
+        /* 渦巻の胴（横に寝た太い筒） */
+        var pa = ew ? [1, 0, 0] : [0, 0, 1];
+        B.metal.tube([cx - pa[0] * 0.52, 1.32, cz - pa[2] * 0.52],
+          [cx + pa[0] * 0.52, 1.32, cz + pa[2] * 0.52], 0.52, 10, sh);
+        /* 電動機 */
+        B.dark.box(cx + (ew ? 0 : 0.42), 1.98, cz + (ew ? 0.42 : 0), 0.62, 0.62, 0.62, 1.2, shD);
+        /* 吐出管（天井へ抜ける） */
+        B.metal.tube([cx - pa[0] * 0.46, 1.84, cz - pa[2] * 0.46],
+          [cx - pa[0] * 0.46, 2.90, cz - pa[2] * 0.46], 0.21, 8, sh);
+        /* 銘板と点検窓 */
+        B.screen.box(cx + (ew ? 0.30 : 0), 1.02, cz + (ew ? 0 : 0.30), 0.30, 0.20, 0.30, 2, sh);
         break;
       }
       case 'machine': {
@@ -3268,6 +4154,15 @@
   };
 
   World.prototype.update = function (t) {
+    /* P5c: 動く素材（水面の法線2層スクロール）。dt はゲーム内時刻の差分で取る
+       ＝ __pump 駆動のスクショでも同じ絵になる。fallback では animate が静止を選ぶ。 */
+    var TXA = ESCAPE.Textures;
+    if (TXA && TXA.animate) {
+      var adt = (this._lastT === undefined) ? 0 : (t - this._lastT);
+      this._lastT = t;
+      if (adt > 0 && adt < 1) TXA.animate(adt);
+    }
+    this._updateSewerFx(t);
     for (var i = 0; i < this.flickers.length; i++) {
       var e = this.flickers[i];
       var lvl = flickerLevel(e.pattern, e.phase, t) * (this.flickScale || 1);
@@ -3288,6 +4183,12 @@
   var SENSOR_TMP_COLOR = new THREE.Color();
 
   World.prototype.dispose = function () {
+    /* P5c: 水面の uniform を Textures.animate の配信先から外す（作り直しで溜めない） */
+    var TXD = ESCAPE.Textures;
+    if (this._waterMat && TXD && TXD.unbindAnimated) {
+      var ud = this._waterMat.userData && this._waterMat.userData.water;
+      if (ud && ud.uniforms) TXD.unbindAnimated(ud.uniforms);
+    }
     for (var i = 0; i < this.disposables.length; i++) {
       var d = this.disposables[i];
       if (d && d.dispose) d.dispose();

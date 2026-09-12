@@ -1328,14 +1328,24 @@
     ['E', '記録区画', 'ARCHIVE'],
     ['F', '機械区画', 'UTILITY']
   ];
-  function texZoneSign() {
+  /* P5c: 銘板の区画名はマップ別（正文 docs/notes.md「エリア2『下水道』」＞「区画名」）。
+     絵柄・寸法・アトラスの並び（3x2・A..F）は area1 と同じ＝world.js 側は名前を選ぶだけ。 */
+  var ZONE_PANELS_A2 = [
+    ['A', '流入区画', 'INFLOW'],
+    ['B', '幹線区画', 'MAIN LINE'],
+    ['C', '沈殿区画', 'SEDIMENT'],
+    ['D', '機関区画', 'PUMP'],
+    ['E', '旧坑区画', 'OLD GALLERY'],
+    ['F', '水門区画', 'SLUICE']
+  ];
+  function texZoneSignOf(panels) {
     var S = 256, W = S * 3, H = S * 2, c = makeCanvas(W, H), ctx = c.getContext('2d');
     var rand = rng(24601);
     ctx.clearRect(0, 0, W, H);
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     for (var i = 0; i < 6; i++) {
       var ox = (i % 3) * S, oy = ((i / 3) | 0) * S;
-      var p = ZONE_PANELS[i];
+      var p = panels[i];
       /* 琺瑯引きの銘板。縁は金属、地は濃紺灰 */
       ctx.fillStyle = '#3b444b'; ctx.fillRect(ox + 4, oy + 4, S - 8, S - 8);
       ctx.fillStyle = '#161c21'; ctx.fillRect(ox + 12, oy + 12, S - 24, S - 24);
@@ -1370,6 +1380,8 @@
     grain(ctx, W, H, 9, rand);
     return c;
   }
+  function texZoneSign() { return texZoneSignOf(ZONE_PANELS); }
+  function texZoneSignA2() { return texZoneSignOf(ZONE_PANELS_A2); }
 
   /* ================================================================ */
   /* P4.9 区画ごとの景観差（DESIGN.md §4「エリア1 新マップ Z4」）            */
@@ -3281,6 +3293,7 @@
     water: texWater, glass: texGlass, blood: texBlood, hatch: texHatch,
     sign: texSign, tankfluid: texTankFluid, board: texBoard, monitors: texMonitors,
     zonesign: texZoneSign,
+    zonesignA2: texZoneSignA2,
     bigboard: texBigBoard,
     bloodHand: texBloodHand, bloodDrag: texBloodDrag, bloodSplat: texBloodSplat,
     wallPaint: texWallPaint, wallMetal: texWallMetal,
@@ -3303,14 +3316,15 @@
   var AREA2_TEX = {
     wallBrick: 1, wallStone: 1, wallConcreteWet: 1,
     floorStoneWet: 1, floorBrick: 1, floorMud: 1,
-    waterSewer: 1, metalGrate: 1, pipeRust: 1, slime: 1
+    waterSewer: 1, metalGrate: 1, pipeRust: 1, slime: 1,
+    zonesignA2: 1
   };
 
   /** アルファを持つ素材（世界側は transparent / alphaTest で使うこと） */
   var ALPHA_TEX = {
     poster: 1, litter: 1, water: 1, glass: 1, blood: 1, paper: 1, sheet: 1,
     bloodHand: 1, bloodDrag: 1, bloodSplat: 1,
-    metalGrate: 1, slime: 1
+    metalGrate: 1, slime: 1, zonesignA2: 1
   };
 
   var cache = Object.create(null);
