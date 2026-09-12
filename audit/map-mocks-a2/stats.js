@@ -19,7 +19,7 @@ var vm = require('vm');
 /* 歩行可能な文字（legend で walkable:true になるもの）。
  * '.' 床 / 'W' 水路(NOISE) / 'X' 到達パッド(EXIT)
  * 壁扱い: '#' 壁 / 'F' 岩盤・崩落・什器 / 'V' 深水 / 'D' 水門(DOOR) / 'G' ハンドル置き場 / 'P' セーブ端末 */
-var WALK = { '.': 1, 'W': 1, 'X': 1 };
+var WALK = { '.': 1, 'W': 1, 'X': 1, 'B': 1, 'M': 1, 'S': 1 };  /* B 板・M 音地盤・S センサーも歩行可（area2.js 用） */
 var SIGHT_LIMIT = 12;      /* 直線見通しの原則上限 */
 var LANDMARK_LIMIT = 20;   /* ランドマーク幹線で許す最長 */
 var ALT_SLACK = 1.30;      /* 別解と認める最短比 */
