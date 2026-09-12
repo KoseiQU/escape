@@ -506,16 +506,37 @@
       t.ok(d0[target.row * W + target.col] >= 0, 'P5 area2: ポンプ室へ到達できる');
       t.ok(d0[gt.row * W + gt.col] === gt.dist,
         'P5 area2: ゲートの経路距離がヘッダーの算出値と一致', d0[gt.row * W + gt.col] + ' vs ' + gt.dist);
-      /* ゲートのマスを塞ぐ＝ポンプ室が到達不能 */
-      var blk = Object.create(null), gk = gt.row * W + gt.col;
-      for (i = 0; i < 4; i++) {
-        var nc = gt.col + D4[i][0], nr = gt.row + D4[i][1];
-        if (nc < 0 || nr < 0 || nc >= map.width || nr >= map.height) continue;
-        blk[gk + ':' + (nr * W + nc)] = true;
+      /* R5': 進行路が最初に踏むランプの入口の 3〜4 マス手前（R7 の寄せを許す） */
+      var ramps = meta.ramps || [], entry = null, bestD = Infinity;
+      for (i = 0; i < ramps.length; i++) {
+        for (var rr2 = ramps[i].r0; rr2 <= ramps[i].r1; rr2++) {
+          for (var cc2 = ramps[i].c0; cc2 <= ramps[i].c1; cc2++) {
+            var dd2 = d0[rr2 * W + cc2];
+            if (dd2 >= 0 && dd2 < bestD) { bestD = dd2; entry = { col: cc2, row: rr2 }; }
+          }
+        }
       }
-      var d1 = bfs(map, sp.col, sp.row, blk);
-      t.ok(d1[target.row * W + target.col] < 0,
-        'P5 area2: 日誌2は「ポンプ室へ降りる者が必ず通る」要衝', d1[target.row * W + target.col]);
+      if (t.ok(!!entry, 'P5 area2: 進行路が最初に踏むランプの入口が求まる')) {
+        var back = bestD - gt.dist;
+        t.ok(back >= 3 && back <= 4,
+          'P5 area2: 日誌2はランプ入口の3〜4マス手前（R7の寄せを含む）',
+          'ランプ入口 d' + bestD + ' / ゲート d' + gt.dist + ' = ' + back + 'マス手前');
+      }
+      /* 進行路（spawn→ハンドル→出口）がポンプ室を通ること（契約 追補） */
+      var ks2 = meta.keySafe, kAdj2 = null;
+      for (i = 0; i < 4; i++) {
+        var kc2 = ks2.col + D4[i][0], kr2 = ks2.row + D4[i][1];
+        if (map.isWalkable(kc2, kr2)) { kAdj2 = { col: kc2, row: kr2 }; break; }
+      }
+      if (kAdj2) {
+        var route = pathBack(map, d0, kAdj2.col, kAdj2.row);
+        var through = 0;
+        for (i = 0; i < route.length; i++) {
+          var rc = route[i] % W, rr3 = (route[i] - rc) / W;
+          if (rc >= low.c0 && rc <= low.c1 && rr3 >= low.r0 && rr3 <= low.r1) through++;
+        }
+        t.ok(through > 0, 'P5 area2: 進行路がポンプ室（-2m の窪地）を通る', through + 'マス');
+      }
     }
 
     /* 日誌1 はスタート部屋（spawn を含む最小の部屋 region）の外への遷移で開く */
@@ -535,6 +556,82 @@
     var hasNote = false;
     for (i = 0; i < (meta.notes || []).length; i++) if (meta.notes[i].id === DID) hasNote = true;
     t.ok(hasNote, 'P5 area2: 日誌1が壁メモとしても読み返せる');
+  }
+
+  /* ================================================================
+   * 6.5) ランプ3本の開通とポンプ室の3入口（契約 追補 2026-09-13）
+   * ============================================================== */
+  function testA2Ramps(t, g) {
+    if (!ESCAPE.Maps.has('area2')) return;
+    var map = ESCAPE.Maps.load('area2'), meta = map.meta, W = map.width;
+    var ramps = meta.ramps || [];
+    t.ok(ramps.length >= 3, 'P5 area2: ランプ 3 本以上', ramps.length);
+    /* ① 3本とも全マスが歩行可能（岩盤の中に埋まっていない） */
+    var bad = [], i, c, r;
+    for (i = 0; i < ramps.length; i++) {
+      var a = ramps[i];
+      for (r = a.r0; r <= a.r1; r++) {
+        for (c = a.c0; c <= a.c1; c++) if (!map.isWalkable(c, r)) bad.push(c + ',' + r);
+      }
+    }
+    t.ok(bad.length === 0, 'P5 area2: ランプのマスは全て歩行可能（袋小路にしない）', bad.join(' '));
+    /* ② 各ランプの両端が高さの違う床に連続して接続している（段差ゼロは heightSeams が見る） */
+    var lows = 0, highs = 0;
+    for (i = 0; i < ramps.length; i++) {
+      if (Math.abs(ramps[i].y0 - ramps[i].y1) < 1.9) continue;
+      if (ramps[i].y0 < ramps[i].y1) lows++; else highs++;
+    }
+    t.ok(lows + highs === 3, 'P5 area2: 3本とも ±2m の高低差を持つ', lows + '本が上り / ' + highs + '本が下り');
+    t.ok(map.heightSeams().length === 0, 'P5 area2: ランプ開通後も段差の継ぎ目 0');
+
+    /* ③ ポンプ室は3方向から入れる＝どれか1本を塞いでも到達でき、3本とも塞ぐと到達不能 */
+    var plats = meta.plateaus || [], low = null;
+    for (i = 0; i < plats.length; i++) if (plats[i].y <= -1.9) low = plats[i];
+    if (!t.ok(!!low, 'P5 area2: -2m の窪地（ポンプ室）がある')) return;
+    var target = null;
+    for (r = low.r0; r <= low.r1 && !target; r++) {
+      for (c = low.c0; c <= low.c1 && !target; c++) if (map.isWalkable(c, r)) target = { col: c, row: r };
+    }
+    var sp = meta.spawn;
+    /* ランプごとの「ポンプ室の外側の1マス」＝塞ぐ場所 */
+    var gates = [];
+    for (i = 0; i < ramps.length; i++) {
+      var a2 = ramps[i], out = null, bestD = -1;
+      for (r = a2.r0; r <= a2.r1; r++) {
+        for (c = a2.c0; c <= a2.c1; c++) {
+          var inLow = (c >= low.c0 && c <= low.c1 && r >= low.r0 && r <= low.r1);
+          if (inLow) continue;
+          /* 窪地から遠い端＝外側の入口 */
+          var dd = Math.abs(c - (low.c0 + low.c1) / 2) + Math.abs(r - (low.r0 + low.r1) / 2);
+          if (dd > bestD) { bestD = dd; out = { col: c, row: r }; }
+        }
+      }
+      if (out) gates.push(out);
+    }
+    t.ok(gates.length === 3, 'P5 area2: ランプ3本それぞれの外側の入口が求まる', gates.length);
+    function blockOf(list) {
+      var blk = Object.create(null);
+      for (var k = 0; k < list.length; k++) {
+        var gk = list[k].row * W + list[k].col;
+        for (var q = 0; q < 4; q++) {
+          var nc = list[k].col + D4[q][0], nr = list[k].row + D4[q][1];
+          if (nc < 0 || nr < 0 || nc >= map.width || nr >= map.height) continue;
+          blk[gk + ':' + (nr * W + nc)] = true;
+        }
+      }
+      return blk;
+    }
+    var okEach = 0;
+    for (i = 0; i < gates.length; i++) {
+      var d1 = bfs(map, sp.col, sp.row, blockOf([gates[i]]));
+      if (d1[target.row * W + target.col] >= 0) okEach++;
+    }
+    t.ok(okEach === 3, 'P5 area2: どのランプ1本を塞いでもポンプ室へ行ける（3入口が互いに独立）',
+      okEach + '/3');
+    var dAll = bfs(map, sp.col, sp.row, blockOf(gates));
+    t.ok(dAll[target.row * W + target.col] < 0,
+      'P5 area2: 3本とも塞いだときだけポンプ室が到達不能（入口はこの3本だけ）',
+      dAll[target.row * W + target.col]);
   }
 
   /* ================================================================
@@ -717,6 +814,6 @@
 
   ESCAPE.__extraSuites.push(
     testA2Structure, testA2Tiles, testA2Placement, testA2Regions,
-    testA2DeadEnds, testA2Story, testA2Engine
+    testA2DeadEnds, testA2Ramps, testA2Story, testA2Engine
   );
 })(window);
