@@ -127,7 +127,7 @@ ESCAPE.__A2MOCKS = ESCAPE.__A2MOCKS || {};
     return g;
   }
   function buildLights(THREE, scene) {
-    scene.add(new THREE.HemisphereLight(0x1c211a, 0x061810, 0.10));
+    scene.add(new THREE.HemisphereLight(0x1c211a, 0x061810, 0.14));
     /* ナトリウム橙のケージ灯1灯 */
     var cage = new THREE.Group(); cage.position.set(-0.78, 2.72, -0.62);
     var bulb = new THREE.Mesh(new THREE.SphereGeometry(0.075, 12, 10),
@@ -142,16 +142,16 @@ ESCAPE.__A2MOCKS = ESCAPE.__A2MOCKS || {};
       new THREE.MeshStandardMaterial({ color: 0x231c14, roughness: 0.9 }));
     stem.position.y = 0.18; cage.add(stem);
     scene.add(cage);
-    var p = new THREE.PointLight(0xffa24a, 12.5, 16, 2.0);
+    var p = new THREE.PointLight(0xffa24a, 19.0, 18, 2.0);
     p.position.copy(cage.position); p.castShadow = true;
     p.shadow.mapSize.set(1024, 1024); p.shadow.bias = -0.004; scene.add(p);
-    var sp = new THREE.SpotLight(0xffb265, 6.4, 13, 0.80, 0.60, 1.8);
+    var sp = new THREE.SpotLight(0xffb265, 9.5, 14, 0.80, 0.60, 1.8);
     sp.position.set(-0.62, 2.95, -0.45); sp.target.position.set(0, 0.9, 0);
     scene.add(sp); scene.add(sp.target);
     /* 水面からの弱い緑の照り返し（下から） */
-    var gl = new THREE.PointLight(0x3faa78, 4.4, 9, 2.0);
+    var gl = new THREE.PointLight(0x3faa78, 6.2, 10, 2.0);
     gl.position.set(0.05, 0.22, -1.02); scene.add(gl);
-    var gl2 = new THREE.PointLight(0x1f6b4a, 1.5, 7, 2.0);
+    var gl2 = new THREE.PointLight(0x1f6b4a, 2.3, 8, 2.0);
     gl2.position.set(-1.45, 0.16, -1.9); scene.add(gl2);
     return p;
   }
@@ -196,6 +196,24 @@ ESCAPE.__A2MOCKS = ESCAPE.__A2MOCKS || {};
       '<b>' + def.name + '</b>' + (view === 'face' ? '顔の寄り' : '全身') +
       ' ／ ' + window.__mockTris.toLocaleString() + ' 三角形';
 
+    if (q('dbg', '')) {
+      cam.updateMatrixWorld(true); group.updateMatrixWorld(true);
+      var rc = new THREE.Raycaster();
+      var pts = [[0, 0], [0, -0.35], [-0.2, -0.5], [0.25, -0.45], [0, 0.25]];
+      var out = [];
+      pts.forEach(function (pp) {
+        rc.setFromCamera(new THREE.Vector2(pp[0], pp[1]), cam);
+        var hit = rc.intersectObject(group, true)[0];
+        out.push(pp + '=' + (hit ? (hit.object.geometry.type.slice(0, 8) + '#' +
+          hit.object.material.color.getHexString() + ' rough' + hit.object.material.roughness +
+          ' d' + hit.distance.toFixed(2)) : 'none'));
+      });
+      var hd = group.getObjectByName('HEAD');
+      if (hd) { var wp = new THREE.Vector3(); hd.getWorldPosition(wp);
+        out.push('HEAD@' + wp.x.toFixed(2) + ',' + wp.y.toFixed(2) + ',' + wp.z.toFixed(2) +
+          ' camd' + cam.position.distanceTo(wp).toFixed(2)); }
+      document.getElementById('cap').textContent = out.join(' || ');
+    }
     renderer.render(scene, cam);
     requestAnimationFrame(function () {
       renderer.render(scene, cam);
