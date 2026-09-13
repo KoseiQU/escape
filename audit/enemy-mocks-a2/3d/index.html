@@ -261,6 +261,66 @@ ESCAPE.__A2MOCKS = ESCAPE.__A2MOCKS || {};
     }
   };
 
+  /* 頭蓋の殻を彫る（共通）。返り値は BufferGeometry。原点＝頭の中心・正面 −Z。
+   * P: { rx, ry, rz, seg, socket, eye, temple, cheek, nose, jaw, chin, brow, seed }
+   * socket>0 で眼窩が深く、eye>0 で皮膚越しの眼球の膨らみが出る（eye=0 は空洞）。 */
+  L.headShell = function (P) {
+    P = P || {};
+    var rx = P.rx || 0.105, ry = P.ry || 0.138, rz = P.rz || 0.124;
+    var seg = P.seg || 60;
+    var g = new THREE.SphereGeometry(1, seg, Math.round(seg * 0.7));
+    g.scale(rx, ry, rz);
+    var jaw = P.jaw === undefined ? 1 : P.jaw;
+    L.deform(g, function (x, y, z, o) {
+      var ny = y / ry, nz = z / rz;
+      var kx = 1 - 0.40 * jaw * Math.pow(Math.max(0, -ny), 1.6) - 0.06 * Math.pow(Math.max(0, ny), 2);
+      var kz = nz < 0 ? 1 - 0.15 * nz * nz : 1 + 0.13 * nz * nz;
+      o[0] = x * kx;
+      o[2] = z * kz * (1 - 0.32 * jaw * Math.pow(Math.max(0, -ny), 1.8));
+      o[1] = y - 0.24 * ry * jaw * Math.pow(Math.max(0, -ny), 2.0);
+    });
+    var S = P.socket === undefined ? 0.030 : P.socket;
+    var E = P.eye === undefined ? 0.010 : P.eye;
+    var B = P.brow === undefined ? 0.011 : P.brow;
+    var ex = rx * 0.48, ey = ry * 0.03, ez = -rz * 0.81;
+    /* 眉弓 */
+    L.ridge(g, [rx * 0.06, ry * 0.26, -rz * 0.87], [rx * 0.80, ry * 0.22, -rz * 0.49], rx * 0.29, B, 1.6);
+    L.ridge(g, [-rx * 0.06, ry * 0.22, -rz * 0.87], [-rx * 0.77, ry * 0.15, -rz * 0.49], rx * 0.27, B * 0.88, 1.6);
+    /* 眼窩と眼球 */
+    L.bulge(g, [ex, ey, ez], rx * 0.47, -S);
+    L.bulge(g, [-ex * 0.96, ey - ry * 0.06, ez], rx * 0.45, -S * 1.10);
+    if (E > 0) {
+      L.bulge(g, [ex, ey, ez], rx * 0.30, E);
+      L.bulge(g, [-ex * 0.96, ey - ry * 0.06, ez], rx * 0.28, E * 0.92);
+    }
+    /* こめかみ（側頭筋の落ち窪み） */
+    var T = P.temple === undefined ? 0.015 : P.temple;
+    L.bulge(g, [rx * 0.94, ry * 0.26, -rz * 0.34], rx * 0.53, -T);
+    L.bulge(g, [-rx * 0.93, ry * 0.20, -rz * 0.36], rx * 0.50, -T * 1.25);
+    /* 頬骨弓と頬のこけ */
+    L.ridge(g, [rx * 0.99, -ry * 0.04, -rz * 0.08], [rx * 0.55, -ry * 0.10, -rz * 0.70], rx * 0.23, 0.0105, 1.8);
+    L.ridge(g, [-rx * 0.98, -ry * 0.10, -rz * 0.06], [-rx * 0.53, -ry * 0.16, -rz * 0.70], rx * 0.22, 0.0095, 1.8);
+    var C = P.cheek === undefined ? 0.017 : P.cheek;
+    L.bulge(g, [rx * 0.63, -ry * 0.42, -rz * 0.63], rx * 0.44, -C);
+    L.bulge(g, [-rx * 0.60, -ry * 0.46, -rz * 0.61], rx * 0.42, -C * 1.15);
+    /* 鼻梁・鼻根・梨状口 */
+    var N = P.nose === undefined ? 0.013 : P.nose;
+    L.ridge(g, [0.001, ry * 0.19, -rz * 0.86], [0.003, -ry * 0.35, -rz * 0.87], rx * 0.17, N, 2.2);
+    L.bulge(g, [0.002, ry * 0.07, -rz * 0.90], rx * 0.13, -N * 0.6);
+    L.bulge(g, [0.002, -ry * 0.45, -rz * 0.84], rx * 0.22, -N * 1.7);
+    /* 上顎・下顎枝・顎先 */
+    L.ridge(g, [rx * 0.38, -ry * 0.55, -rz * 0.69], [-rx * 0.38, -ry * 0.58, -rz * 0.69], rx * 0.25, 0.0080, 1.5);
+    L.ridge(g, [rx * 0.79, -ry * 0.26, -rz * 0.15], [rx * 0.50, -ry * 0.88, -rz * 0.50], rx * 0.23, 0.0105, 1.7);
+    L.ridge(g, [-rx * 0.77, -ry * 0.32, -rz * 0.13], [-rx * 0.48, -ry * 0.92, -rz * 0.48], rx * 0.22, 0.0095, 1.7);
+    var CH = P.chin === undefined ? 0.011 : P.chin;
+    L.ridge(g, [rx * 0.50, -ry * 0.88, -rz * 0.50], [-rx * 0.48, -ry * 0.92, -rz * 0.48], rx * 0.16, CH * 0.55, 1.5);
+    L.bulge(g, [0.002, -ry * 0.95, -rz * 0.60], rx * 0.29, CH);
+    /* 後頭部と項 */
+    L.bulge(g, [0, ry * 0.18, rz * 0.92], rx * 0.62, 0.006);
+    L.warp(g, P.warp === undefined ? 0.0026 : P.warp, 15, P.seed || 6);
+    return g;
+  };
+
   /* 2本の折れ線の間を四角形帯で埋める（骨の断面・膜・裂け目の内側） */
   L.strip = function (A, B) {
     var n = Math.min(A.length, B.length), pos = new Float32Array(n * 6), idx = [], i;
