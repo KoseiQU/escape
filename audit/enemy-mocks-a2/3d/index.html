@@ -183,6 +183,24 @@ ESCAPE.__A2MOCKS = ESCAPE.__A2MOCKS || {};
     });
   };
 
+  /* 線分 a-b に沿った稜／溝: 眉弓・頬骨弓・鼻梁・顎のライン・腱を「彫る」。
+   * pow>1 で稜が鋭くなる。dir を与えると法線でなくその向きへ動かす。 */
+  L.ridge = function (g, a, b, r, amp, pow, dir) {
+    var ax = a[0], ay = a[1], az = a[2];
+    var bx = b[0] - ax, by = b[1] - ay, bz = b[2] - az;
+    var bl = bx * bx + by * by + bz * bz || 1e-9, r2 = r * r, pw = pow || 2;
+    return L.deform(g, function (x, y, z, o) {
+      var t = ((x - ax) * bx + (y - ay) * by + (z - az) * bz) / bl;
+      t = t < 0 ? 0 : (t > 1 ? 1 : t);
+      var dx = x - (ax + bx * t), dy = y - (ay + by * t), dz = z - (az + bz * t);
+      var d2 = dx * dx + dy * dy + dz * dz;
+      if (d2 > r2) return;
+      var w = Math.pow(1 - d2 / r2, pw);
+      var n = dir || [x, y, z], nl = Math.sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]) || 1;
+      o[0] = x + n[0] / nl * amp * w; o[1] = y + n[1] / nl * amp * w; o[2] = z + n[2] / nl * amp * w;
+    });
+  };
+
   /* 全体を軽く歪ませる（左右非対称・有機的な揺らぎ） */
   L.warp = function (g, amp, freq, seed) {
     var R = L.rng(seed || 3), ox = R() * 10, oy = R() * 10, oz = R() * 10;
@@ -243,6 +261,23 @@ ESCAPE.__A2MOCKS = ESCAPE.__A2MOCKS || {};
     }
   };
 
+  /* 2本の折れ線の間を四角形帯で埋める（骨の断面・膜・裂け目の内側） */
+  L.strip = function (A, B) {
+    var n = Math.min(A.length, B.length), pos = new Float32Array(n * 6), idx = [], i;
+    for (i = 0; i < n; i++) {
+      pos[i * 6] = A[i][0]; pos[i * 6 + 1] = A[i][1]; pos[i * 6 + 2] = A[i][2];
+      pos[i * 6 + 3] = B[i][0]; pos[i * 6 + 4] = B[i][1]; pos[i * 6 + 5] = B[i][2];
+    }
+    for (i = 0; i < n - 1; i++) {
+      var o = i * 2;
+      idx.push(o, o + 1, o + 2, o + 1, o + 3, o + 2);
+    }
+    var g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    g.setIndex(idx); g.computeVertexNormals();
+    return g;
+  };
+
   /* 三角形数の集計 */
   L.tris = function (obj) {
     var n = 0;
@@ -275,7 +310,7 @@ ESCAPE.__A2MOCKS = ESCAPE.__A2MOCKS || {};
   renderer.setPixelRatio(1);
   renderer.setSize(window.innerWidth || W, window.innerHeight || H);
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 0.96;
+  renderer.toneMappingExposure = 0.92;
   if (THREE.SRGBColorSpace) renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   document.body.appendChild(renderer.domElement);
@@ -334,28 +369,32 @@ ESCAPE.__A2MOCKS = ESCAPE.__A2MOCKS || {};
     m.position.set(pos[0], pos[1], pos[2]); m.rotation.y = ry; m.receiveShadow = true; scene.add(m);
   }
   wall(26, 7, [0, 3.5, -5.2], 0);
-  wall(22, 7, [-4.6, 3.5, 2], Math.PI / 2);
-  wall(22, 7, [4.6, 3.5, 2], -Math.PI / 2);
+  wall(26, 7, [0, 3.5, 5.6], Math.PI);
+  wall(22, 7, [-4.6, 3.5, 0], Math.PI / 2);
+  wall(22, 7, [4.6, 3.5, 0], -Math.PI / 2);
 
   var ceil = new THREE.Mesh(new THREE.PlaneGeometry(26, 26), L.mat(0x0a0a0b, 0.96, 0));
   ceil.rotation.x = Math.PI / 2; ceil.position.y = 5.2; scene.add(ceil);
 
   var waterMat = L.mat(0x0a2019, 0.34, 0.30, { transparent: true, opacity: 0.94 });
   var water = new THREE.Mesh(new THREE.PlaneGeometry(3.0, 26), waterMat);
-  water.rotation.x = -Math.PI / 2; water.position.set(0, 0.035, -2); scene.add(water);
+  water.rotation.x = -Math.PI / 2; water.position.set(0, 0.035, 0); scene.add(water);
 
-  scene.add(new THREE.HemisphereLight(0x0d1418, 0x05060a, 0.30));
+  scene.add(new THREE.HemisphereLight(0x16222c, 0x060a0c, 0.46));
   var lampY = 4.35;
-  var lamp = new THREE.PointLight(0xffa24a, 34, 22, 2);
-  lamp.position.set(0.45, lampY, 0.9); lamp.castShadow = true;
+  var lamp = new THREE.PointLight(0xffb470, 40, 24, 2);
+  lamp.position.set(0.55, lampY, -1.15); lamp.castShadow = true;
   lamp.shadow.mapSize.set(1024, 1024); lamp.shadow.bias = -0.0022;
   scene.add(lamp);
   var spot = new THREE.SpotLight(0xffb066, 26, 18, 0.72, 0.7, 2);
-  spot.position.set(0.45, lampY + 0.35, 0.9); spot.target.position.set(0.3, 0, 0.4);
+  spot.position.set(0.55, lampY + 0.35, -1.15); spot.target.position.set(0.25, 0.9, -0.2);
   scene.add(spot); scene.add(spot.target);
-  var greenA = new THREE.PointLight(0x3fa07a, 4.2, 13, 2); greenA.position.set(-1.15, 0.10, -2.6); scene.add(greenA);
-  var greenB = new THREE.PointLight(0x2f8a6a, 2.6, 11, 2); greenB.position.set(1.1, 0.10, 3.4); scene.add(greenB);
-  var rim = new THREE.PointLight(0x40607e, 4.6, 18, 2); rim.position.set(-3.8, 2.9, -4.2); scene.add(rim);
+  var greenA = new THREE.PointLight(0x3fa07a, 4.2, 13, 2); greenA.position.set(-1.05, 0.10, 2.5); scene.add(greenA);
+  var greenB = new THREE.PointLight(0x2f8a6a, 2.6, 11, 2); greenB.position.set(0.95, 0.10, -3.2); scene.add(greenB);
+  /* 水面から返る冷たい反射（蒼白い皮膚を成立させるためのフィル） */
+  var fill = new THREE.PointLight(0x7290a0, 4.6, 13, 2); fill.position.set(-1.9, 1.5, -2.4); scene.add(fill);
+  var rim = new THREE.PointLight(0x5a7a96, 7.5, 15, 2); rim.position.set(-2.5, 2.5, 3.2); scene.add(rim);
+  var rim2 = new THREE.PointLight(0x2f5f7a, 5.0, 14, 2); rim2.position.set(2.7, 2.2, 2.8); scene.add(rim2);
 
   var cage = new THREE.Group();
   cage.add(L.m(new THREE.SphereGeometry(0.10, 14, 10), L.mat(0x1a1208, 0.5, 0.1, { emissive: 0xff9a40, emissiveIntensity: 3.0 }), [0, 0, 0]));
@@ -365,7 +404,7 @@ ESCAPE.__A2MOCKS = ESCAPE.__A2MOCKS || {};
     cage.add(L.m(new THREE.TorusGeometry(0.16, 0.008, 5, 16, Math.PI), cm, [0, 0, 0], [0, a, 0]));
   }
   cage.add(L.m(new THREE.CylinderGeometry(0.012, 0.012, 0.8, 6), cm, [0, 0.4, 0]));
-  cage.position.set(0.45, lampY, 0.9); scene.add(cage);
+  cage.position.set(0.55, lampY, -1.15); scene.add(cage);
 
   var camera = new THREE.PerspectiveCamera(50, W / H, 0.03, 200);
   camera.position.set(0, 1.6, 5); camera.lookAt(0, 1.1, 0);
