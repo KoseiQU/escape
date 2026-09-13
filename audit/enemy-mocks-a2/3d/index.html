@@ -1,0 +1,451 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>ESCAPE — エリア2 敵 3Dコンセプトモック</title>
+<style>
+  html, body { margin:0; padding:0; background:#000; overflow:hidden; }
+  canvas { display:block; }
+  #hud { position:fixed; left:10px; bottom:8px; color:#9aa; font:12px/1.5 monospace;
+         text-shadow:0 0 4px #000; pointer-events:none; white-space:pre; }
+</style>
+</head>
+<body>
+<div id="hud"></div>
+<script src="../../../js/three.min.js"></script>
+<script>
+/* 共有ライブラリ: プロシージャル皮膚/金属材質・彫刻ヘルパ。
+ * mock_<id>.js からは ESCAPE.__A2LIB で参照する。 */
+window.ESCAPE = window.ESCAPE || {};
+ESCAPE.__A2MOCKS = ESCAPE.__A2MOCKS || {};
+(function () {
+  'use strict';
+  var L = ESCAPE.__A2LIB = {};
+
+  /* ---- 決定的乱数 ---- */
+  L.rng = function (seed) {
+    var s = (seed | 0) || 1;
+    return function () { s ^= s << 13; s ^= s >>> 17; s ^= s << 5; s |= 0; return ((s >>> 0) % 1e5) / 1e5; };
+  };
+  function clamp(v, a, b) { return v < a ? a : (v > b ? b : v); }
+  L.clamp = clamp;
+
+  /* ---- アルベド canvas から法線・粗さを起こす ---- */
+  function sobelMaps(cv, bump, roughLo, roughHi) {
+    var THREE = window.THREE;
+    var w = cv.width, h = cv.height;
+    var px = cv.getContext('2d').getImageData(0, 0, w, h).data;
+    var lum = new Float32Array(w * h), i, o;
+    for (i = 0; i < w * h; i++) {
+      o = i * 4; lum[i] = (0.2126 * px[o] + 0.7152 * px[o + 1] + 0.0722 * px[o + 2]) / 255;
+    }
+    var nrm = new Uint8Array(w * h * 4), rgh = new Uint8Array(w * h * 4);
+    for (var y = 0; y < h; y++) {
+      var ym = ((y - 1 + h) % h) * w, yp = ((y + 1) % h) * w, y0 = y * w;
+      for (var x = 0; x < w; x++) {
+        var xm = (x - 1 + w) % w, xp = (x + 1) % w;
+        var gx = (lum[ym + xp] + 2 * lum[y0 + xp] + lum[yp + xp]) - (lum[ym + xm] + 2 * lum[y0 + xm] + lum[yp + xm]);
+        var gy = (lum[yp + xm] + 2 * lum[yp + x] + lum[yp + xp]) - (lum[ym + xm] + 2 * lum[ym + x] + lum[ym + xp]);
+        var nx = -gx * bump, ny = -gy * bump, il = 1 / Math.sqrt(nx * nx + ny * ny + 1);
+        o = (y0 + x) * 4;
+        nrm[o] = (nx * il * 0.5 + 0.5) * 255; nrm[o + 1] = (ny * il * 0.5 + 0.5) * 255;
+        nrm[o + 2] = (il * 0.5 + 0.5) * 255; nrm[o + 3] = 255;
+        var rv = roughHi + (roughLo - roughHi) * lum[y0 + x];
+        rgh[o] = 255; rgh[o + 1] = (clamp(rv, 0, 1) * 255) | 0; rgh[o + 2] = 255; rgh[o + 3] = 255;
+      }
+    }
+    function dt(buf) {
+      var t = new THREE.DataTexture(buf, w, h, THREE.RGBAFormat, THREE.UnsignedByteType);
+      t.colorSpace = THREE.NoColorSpace; t.wrapS = t.wrapT = THREE.RepeatWrapping;
+      t.minFilter = THREE.LinearMipmapLinearFilter; t.magFilter = THREE.LinearFilter;
+      t.generateMipmaps = true; t.anisotropy = 4; t.flipY = true; t.needsUpdate = true; return t;
+    }
+    return { normalMap: dt(nrm), roughnessMap: dt(rgh) };
+  }
+
+  /* ---- 皮膚 canvas: 斑・毛穴・皺・血管 ---- */
+  function skinCanvas(o) {
+    var S = o.size || 512, cv = document.createElement('canvas');
+    cv.width = cv.height = S;
+    var c = cv.getContext('2d'), R = L.rng(o.seed || 7), i, n;
+    c.fillStyle = o.base || '#8f9490'; c.fillRect(0, 0, S, S);
+    /* 大きな斑（死斑・水ぶくれ跡） */
+    for (i = 0, n = o.mottle === undefined ? 120 : o.mottle; i < n; i++) {
+      var mx = R() * S, my = R() * S, mr = S * (0.02 + R() * 0.09);
+      var g = c.createRadialGradient(mx, my, 0, mx, my, mr);
+      var a = 0.05 + R() * 0.14;
+      g.addColorStop(0, (R() < 0.45 ? o.dark || 'rgba(52,56,54,' : 'rgba(178,176,160,') + a + ')');
+      g.addColorStop(1, 'rgba(0,0,0,0)');
+      c.fillStyle = g; c.beginPath(); c.arc(mx, my, mr, 0, 6.284); c.fill();
+    }
+    /* 血管（皮下の網） */
+    c.lineCap = 'round';
+    for (i = 0, n = o.vein === undefined ? 46 : o.vein; i < n; i++) {
+      var x = R() * S, y = R() * S, ang = R() * 6.284, seg = 4 + (R() * 6 | 0);
+      c.strokeStyle = o.veinColor || 'rgba(74,62,86,0.30)';
+      c.lineWidth = 0.7 + R() * 1.9;
+      c.beginPath(); c.moveTo(x, y);
+      for (var k = 0; k < seg; k++) {
+        ang += (R() - 0.5) * 1.3; x += Math.cos(ang) * S * 0.028; y += Math.sin(ang) * S * 0.028;
+        c.lineTo(x, y);
+      }
+      c.stroke();
+    }
+    /* 皺（細い明暗の線） */
+    for (i = 0, n = o.wrinkle === undefined ? 220 : o.wrinkle; i < n; i++) {
+      var wx = R() * S, wy = R() * S, wa = R() * 6.284, wl = S * (0.01 + R() * 0.05);
+      c.strokeStyle = R() < 0.5 ? 'rgba(30,30,28,0.34)' : 'rgba(205,205,192,0.20)';
+      c.lineWidth = 0.5 + R() * 0.9;
+      c.beginPath(); c.moveTo(wx, wy);
+      c.quadraticCurveTo(wx + Math.cos(wa + 0.6) * wl, wy + Math.sin(wa + 0.6) * wl,
+        wx + Math.cos(wa) * wl * 2, wy + Math.sin(wa) * wl * 2);
+      c.stroke();
+    }
+    /* 毛穴 */
+    var img = c.getImageData(0, 0, S, S), d = img.data;
+    for (i = 0, n = (o.pore === undefined ? 0.30 : o.pore) * S * S; i < n; i++) {
+      var p = ((R() * S | 0) + (R() * S | 0) * S) * 4, v = (R() - 0.5) * 46;
+      d[p] = clamp(d[p] + v, 0, 255); d[p + 1] = clamp(d[p + 1] + v, 0, 255); d[p + 2] = clamp(d[p + 2] + v, 0, 255);
+    }
+    c.putImageData(img, 0, 0);
+    return cv;
+  }
+  L.skinCanvas = skinCanvas;
+
+  /* 皮膚マテリアル（アルベド＋法線＋粗さ）。tint で色味を寄せる。 */
+  L.skin = function (o) {
+    o = o || {};
+    var THREE = window.THREE, cv = skinCanvas(o);
+    var map = new THREE.CanvasTexture(cv);
+    map.wrapS = map.wrapT = THREE.RepeatWrapping; map.anisotropy = 4;
+    if (THREE.SRGBColorSpace) map.colorSpace = THREE.SRGBColorSpace;
+    var mm = sobelMaps(cv, o.bump === undefined ? 2.6 : o.bump,
+      o.roughLo === undefined ? 0.34 : o.roughLo, o.roughHi === undefined ? 0.86 : o.roughHi);
+    var m = new THREE.MeshStandardMaterial({
+      map: map, normalMap: mm.normalMap, roughnessMap: mm.roughnessMap,
+      color: new THREE.Color(o.tint === undefined ? 0xffffff : o.tint),
+      roughness: 1, metalness: o.metalness === undefined ? 0.02 : o.metalness,
+      side: o.side || THREE.FrontSide
+    });
+    if (o.repeat) { map.repeat.set(o.repeat[0], o.repeat[1]); mm.normalMap.repeat.copy(map.repeat); mm.roughnessMap.repeat.copy(map.repeat); }
+    m.normalScale = new THREE.Vector2(o.nscale === undefined ? 1 : o.nscale, o.nscale === undefined ? 1 : o.nscale);
+    return m;
+  };
+
+  /* 単色系のマテリアル（骨・歯・肉・金属・布） */
+  L.mat = function (hex, rough, metal, o) {
+    o = o || {};
+    var m = new window.THREE.MeshStandardMaterial({
+      color: hex, roughness: rough === undefined ? 0.8 : rough,
+      metalness: metal === undefined ? 0 : metal, side: o.side || window.THREE.FrontSide
+    });
+    if (o.emissive !== undefined) { m.emissive = new window.THREE.Color(o.emissive); m.emissiveIntensity = o.emissiveIntensity || 1; }
+    if (o.transparent) { m.transparent = true; m.opacity = o.opacity === undefined ? 1 : o.opacity; }
+    if (o.flat) m.flatShading = true;
+    return m;
+  };
+})();
+</script>
+<script>
+/* 共有ライブラリ その2: ジオメトリを「彫る」ためのヘルパ。
+ * 顔は球を彫刻し、眉弓・頬骨・鼻腔・上顎・下顎・顎先を別パーツで積んで皮膚で覆う。 */
+(function () {
+  'use strict';
+  var L = ESCAPE.__A2LIB, V3 = null;
+
+  /* 楕円体。seg で分割数を決める（顔は高密度、体は低密度）。 */
+  L.ell = function (rx, ry, rz, seg, segY) {
+    var g = new THREE.SphereGeometry(1, seg || 24, segY || (seg ? Math.round(seg * 0.75) : 16));
+    g.scale(rx, ry, rz);
+    return g;
+  };
+
+  /* 頂点ごとの変位。fn(x,y,z,out[3]) が新しい座標を書く。 */
+  L.deform = function (g, fn) {
+    var p = g.attributes.position, a = p.array, o = [0, 0, 0];
+    for (var i = 0; i < a.length; i += 3) {
+      o[0] = a[i]; o[1] = a[i + 1]; o[2] = a[i + 2];
+      fn(a[i], a[i + 1], a[i + 2], o);
+      a[i] = o[0]; a[i + 1] = o[1]; a[i + 2] = o[2];
+    }
+    p.needsUpdate = true; g.computeVertexNormals(); return g;
+  };
+
+  /* 球状ガウス隆起／窪み: 中心 c 半径 r の範囲を法線方向に amp だけ動かす。 */
+  L.bulge = function (g, c, r, amp, dir) {
+    return L.deform(g, function (x, y, z, o) {
+      var dx = x - c[0], dy = y - c[1], dz = z - c[2];
+      var d2 = dx * dx + dy * dy + dz * dz, r2 = r * r;
+      if (d2 > r2) return;
+      var t = 1 - d2 / r2; t = t * t;
+      var n = dir || [x, y, z], nl = Math.sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]) || 1;
+      o[0] = x + n[0] / nl * amp * t; o[1] = y + n[1] / nl * amp * t; o[2] = z + n[2] / nl * amp * t;
+    });
+  };
+
+  /* 全体を軽く歪ませる（左右非対称・有機的な揺らぎ） */
+  L.warp = function (g, amp, freq, seed) {
+    var R = L.rng(seed || 3), ox = R() * 10, oy = R() * 10, oz = R() * 10;
+    function n(x, y, z) {
+      return Math.sin(x * freq + ox) * Math.cos(y * freq * 1.3 + oy) * Math.sin(z * freq * 0.8 + oz);
+    }
+    return L.deform(g, function (x, y, z, o) {
+      o[0] = x + n(x, y, z) * amp; o[1] = y + n(y + 3.1, z, x) * amp * 0.7; o[2] = z + n(z, x + 1.7, y) * amp;
+    });
+  };
+
+  /* 円錐台（四肢の節・指・パイプ） */
+  L.seg = function (r0, r1, len, rad) {
+    var g = new THREE.CylinderGeometry(r1, r0, len, rad || 10, 1, false);
+    g.translate(0, len / 2, 0);
+    return g;
+  };
+
+  /* 骨の断面のある殻（頭蓋の割れ目の内側など）: 開いた半球の帯 */
+  L.shell = function (r, thick, phi0, phi1, th0, th1, seg) {
+    var outer = new THREE.SphereGeometry(r, seg || 20, seg || 16, phi0, phi1 - phi0, th0, th1 - th0);
+    var inner = new THREE.SphereGeometry(r - thick, seg || 20, seg || 16, phi0, phi1 - phi0, th0, th1 - th0);
+    var ia = inner.index.array; /* 内側は面を反転 */
+    for (var i = 0; i < ia.length; i += 3) { var t = ia[i]; ia[i] = ia[i + 2]; ia[i + 2] = t; }
+    return [outer, inner];
+  };
+
+  /* 折れ線を太さつきのチューブにする（鎖・管・腱・髪の房） */
+  L.tube = function (pts, r, rad, closed) {
+    var v = pts.map(function (p) { return new THREE.Vector3(p[0], p[1], p[2]); });
+    var curve = new THREE.CatmullRomCurve3(v, !!closed);
+    return new THREE.TubeGeometry(curve, Math.max(8, v.length * 4), r, rad || 6, !!closed);
+  };
+
+  /* mesh 生成の短縮 */
+  L.m = function (geo, mat, pos, rot, scl) {
+    var o = new THREE.Mesh(geo, mat);
+    if (pos) o.position.set(pos[0], pos[1], pos[2]);
+    if (rot) o.rotation.set(rot[0], rot[1], rot[2]);
+    if (scl) { if (typeof scl === 'number') o.scale.set(scl, scl, scl); else o.scale.set(scl[0], scl[1], scl[2]); }
+    o.castShadow = true; o.receiveShadow = true;
+    return o;
+  };
+
+  /* 歯列: 1本ずつ独立ジオメトリ。arc(t) が [x,y,z] を返す。 */
+  L.teeth = function (parent, mat, n, arc, size, seed, jitter) {
+    var R = L.rng(seed || 11);
+    for (var i = 0; i < n; i++) {
+      var t = n === 1 ? 0.5 : i / (n - 1);
+      var p = arc(t);
+      var h = size[1] * (0.62 + R() * 0.72), w = size[0] * (0.66 + R() * 0.6);
+      var g = new THREE.ConeGeometry(w, h, 5);
+      g.translate(0, -h / 2, 0);
+      var mm = L.m(g, mat, p, [
+        (R() - 0.5) * (jitter || 0.5), (R() - 0.5) * 0.9, (R() - 0.5) * (jitter || 0.5)
+      ]);
+      parent.add(mm);
+    }
+  };
+
+  /* 三角形数の集計 */
+  L.tris = function (obj) {
+    var n = 0;
+    obj.traverse(function (o) {
+      if (!o.isMesh || !o.geometry) return;
+      var g = o.geometry;
+      n += g.index ? g.index.count / 3 : g.attributes.position.count / 3;
+    });
+    return Math.round(n);
+  };
+})();
+</script>
+<!-- レーンA -->
+<script src="mock_B.js" onerror="window.__miss=(window.__miss||[]).concat('B')"></script>
+<script src="mock_D.js" onerror="window.__miss=(window.__miss||[]).concat('D')"></script>
+<script src="mock_E.js" onerror="window.__miss=(window.__miss||[]).concat('E')"></script>
+<!-- レーンB（無ければ無視） -->
+<script src="mock_F.js" onerror="window.__miss=(window.__miss||[]).concat('F')"></script>
+<script src="mock_G.js" onerror="window.__miss=(window.__miss||[]).concat('G')"></script>
+<script src="mock_H.js" onerror="window.__miss=(window.__miss||[]).concat('H')"></script>
+<script>
+/* 舞台（下水道の照明）と撮影ドライバ */
+(function () {
+  'use strict';
+  var L = ESCAPE.__A2LIB;
+  function q(k) { var m = new RegExp('[?&]' + k + '=([^&]*)').exec(location.search); return m ? decodeURIComponent(m[1]) : null; }
+
+  var W = 1280, H = 720;
+  var renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+  renderer.setPixelRatio(1);
+  renderer.setSize(window.innerWidth || W, window.innerHeight || H);
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 0.96;
+  if (THREE.SRGBColorSpace) renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  document.body.appendChild(renderer.domElement);
+
+  var scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x020305);
+  scene.fog = new THREE.FogExp2(0x05070a, 0.048);
+
+  function brickCanvas() {
+    var S = 512, cv = document.createElement('canvas'); cv.width = cv.height = S;
+    var c = cv.getContext('2d'), R = L.rng(21);
+    c.fillStyle = '#191510'; c.fillRect(0, 0, S, S);
+    var bh = S / 12;
+    for (var r = 0; r < 12; r++) {
+      for (var x = -1; x < 7; x++) {
+        var bx = x * (S / 6) + (r % 2 ? S / 12 : 0), by = r * bh;
+        var v = 0.48 + R() * 0.60;
+        c.fillStyle = 'rgb(' + (62 * v | 0) + ',' + (57 * v | 0) + ',' + (47 * v | 0) + ')';
+        c.fillRect(bx + 2, by + 2, S / 6 - 4, bh - 4);
+        if (R() < 0.35) { c.fillStyle = 'rgba(20,26,16,' + (0.1 + R() * 0.3) + ')'; c.fillRect(bx + 2, by + bh * 0.6, S / 6 - 4, bh * 0.4); }
+      }
+    }
+    for (var i = 0; i < 900; i++) { var d = R() * 3; c.fillStyle = 'rgba(0,0,0,' + R() * 0.25 + ')'; c.fillRect(R() * S, R() * S, d, d); }
+    return cv;
+  }
+  function floorCanvas() {
+    var S = 512, cv = document.createElement('canvas'); cv.width = cv.height = S;
+    var c = cv.getContext('2d'), R = L.rng(33);
+    c.fillStyle = '#1b1a16'; c.fillRect(0, 0, S, S);
+    for (var i = 0; i < 460; i++) {
+      var x = R() * S, y = R() * S, rr = 5 + R() * 12, v = 0.72 + R() * 0.42;
+      c.fillStyle = 'rgb(' + (46 * v | 0) + ',' + (44 * v | 0) + ',' + (38 * v | 0) + ')';
+      c.beginPath(); c.ellipse(x, y, rr, rr * (0.7 + R() * 0.5), R() * 3, 0, 6.284); c.fill();
+    }
+    for (var j = 0; j < 60; j++) {
+      c.fillStyle = 'rgba(18,30,20,' + (0.15 + R() * 0.35) + ')';
+      c.beginPath(); c.ellipse(R() * S, R() * S, 14 + R() * 40, 10 + R() * 28, R() * 3, 0, 6.284); c.fill();
+    }
+    return cv;
+  }
+  function stdFromCanvas(cv, rep, rough, metal) {
+    var t = new THREE.CanvasTexture(cv);
+    t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(rep[0], rep[1]); t.anisotropy = 4;
+    if (THREE.SRGBColorSpace) t.colorSpace = THREE.SRGBColorSpace;
+    return new THREE.MeshStandardMaterial({ map: t, roughness: rough, metalness: metal });
+  }
+
+  var wallMat = stdFromCanvas(brickCanvas(), [5, 2.2], 0.95, 0.02);
+  var floorMat = stdFromCanvas(floorCanvas(), [10, 10], 0.42, 0.05);
+
+  var floor = new THREE.Mesh(new THREE.PlaneGeometry(40, 40), floorMat);
+  floor.rotation.x = -Math.PI / 2; floor.receiveShadow = true; scene.add(floor);
+
+  function wall(w, h, pos, ry) {
+    var m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), wallMat);
+    m.position.set(pos[0], pos[1], pos[2]); m.rotation.y = ry; m.receiveShadow = true; scene.add(m);
+  }
+  wall(26, 7, [0, 3.5, -5.2], 0);
+  wall(22, 7, [-4.6, 3.5, 2], Math.PI / 2);
+  wall(22, 7, [4.6, 3.5, 2], -Math.PI / 2);
+
+  var ceil = new THREE.Mesh(new THREE.PlaneGeometry(26, 26), L.mat(0x0a0a0b, 0.96, 0));
+  ceil.rotation.x = Math.PI / 2; ceil.position.y = 5.2; scene.add(ceil);
+
+  var waterMat = L.mat(0x0a2019, 0.34, 0.30, { transparent: true, opacity: 0.94 });
+  var water = new THREE.Mesh(new THREE.PlaneGeometry(3.0, 26), waterMat);
+  water.rotation.x = -Math.PI / 2; water.position.set(0, 0.035, -2); scene.add(water);
+
+  scene.add(new THREE.HemisphereLight(0x0d1418, 0x05060a, 0.30));
+  var lampY = 4.35;
+  var lamp = new THREE.PointLight(0xffa24a, 34, 22, 2);
+  lamp.position.set(0.45, lampY, 0.9); lamp.castShadow = true;
+  lamp.shadow.mapSize.set(1024, 1024); lamp.shadow.bias = -0.0022;
+  scene.add(lamp);
+  var spot = new THREE.SpotLight(0xffb066, 26, 18, 0.72, 0.7, 2);
+  spot.position.set(0.45, lampY + 0.35, 0.9); spot.target.position.set(0.3, 0, 0.4);
+  scene.add(spot); scene.add(spot.target);
+  var greenA = new THREE.PointLight(0x3fa07a, 4.2, 13, 2); greenA.position.set(-1.15, 0.10, -2.6); scene.add(greenA);
+  var greenB = new THREE.PointLight(0x2f8a6a, 2.6, 11, 2); greenB.position.set(1.1, 0.10, 3.4); scene.add(greenB);
+  var rim = new THREE.PointLight(0x40607e, 4.6, 18, 2); rim.position.set(-3.8, 2.9, -4.2); scene.add(rim);
+
+  var cage = new THREE.Group();
+  cage.add(L.m(new THREE.SphereGeometry(0.10, 14, 10), L.mat(0x1a1208, 0.5, 0.1, { emissive: 0xff9a40, emissiveIntensity: 3.0 }), [0, 0, 0]));
+  var cm = L.mat(0x14110e, 0.7, 0.9);
+  for (var ci = 0; ci < 6; ci++) {
+    var a = ci / 6 * Math.PI * 2;
+    cage.add(L.m(new THREE.TorusGeometry(0.16, 0.008, 5, 16, Math.PI), cm, [0, 0, 0], [0, a, 0]));
+  }
+  cage.add(L.m(new THREE.CylinderGeometry(0.012, 0.012, 0.8, 6), cm, [0, 0.4, 0]));
+  cage.position.set(0.45, lampY, 0.9); scene.add(cage);
+
+  var camera = new THREE.PerspectiveCamera(50, W / H, 0.03, 200);
+  camera.position.set(0, 1.6, 5); camera.lookAt(0, 1.1, 0);
+
+  window.__A2 = { scene: scene, camera: camera, renderer: renderer, lamp: lamp, THREE: THREE };
+  window.__buildLog = [];
+  var current = null, listGroups = [];
+
+  function buildOne(id) {
+    var def = ESCAPE.__A2MOCKS[id];
+    if (!def) return null;
+    var g;
+    try { g = def.build(THREE); } catch (e) { window.__buildLog.push(id + ': ' + (e && e.message) + ' @ ' + (e && e.stack || '').split('\n')[1]); return null; }
+    g.traverse(function (o) { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+    return g;
+  }
+
+  function hud(s) { document.getElementById('hud').textContent = s; }
+
+  function clear() {
+    if (current) { scene.remove(current); current = null; }
+    listGroups.forEach(function (g) { scene.remove(g); }); listGroups = [];
+  }
+
+  function show(id, view) {
+    clear();
+    var def = ESCAPE.__A2MOCKS[id];
+    if (!def) { hud('案 ' + id + ' は未読込'); return false; }
+    current = buildOne(id);
+    if (!current) { hud('案 ' + id + ' の build に失敗: ' + window.__buildLog.join(' / ')); return false; }
+    scene.add(current);
+    var cam = (def.cams && def.cams[view]) || (def.cams && def.cams.full);
+    if (cam) {
+      camera.fov = cam.fov || (view === 'face' ? 34 : 50);
+      camera.updateProjectionMatrix();
+      camera.position.set(cam.pos[0], cam.pos[1], cam.pos[2]);
+      camera.lookAt(cam.look[0], cam.look[1], cam.look[2]);
+    }
+    window.__tris = L.tris(current);
+    hud(id + '  ' + def.name + '   三角形 ' + window.__tris.toLocaleString() + '   view=' + view);
+    renderer.render(scene, camera);
+    return true;
+  }
+
+  function showList() {
+    clear();
+    var ids = Object.keys(ESCAPE.__A2MOCKS), i = 0, txt = [];
+    ids.forEach(function (id) {
+      var g = buildOne(id);
+      if (!g) { txt.push(id + ': build失敗'); i++; return; }
+      g.position.x = (i - (ids.length - 1) / 2) * 2.4;
+      g.scale.setScalar(0.58);
+      scene.add(g); listGroups.push(g);
+      txt.push((i + 1) + ':' + id + ' ' + ESCAPE.__A2MOCKS[id].name + ' (' + L.tris(g).toLocaleString() + '△)');
+      i++;
+    });
+    camera.fov = 52; camera.updateProjectionMatrix();
+    camera.position.set(0, 1.5, 8.2); camera.lookAt(0, 0.8, 0);
+    hud('一覧（キー1〜6で個別表示 / 0で一覧 / f で顔）\n' + txt.join('\n'));
+    renderer.render(scene, camera);
+  }
+
+  window.__shot = function (id, view) { return show(id, view || 'full'); };
+
+  var mid = q('m'), mv = q('v') || 'full';
+  if (mid) show(mid, mv); else showList();
+  window.__ready = true;
+
+  window.addEventListener('keydown', function (e) {
+    var ids = Object.keys(ESCAPE.__A2MOCKS), n = parseInt(e.key, 10);
+    if (n >= 1 && n <= ids.length) { mid = ids[n - 1]; show(mid, 'full'); }
+    else if (e.key === 'f' && mid) show(mid, 'face');
+    else if (e.key === '0') showList();
+  });
+  window.addEventListener('resize', function () {
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix();
+    renderer.render(scene, camera);
+  });
+})();
+</script>
+</body>
+</html>
