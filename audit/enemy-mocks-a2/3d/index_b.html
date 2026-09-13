@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>ESCAPE — エリア2の敵 3Dコンセプトモック（レーンB: F/G/H）</title>
+<style>
+  html, body { margin:0; padding:0; background:#000; overflow:hidden; }
+  canvas { display:block; }
+  #cap {
+    position:fixed; left:18px; bottom:14px; z-index:5;
+    font:13px/1.5 "Hiragino Sans","Noto Sans JP",sans-serif;
+    color:#c9c2b2; text-shadow:0 1px 3px #000, 0 0 8px #000; letter-spacing:.04em;
+    opacity:.82; pointer-events:none;
+  }
+  #cap b { display:block; font-size:17px; font-weight:600; color:#e6ddc8; letter-spacing:.06em; }
+</style>
+</head>
+<body>
+<div id="cap"></div>
+<script src="../../../js/three.min.js"></script>
+<script>
+window.ESCAPE = window.ESCAPE || {};
+ESCAPE.__A2MOCKS = ESCAPE.__A2MOCKS || {};
+</script>
+<script>
+(function () {
+  'use strict';
+  function q(k, d) {
+    var m = new RegExp('[?&]' + k + '=([^&]*)').exec(location.search || '');
+    return m ? decodeURIComponent(m[1]) : d;
+  }
+  var ID = q('m', 'F'), VIEW = q('v', 'full');
+  var s = document.createElement('script');
+  s.src = 'mock_' + ID + '.js';
+  s.onload = function () { boot(ID, VIEW); };
+  s.onerror = function () { document.getElementById('cap').textContent = 'mock_' + ID + '.js が読めない'; };
+  document.head.appendChild(s);
+
+  /* ---------- プロシージャル素材（舞台用・煉瓦/石/水） ---------- */
+  function noiseCanvas(size, fn) {
+    var cv = document.createElement('canvas'); cv.width = cv.height = size;
+    var cx = cv.getContext('2d'), im = cx.createImageData(size, size), d = im.data, i, x, y;
+    for (y = 0; y < size; y++) for (x = 0; x < size; x++) {
+      i = (y * size + x) * 4; fn(x, y, d, i, size);
+    }
+    cx.putImageData(im, 0, 0);
+    return cv;
+  }
+  function hash2(x, y) {
+    var n = Math.sin(x * 127.1 + y * 311.7) * 43758.5453;
+    return n - Math.floor(n);
+  }
+  function vnoise(x, y) {
+    var xi = Math.floor(x), yi = Math.floor(y), xf = x - xi, yf = y - yi;
+    var u = xf * xf * (3 - 2 * xf), v = yf * yf * (3 - 2 * yf);
+    var a = hash2(xi, yi), b = hash2(xi + 1, yi), c = hash2(xi, yi + 1), dd = hash2(xi + 1, yi + 1);
+    return a + (b - a) * u + (c - a) * v + (a - b - c + dd) * u * v;
+  }
+  function fbm(x, y, oct) {
+    var s = 0, a = 0.5, f = 1;
+    for (var i = 0; i < (oct || 4); i++) { s += a * vnoise(x * f, y * f); f *= 2.07; a *= 0.5; }
+    return s;
+  }
+  function brickTex(THREE) {
+    var cv = noiseCanvas(256, function (x, y, d, i, S) {
+      var row = Math.floor(y / 26), off = (row % 2) * 26;
+      var bx = ((x + off) % 52) / 52, by = (y % 26) / 26;
+      var mortar = (bx < 0.055 || bx > 0.945 || by < 0.10 || by > 0.90) ? 1 : 0;
+      var n = fbm(x / 13, y / 13, 4);
+      var base = mortar ? 30 + n * 20 : 56 + n * 46;
+      var moss = Math.max(0, fbm(x / 34 + 9, y / 34, 3) - 0.55) * 2.2;
+      var r = base * (1 - moss * 0.45), g = base * (1 + moss * 0.16), b = base * (1 - moss * 0.55);
+      d[i] = Math.min(255, r * 0.86); d[i + 1] = Math.min(255, g * 0.96); d[i + 2] = Math.min(255, b * 0.64); d[i + 3] = 255;
+    });
+    var t = new THREE.CanvasTexture(cv);
+    t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(10, 4.3);
+    if (THREE.SRGBColorSpace) t.colorSpace = THREE.SRGBColorSpace;
+    return t;
+  }
+  function stoneTex(THREE) {
+    var cv = noiseCanvas(256, function (x, y, d, i) {
+      var cx2 = Math.floor(x / 32), cy2 = Math.floor(y / 32);
+      var seam = (x % 32 < 1.5 || y % 32 < 1.5) ? 0.55 : 1;
+      var n = fbm(x / 9, y / 9, 5), t = fbm(x / 40 + cx2 * 3, y / 40 + cy2 * 5, 2);
+      var v = (34 + n * 36) * seam * (0.70 + t * 0.55);
+      d[i] = v * 0.95; d[i + 1] = v * 0.98; d[i + 2] = v * 0.86; d[i + 3] = 255;
+    });
+    var t = new THREE.CanvasTexture(cv);
+    t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(14, 14);
+    if (THREE.SRGBColorSpace) t.colorSpace = THREE.SRGBColorSpace;
+    return t;
+  }
+  function bumpFrom(THREE, tex, scale) {
+    var t = tex.clone(); t.needsUpdate = true;
+    if (THREE.NoColorSpace !== undefined) t.colorSpace = THREE.NoColorSpace;
+    else t.colorSpace = THREE.LinearSRGBColorSpace || t.colorSpace;
+    return t;
+  }
+
+  /* ---------- 舞台 ---------- */
+  function buildStage(THREE, scene) {
+    var brick = brickTex(THREE), stone = stoneTex(THREE);
+    var wallMat = new THREE.MeshStandardMaterial({
+      map: brick, bumpMap: bumpFrom(THREE, brick), bumpScale: 0.055,
+      roughness: 0.94, metalness: 0.0, color: 0x757455
+    });
+    var floorMat = new THREE.MeshStandardMaterial({
+      map: stone, bumpMap: bumpFrom(THREE, stone), bumpScale: 0.02,
+      roughness: 0.38, metalness: 0.08, color: 0x74766a
+    });
+    var g = new THREE.Group();
+    var floor = new THREE.Mesh(new THREE.PlaneGeometry(20, 20), floorMat);
+    floor.rotation.x = -Math.PI / 2; floor.receiveShadow = true; g.add(floor);
+    /* 隅を作る2枚の壁（モデルは −Z を向くので、壁は背後 +Z と右 +X に置く） */
+    var wA = new THREE.Mesh(new THREE.PlaneGeometry(14, 6), wallMat);
+    wA.position.set(0, 3, 1.75); wA.rotation.y = Math.PI; wA.receiveShadow = true; g.add(wA);
+    var wB = new THREE.Mesh(new THREE.PlaneGeometry(14, 6), wallMat);
+    wB.position.set(1.75, 3, 0); wB.rotation.y = -Math.PI / 2; wB.receiveShadow = true; g.add(wB);
+    var ceil = new THREE.Mesh(new THREE.PlaneGeometry(20, 20),
+      new THREE.MeshStandardMaterial({ map: brick, color: 0x24241d, roughness: 0.99 }));
+    ceil.rotation.x = Math.PI / 2; ceil.position.y = 3.0; g.add(ceil);
+    /* 水路（濡れた緑の水面・手前） */
+    var water = new THREE.Mesh(new THREE.PlaneGeometry(20, 2.2),
+      new THREE.MeshStandardMaterial({ color: 0x123326, roughness: 0.12, metalness: 0.35 }));
+    water.rotation.x = -Math.PI / 2; water.position.set(0, 0.012, -2.25); g.add(water);
+    scene.add(g);
+    return g;
+  }
+  function buildLights(THREE, scene) {
+    scene.add(new THREE.HemisphereLight(0x1c211a, 0x061810, 0.10));
+    /* ナトリウム橙のケージ灯1灯 */
+    var cage = new THREE.Group(); cage.position.set(-0.78, 2.72, -0.62);
+    var bulb = new THREE.Mesh(new THREE.SphereGeometry(0.075, 12, 10),
+      new THREE.MeshBasicMaterial({ color: 0xffcb7a }));
+    cage.add(bulb);
+    for (var i = 0; i < 6; i++) {
+      var bar = new THREE.Mesh(new THREE.TorusGeometry(0.135, 0.008, 5, 16, Math.PI),
+        new THREE.MeshStandardMaterial({ color: 0x2a2018, roughness: 0.85, metalness: 0.6 }));
+      bar.rotation.y = i * Math.PI / 6; bar.rotation.x = Math.PI / 2; cage.add(bar);
+    }
+    var stem = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.016, 0.26, 6),
+      new THREE.MeshStandardMaterial({ color: 0x231c14, roughness: 0.9 }));
+    stem.position.y = 0.18; cage.add(stem);
+    scene.add(cage);
+    var p = new THREE.PointLight(0xffa24a, 12.5, 16, 2.0);
+    p.position.copy(cage.position); p.castShadow = true;
+    p.shadow.mapSize.set(1024, 1024); p.shadow.bias = -0.004; scene.add(p);
+    var sp = new THREE.SpotLight(0xffb265, 6.4, 13, 0.80, 0.60, 1.8);
+    sp.position.set(-0.62, 2.95, -0.45); sp.target.position.set(0, 0.9, 0);
+    scene.add(sp); scene.add(sp.target);
+    /* 水面からの弱い緑の照り返し（下から） */
+    var gl = new THREE.PointLight(0x3faa78, 4.4, 9, 2.0);
+    gl.position.set(0.05, 0.22, -1.02); scene.add(gl);
+    var gl2 = new THREE.PointLight(0x1f6b4a, 1.5, 7, 2.0);
+    gl2.position.set(-1.45, 0.16, -1.9); scene.add(gl2);
+    return p;
+  }
+
+  function boot(id, view) {
+    var THREE = window.THREE;
+    var def = ESCAPE.__A2MOCKS[id];
+    if (!def) { document.getElementById('cap').textContent = '案 ' + id + ' が未定義'; return; }
+    var W = 1280, H = 720;
+    var renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+    renderer.setPixelRatio(1);
+    renderer.setSize(W, H);
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.46;
+    if (THREE.SRGBColorSpace) renderer.outputColorSpace = THREE.SRGBColorSpace;
+    document.body.appendChild(renderer.domElement);
+
+    var scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x030604);
+    scene.fog = new THREE.FogExp2(0x060a07, 0.125);
+    buildStage(THREE, scene);
+    buildLights(THREE, scene);
+
+    var group = def.build(THREE);
+    group.traverse(function (o) { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+    scene.add(group);
+
+    var cam = new THREE.PerspectiveCamera(view === 'face' ? 38 : 50, W / H, 0.03, 80);
+    var c = (def.cams && def.cams[view]) || { pos: [0, 1.6, 4], look: [0, 1.2, 0] };
+    cam.position.set(c.pos[0], c.pos[1], c.pos[2]);
+    cam.lookAt(new THREE.Vector3(c.look[0], c.look[1], c.look[2]));
+
+    var tris = 0;
+    group.traverse(function (o) {
+      if (o.isMesh && o.geometry && o.geometry.index) tris += o.geometry.index.count / 3;
+      else if (o.isMesh && o.geometry) tris += o.geometry.attributes.position.count / 3;
+    });
+    window.__mockTris = Math.round(tris);
+    document.getElementById('cap').innerHTML =
+      '<b>' + def.name + '</b>' + (view === 'face' ? '顔の寄り' : '全身') +
+      ' ／ ' + window.__mockTris.toLocaleString() + ' 三角形';
+
+    renderer.render(scene, cam);
+    requestAnimationFrame(function () {
+      renderer.render(scene, cam);
+      window.__mockReady = true;
+    });
+  }
+})();
+</script>
+</body>
+</html>
