@@ -234,7 +234,7 @@
       geo.translate(0, len / 2, 0);
       L.deform(geo, function (x, y, z, o) {
         var t = L.clamp(y / len, 0, 1), r = ra + (rb - ra) * t;
-        r *= 1 - 0.26 * Math.sin(Math.PI * Math.pow(t, 0.9));   /* 中央が細る＝骨と皮 */
+        r *= 1 - 0.10 * Math.sin(Math.PI * Math.pow(t, 0.9));   /* 中央が僅かに細る */
         var d = Math.sqrt(x * x + z * z) || 1;
         o[0] = x / d * r; o[2] = z / d * r;
       });
@@ -244,7 +244,7 @@
       mm.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), new THREE.Vector3(dx / len, dy / len, dz / len));
       g.add(mm);
       if (i > 0) {
-        g.add(L.m(L.ell(ra * 1.30, ra * 1.46, ra * 1.26, 12), M.skin, a));   /* 関節の骨の瘤 */
+        g.add(L.m(L.ell(ra * 1.20, ra * 1.32, ra * 1.18, 12), M.skin, a));   /* 関節の骨の瘤 */
         g.add(L.m(L.tube([[a[0], a[1] - ra, a[2]],
           [a[0] + dx * 0.22, a[1] + dy * 0.22 - ra * 0.6, a[2] + dz * 0.22]], ra * 0.20, 5), M.sinew));
       }
@@ -268,12 +268,12 @@
         var seg = L.m(L.seg(0.0100 * k - j * 0.0018, 0.0084 * k - j * 0.0018, l2, 8), M.skin, [px, py, pz]);
         seg.rotation.order = 'ZXY';
         seg.rotation.z = a0 * 0.55 + Math.PI;
-        seg.rotation.x = -(0.58 + j * 0.58);
+        seg.rotation.x = -(0.72 + j * 0.74);   /* 配管へ深く巻き込む＝指が食い込む */
         h.add(seg);
         h.add(L.m(L.ell(0.0116 * k - j * 0.0018, 0.0102 * k, 0.0110 * k - j * 0.0018, 9), M.skin, [px, py, pz]));
         py -= l2 * 0.72 * Math.cos(j * 0.5); pz -= l2 * 0.52;
         if (j === 2) h.add(L.m(L.ell(0.0064 * k, 0.0130 * k, 0.0052 * k, 7), M.nail,
-          [px, py - 0.006 * k, pz - 0.008 * k], [0.9, 0, 0]));
+          [px, py - 0.004 * k, pz - 0.004 * k], [0.9, 0, 0]));
       }
     }
     h.position.set(at[0], at[1], at[2]);
@@ -286,42 +286,45 @@
 
     /* ---- 天井の太い配管＋吊りバンド ---- */
     var pipe = new THREE.Group();
-    var pg = new THREE.CylinderGeometry(PIPE_R, PIPE_R, 9.4, 20, 1);
+    function sag(x) { return -0.052 * Math.exp(-Math.pow((x + 0.20) / 1.9, 2)); }
+    var pg = new THREE.CylinderGeometry(PIPE_R, PIPE_R, 9.4, 20, 24);
     pg.rotateZ(Math.PI / 2);
+    L.deform(pg, function (x, y, z, o) { o[1] = y + sag(x); });
     pipe.add(L.m(pg, M.pipe, [0, PIPE_Y, 0]));
     for (var i = -3; i <= 3; i++) {
-      pipe.add(L.m(new THREE.TorusGeometry(PIPE_R + 0.022, 0.024, 7, 20), M.pipe, [i * 1.35, PIPE_Y, 0], [0, Math.PI / 2, 0]));
-      pipe.add(L.m(new THREE.BoxGeometry(0.05, 0.9, 0.05), M.bolt, [i * 1.35, PIPE_Y + 0.55, 0]));
+      pipe.add(L.m(new THREE.TorusGeometry(PIPE_R + 0.022, 0.024, 7, 20), M.pipe, [i * 1.35, PIPE_Y + sag(i * 1.35), 0], [0, Math.PI / 2, sag(i * 1.35) * 1.2]));
+      pipe.add(L.m(new THREE.BoxGeometry(0.05, 0.9 - sag(i * 1.35), 0.05), M.bolt, [i * 1.35, PIPE_Y + 0.55 + sag(i * 1.35) * 0.5, 0]));
     }
-    var pg2 = new THREE.CylinderGeometry(0.075, 0.075, 9.4, 12, 1); pg2.rotateZ(Math.PI / 2);
+    var pg2 = new THREE.CylinderGeometry(0.075, 0.075, 9.4, 12, 20); pg2.rotateZ(Math.PI / 2);
+    L.deform(pg2, function (x, y, z, o) { o[1] = y + sag(x) * 0.7; });
     pipe.add(L.m(pg2, M.pipe, [0, PIPE_Y + 0.30, 0.34]));
     root.add(pipe);
 
     /* ---- 胴: 配管の下に張り付く長い胴。棘突起・肋・骨盤が浮く ---- */
     var torso = new THREE.SphereGeometry(1, 46, 30);
-    torso.scale(0.72, 0.118, 0.100);
+    torso.scale(0.72, 0.212, 0.180);
     L.deform(torso, function (x, y, z, o) {
       var nx = x / 0.72;
       var k = 1 - 0.58 * Math.pow(Math.abs(nx), 3.0);
       k *= 1 + 0.36 * Math.exp(-Math.pow((nx - 0.50) * 3.0, 2));
       k *= 1 + 0.24 * Math.exp(-Math.pow((nx + 0.55) * 3.2, 2));
       k *= 1 - 0.36 * Math.exp(-Math.pow((nx + 0.02) * 4.2, 2));
-      o[1] = y * k - 0.034 * Math.pow(Math.abs(nx), 2);
+      o[1] = y * k - 0.050 * Math.pow(Math.abs(nx), 2);
       o[2] = z * k * (1 + 0.10 * Math.sin(nx * 2.1));       /* 胴が捻れる */
       o[0] = x;
     });
     for (var r = 0; r < 9; r++) {
       var rx2 = 0.42 - r * 0.066;
-      L.ridge(torso, [rx2, -0.11, -0.10], [rx2 + 0.018, 0.02, 0.10], 0.028, 0.0145, 1.5);
-      L.ridge(torso, [rx2 + 0.033, -0.115, -0.02], [rx2 + 0.043, -0.06, 0.09], 0.022, -0.0068, 1.4);
+      L.ridge(torso, [rx2, -0.19, -0.17], [rx2 + 0.020, 0.04, 0.17], 0.046, 0.0235, 1.5);
+      L.ridge(torso, [rx2 + 0.033, -0.195, -0.03], [rx2 + 0.043, -0.10, 0.15], 0.036, -0.0110, 1.4);
     }
-    L.ridge(torso, [0.66, 0.084, 0.00], [-0.68, 0.078, 0.00], 0.032, 0.0175, 1.3);
+    L.ridge(torso, [0.66, 0.150, 0.00], [-0.68, 0.140, 0.00], 0.050, 0.0280, 1.3);
     for (var v = 0; v < 13; v++) {
-      L.bulge(torso, [0.60 - v * 0.104, 0.100, 0.0], 0.021, 0.0088);      /* 棘突起 */
+      L.bulge(torso, [0.60 - v * 0.104, 0.180, 0.0], 0.034, 0.0145);      /* 棘突起 */
     }
-    L.ridge(torso, [0.18, -0.120, -0.02], [-0.42, -0.115, -0.02], 0.028, -0.0112, 1.4);
-    L.warp(torso, 0.0080, 6, 8);
-    root.add(L.m(torso, M.skin, [-0.20, PIPE_Y - 0.30, -0.04], [0.12, 0, -0.06]));
+    L.ridge(torso, [0.18, -0.205, -0.03], [-0.42, -0.200, -0.03], 0.046, -0.0180, 1.4);
+    L.warp(torso, 0.0130, 6, 8);
+    root.add(L.m(torso, M.skin, [-0.20, PIPE_Y - 0.40, -0.04], [0.12, 0, -0.06]));
 
     /* ---- 四肢（各4節・関節3つ以上）: 配管に絡みつく ---- */
     var limbs = [
@@ -331,16 +334,19 @@
       [[-0.66, 2.42, 0.06], [-1.04, 1.98, 0.56], [-1.36, 2.74, 0.56], [-1.48, 2.94, 0.14], [-1.42, 2.86, -0.18]]
     ];
     limbs.forEach(function (pts, i) {
-      chain(root, M, pts, 0.068 - (i > 1 ? 0.006 : 0), 0.026);
+      chain(root, M, pts, 0.109 - (i > 1 ? 0.010 : 0), 0.042);
       var e = pts[pts.length - 1], d = pts[pts.length - 2];
-      grip(root, M, e, [0.2 + i * 0.1, Math.atan2(e[0] - d[0], e[2] - d[2]), 0.1 * (i % 2 ? 1 : -1)], 500 + i * 7, 1.0);
+      grip(root, M, e, [0.2 + i * 0.1, Math.atan2(e[0] - d[0], e[2] - d[2]), 0.1 * (i % 2 ? 1 : -1)], 500 + i * 7, 2.05);
     });
-    [[0.34, 2.48, -0.02], [-0.64, 2.42, 0.00]].forEach(function (p) {
-      root.add(L.m(L.ell(0.098, 0.074, 0.106, 16), M.skin, p));
+    [[0.36, 2.44, -0.02, 1.00], [-0.66, 2.38, 0.00, 0.92]].forEach(function (p) {
+      var gm = L.ell(0.178 * p[3], 0.128 * p[3], 0.168 * p[3], 18);
+      L.ridge(gm, [0.10, 0.06, -0.14], [0.16, -0.08, 0.12], 0.10, 0.012, 1.5);
+      L.warp(gm, 0.010, 8, 60 + p[0] * 10);
+      root.add(L.m(gm, M.skin, [p[0], p[1], p[2]]));
     });
 
     /* ---- 首（逆さに垂れる）と頭 ---- */
-    var nk = L.tube([[0.40, 2.44, -0.04], [0.46, 2.22, -0.24], [0.52, 2.00, -0.46], [0.555, 1.88, -0.58]], 0.048, 12);
+    var nk = L.tube([[0.40, 2.42, -0.04], [0.46, 2.20, -0.24], [0.52, 1.99, -0.46], [0.555, 1.88, -0.58]], 0.074, 12);
     L.ridge(nk, [0.40, 2.42, -0.08], [0.55, 1.90, -0.60], 0.024, 0.007, 1.6);
     root.add(L.m(nk, M.skin));
     var hd = head(M);
