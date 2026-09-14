@@ -180,15 +180,20 @@ ESCAPE.__A2MOCKS = ESCAPE.__A2MOCKS || {};
     key.castShadow = true; key.shadow.mapSize.set(2048, 2048);
     key.shadow.bias = -0.0016; key.shadow.normalBias = 0.012;
     scene.add(key); scene.add(key.target);
+    if (!face) {   /* 下半身を起こす第2キー（同じ斜め上から・弱く） */
+      var key2 = new THREE.SpotLight(0xff9c46, 11.0, 8.0, 0.80, 0.80, 1.9);
+      key2.position.set(-0.34, 2.20, -1.20); key2.target.position.set(0.72, 0.82, 0.30);
+      scene.add(key2); scene.add(key2.target);
+    }
     if (!face) {
       var glow = new THREE.PointLight(0xff9d42, 1.4, 2.4, 2.0);
       glow.position.set(-0.22, 2.34, -1.72); scene.add(glow);
     }
     /* 水面からの緑のリム（下・背後）。ホットスポットを作らないよう弱く遠くから。 */
-    var rim = new THREE.PointLight(0x4aa87f, face ? 1.4 : 2.4, face ? 4.0 : 6.0, 1.7);
+    var rim = new THREE.PointLight(0x54a483, face ? 1.4 : 1.8, face ? 4.0 : 6.0, 1.8);
     rim.position.set(face ? 0.30 : 0.60, face ? 1.30 : 0.62, face ? 1.30 : 1.95); scene.add(rim);
     if (!face) {
-      var rim2 = new THREE.PointLight(0x2f7f5a, 1.0, 5.0, 1.7);
+      var rim2 = new THREE.PointLight(0x357c5e, 0.8, 5.0, 1.8);
       rim2.position.set(-0.30, 0.70, 1.60); scene.add(rim2);
     }
     /* ごく弱いフィル（完全な黒つぶれを避ける） */

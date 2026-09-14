@@ -239,6 +239,15 @@
   F.tube = tube;
 
   /* 三角形を削って本当の穴を開ける（眼窩・鼻腔）。holes: [{c:[x,y,z], r:[rx,ry,rz]}] */
+  /* 歪めた楕円体（埋没した頭蓋を覆う乾いた肉のかたまり） */
+  F.warpBall = function (THREE, rx, ry, rz, seed) {
+    var L = global.ESCAPE.__A2LIB;
+    var g = new THREE.SphereGeometry(1, 14, 11);
+    g.scale(rx, ry, rz);
+    L.warp(g, Math.min(rx, ry) * 0.26, 12, seed || 7);
+    return g;
+  };
+
   F.punch = function (g, holes) {
     var pos = g.attributes.position.array, idx = g.index.array, out = [], i, h;
     for (i = 0; i < idx.length; i += 3) {
@@ -283,13 +292,28 @@
   /* 頭蓋。原点＝頭の中心、正面 −Z。
    * 眼窩は「本物の穴」: 骨殻に浅い窪みを彫り、そこへ開口円錐（内面＝ほぼ無照明の黒）を
    * 差し込む。窪みの周囲は隆起させて骨の縁を立てる。
-   * opt: { seed, gape（下顎の開き rad）, slip（下顎の横ずれ）, jaw, scale, chip } */
+   * opt: { seed, gape, slip, jaw, scale, chip, seg,
+   *        slim（頬骨弓・皮膚片・腱を省いて安く作る）, only:'jaw'|'calvaria'（断片） } */
   F.skull = function (THREE, P, opt) {
     opt = opt || {};
     var L = global.ESCAPE.__A2LIB;
     var R = F.rng(opt.seed || 5), G = new THREE.Group();
     var rx = 0.080, ry = 0.098, rz = 0.110;
     var ch = opt.chip === undefined ? 1 : opt.chip;
+    var slim = !!opt.slim, only = opt.only || '';
+    /* 頭頂の割れた蓋だけの断片 */
+    if (only === 'calvaria') {
+      var cal = new THREE.SphereGeometry(1, 22, 14, 0.35, Math.PI * 1.15, 0, Math.PI * 0.48);
+      cal.scale(rx, ry, rz);
+      L.warp(cal, 0.004, 16, opt.seed || 5);
+      var cm = mesh(THREE, cal, P.boneSkull);
+      cm.material = P.boneSkull; G.add(cm);
+      var cin = new THREE.SphereGeometry(1, 12, 8, 0.35, Math.PI * 1.15, 0, Math.PI * 0.48);
+      cin.scale(rx * 0.90, ry * 0.90, rz * 0.90);
+      G.add(mesh(THREE, cin, P.cavity));
+      if (opt.scale) G.scale.setScalar(opt.scale);
+      return G;
+    }
     /* 眼窩の中心（左右で高さ・大きさを変える＝非対称） */
     var OR = [
       { c: [rx * 0.44, ry * 0.20, -rz * 0.64], r: 0.0320, s: 1 },
@@ -297,6 +321,25 @@
     ];
 
     /* ---- 脳頭蓋 ---- */
+    if (only === 'jaw') {
+      var JG = new THREE.Group();
+      JG.add(mesh(THREE, F.tube(THREE, [
+        [rx * 0.58, ry * 0.02, -rz * 0.30], [rx * 0.44, -ry * 0.03, -rz * 0.54],
+        [0, -ry * 0.05, -rz * 0.62], [-rx * 0.44, -ry * 0.03, -rz * 0.52],
+        [-rx * 0.56, ry * 0.02, -rz * 0.28]
+      ], 0.0122, 6), P.boneDirty));
+      [1, -1].forEach(function (s4) {
+        JG.add(mesh(THREE, F.tube(THREE, [
+          [s4 * rx * 0.54, 0.002, -rz * 0.36], [s4 * rx * 0.70, ry * 0.20, rz * 0.10]
+        ], 0.0092, 5), P.boneDirty));
+      });
+      F.teethRow(THREE, P, JG, 11, function (t) {
+        var a = (t - 0.5) * 2.38;
+        return [Math.sin(a) * rx * 0.52, 0.007, -rz * 0.38 - Math.cos(a) * rz * 0.22];
+      }, true, [0.0060, 0.0158], (opt.seed || 5) + 9, 0.34);
+      if (opt.scale) JG.scale.setScalar(opt.scale);
+      return JG;
+    }
     var SEG = opt.seg || 44;
     var v = new THREE.SphereGeometry(1, SEG, Math.round(SEG * 0.68)); v.scale(rx, ry, rz);
     function shape(x, y, z, o) {
@@ -356,7 +399,7 @@
     ]);
     G.add(mesh(THREE, v, P.boneSkull));
     /* 頭蓋の内側＝完全な闇（穴から覗く） */
-    var inn = new THREE.SphereGeometry(1, 16, 12);
+    var inn = new THREE.SphereGeometry(1, slim ? 10 : 16, slim ? 8 : 12);
     inn.scale(rx, ry, rz);
     L.deform(inn, shape);
     inn.scale(0.90, 0.90, 0.90);
@@ -370,13 +413,13 @@
       tubeIn.rotateX(Math.PI / 2);
       G.add(mesh(THREE, tubeIn, P.cavity, [c[0], c[1], -rz * 0.58], [0.12, -e.s * 0.28, 0], [1, 0.86, 1]));
       /* 立った骨の縁（眼窩縁）。穴の切り口も隠す。 */
-      var rim = new THREE.TorusGeometry(w * 1.02, w * 0.112, 5, 22);
+      var rim = new THREE.TorusGeometry(w * 1.02, w * 0.112, 5, slim ? 13 : 22);
       rim.scale(1, 0.88, 0.50);
       G.add(mesh(THREE, rim, P.boneSkull, [c[0], c[1], -rz * 0.795], [0.13, -e.s * 0.30, e.s * 0.08]));
     });
 
     /* ---- 頬骨弓: 殻に沿わせた細い橋（下に隙間ができる＝本物の頭蓋の決め手） ---- */
-    [1, -1].forEach(function (s2) {
+    if (!slim) [1, -1].forEach(function (s2) {
       G.add(mesh(THREE, F.tube(THREE, [
         [s2 * rx * 0.70, -ry * 0.10, -rz * 0.44], [s2 * rx * 0.86, -ry * 0.02, -rz * 0.12],
         [s2 * rx * 0.84, ry * 0.10, rz * 0.18]
@@ -425,6 +468,7 @@
     }
 
     /* ---- 骨に張り付いた羊皮紙状の皮膚と腱（3か所・非対称） ---- */
+    if (slim) { if (opt.scale) G.scale.setScalar(opt.scale); return G; }
     var pc = new THREE.SphereGeometry(1, 12, 9, Math.PI * 0.72, Math.PI * 0.56, Math.PI * 0.20, Math.PI * 0.40);
     pc.scale(rx * 1.03, ry * 1.03, rz * 1.03);
     G.add(mesh(THREE, pc, P.dry, [0, 0, 0], [0, 0, 0.25]));              /* 後頭にだけ張り付く */
@@ -649,25 +693,25 @@
 
       /* ===== 肢8本（大人と子供／2本は逆向きの関節） ===== */
       limb(THREE, P, G, { a: [0.60, 1.80, -0.02], b: [0.82, 2.14, 0.14], c: [0.93, 2.20, 0.00],
-        r0: 0.030, r1: 0.023, hand: 0.10, aim: [0.5, -1.35, 0.4], seed: 3, curl: 0.5 });
+        r0: 0.036, r1: 0.028, hand: 0.10, aim: [0.5, -1.35, 0.4], seed: 3, curl: 0.5 });
       limb(THREE, P, G, { a: [0.67, 1.66, 0.30], b: [0.46, 1.29, -0.32], c: [0.90, 1.33, -0.28],  /* 逆向きの肘 */
-        r0: 0.029, r1: 0.022, bow1: 0.06, hand: 0.095, aim: [0.1, -1.6, -0.2], seed: 7, curl: 0.55 });
+        r0: 0.035, r1: 0.026, bow1: 0.06, hand: 0.095, aim: [0.1, -1.6, -0.2], seed: 7, curl: 0.55 });
       limb(THREE, P, G, { a: [0.69, 1.46, 0.08], b: [0.50, 1.28, -0.36], c: [0.37, 1.12, -0.55],  /* 子供の腕 */
-        r0: 0.017, r1: 0.013, child: true, hand: 0.058, aim: [-0.5, -0.6, 0.5], seed: 11, curl: 0.22 });
+        r0: 0.020, r1: 0.015, child: true, hand: 0.058, aim: [-0.5, -0.6, 0.5], seed: 11, curl: 0.22 });
       limb(THREE, P, G, { a: [0.75, 1.54, 0.62], b: [0.87, 1.12, 0.87], c: [0.82, 0.73, 0.93],    /* 垂れた腕 */
-        r0: 0.026, r1: 0.020, dirty: true, hand: 0.088, aim: [0.9, -0.3, 0.2], seed: 13, curl: 0.15 });
+        r0: 0.031, r1: 0.024, dirty: true, hand: 0.088, aim: [0.9, -0.3, 0.2], seed: 13, curl: 0.15 });
       limb(THREE, P, G, { a: [0.80, 0.99, 0.71], b: [0.60, 0.62, 0.28], c: [0.92, 0.41, 0.26],    /* 脚（膝が手前） */
-        r0: 0.034, r1: 0.026, foot: 0.11, aim: [-0.35, -1.5, 0.3], seed: 17 });
+        r0: 0.041, r1: 0.031, foot: 0.11, aim: [-0.35, -1.5, 0.3], seed: 17 });
       limb(THREE, P, G, { a: [0.78, 0.93, 0.86], b: [0.91, 0.49, 1.27], c: [0.93, 0.19, 0.85],    /* 逆向きの膝 */
-        r0: 0.031, r1: 0.024, dirty: true, foot: 0.10, aim: [0.5, -1.5, -0.3], seed: 19 });
+        r0: 0.037, r1: 0.029, dirty: true, foot: 0.10, aim: [0.5, -1.5, -0.3], seed: 19 });
       limb(THREE, P, G, { a: [0.85, 0.85, 1.00], b: [0.95, 0.62, 1.24], c: [0.94, 0.34, 1.31],    /* 子供の脚 */
-        r0: 0.018, r1: 0.014, child: true, foot: 0.062, aim: [0.2, -1.5, 0.0], seed: 23 });
+        r0: 0.022, r1: 0.017, child: true, foot: 0.062, aim: [0.2, -1.5, 0.0], seed: 23 });
       G.add(F.bone(THREE, P.boneDirty, [0.71, 1.30, 0.74], [0.56, 1.03, 0.97], 0.024, 0.05, 9, 5)); /* 折れた腕の残骸 */
       G.add(mesh(THREE, new THREE.ConeGeometry(0.026, 0.035, 5), P.cavity, [0.55, 1.01, 0.99], [1.0, 0.4, 0.6]));
 
       /* ===== 頭蓋3つ ===== */
       /* 主頭蓋: 首をねじって壁から外へ（カメラ側 −X）顔を向ける。下顎はずれて開く。 */
-      var hA = F.skull(THREE, P, { seed: 5, gape: 0.42, slip: 0.018, seg: 76 });
+      var hA = F.skull(THREE, P, { seed: 5, gape: 0.42, slip: 0.018, seg: 52 });
       hA.position.set(0.50, 2.02, -0.20); hA.rotation.set(-0.28, 1.24, 0.14); G.add(hA);
       G.add(F.bone(THREE, P.bone, [0.56, 1.90, -0.10], [0.51, 1.97, -0.18], 0.026, 0, 8, 4)); /* 頸椎 */
       /* 2つ目: 肩の肉に半分埋没（頭頂と片眼窩だけ出る） */
@@ -683,6 +727,64 @@
       L.warp(buryC, 0.012, 15, 4);
       G.add(mesh(THREE, buryC, P.dry, [0.56, 1.30, 0.36]));
 
+      /* 4つ目: 子供の頭蓋。胸郭の縁から横向きに覗く */
+      var hD = F.skull(THREE, P, { seed: 23, gape: 0.50, slip: 0.012, chip: 1.2, scale: 0.62, seg: 30, slim: true });
+      hD.position.set(0.64, 1.56, -0.10); hD.rotation.set(0.36, 0.80, -1.05); G.add(hD);
+      G.add(mesh(THREE, F.warpBall(THREE, 0.056, 0.050, 0.058, 11), P.dry, [0.68, 1.52, 0.00]));
+      /* 5つ目: 欠けた半分の頭蓋。下の肋郭に食い込む（下顎なし） */
+      var hE = F.skull(THREE, P, { seed: 57, jaw: false, chip: 2.6, scale: 0.92, seg: 30, slim: true });
+      hE.position.set(0.55, 1.10, 0.06); hE.rotation.set(1.05, 1.85, 0.70); G.add(hE);
+      G.add(mesh(THREE, F.warpBall(THREE, 0.078, 0.070, 0.076, 13), P.dry, [0.61, 1.07, 0.14]));
+      /* 6つ目: 下顎だけの断片が骨盤の上に癒着 */
+      var hF = F.skull(THREE, P, { seed: 83, only: 'jaw', scale: 1.05 });
+      hF.position.set(0.61, 0.92, 0.26); hF.rotation.set(-0.45, 1.10, 2.25); G.add(hF);
+      /* 7つ目: 幼児の頭蓋。腰の骨の間に沈む */
+      var hG = F.skull(THREE, P, { seed: 97, jaw: false, chip: 1.8, scale: 0.48, seg: 24, slim: true });
+      hG.position.set(0.70, 0.78, 0.02); hG.rotation.set(0.25, 0.30, 2.45); G.add(hG);
+      G.add(mesh(THREE, F.warpBall(THREE, 0.042, 0.038, 0.042, 10), P.dry, [0.73, 0.76, 0.07]));
+      /* 8つ目: 頭頂の割れた蓋だけが背中から生えている */
+      var hH = F.skull(THREE, P, { only: 'calvaria', seed: 31, scale: 0.88 });
+      hH.position.set(0.60, 1.40, 0.36); hH.rotation.set(-1.25, 0.20, 0.30); G.add(hH);
+
+      /* 9つ目: 大人の頭蓋が胸郭の左から顔を出す */
+      var hI = F.skull(THREE, P, { seed: 113, gape: 0.30, slip: -0.020, chip: 1.6, scale: 0.80, seg: 28, slim: true });
+      hI.position.set(0.50, 1.44, -0.18); hI.rotation.set(-0.10, 1.55, -0.55); G.add(hI);
+      G.add(mesh(THREE, F.warpBall(THREE, 0.066, 0.060, 0.066, 17), P.dry, [0.56, 1.42, -0.10]));
+      /* 10個目: 子供の頭蓋が腰の下から出る */
+      var hJ = F.skull(THREE, P, { seed: 127, gape: 0.44, chip: 1.4, scale: 0.56, seg: 26, slim: true });
+      hJ.position.set(0.58, 0.62, 0.04); hJ.rotation.set(0.22, 1.20, -2.30); G.add(hJ);
+      G.add(mesh(THREE, F.warpBall(THREE, 0.048, 0.044, 0.048, 19), P.dry, [0.63, 0.64, 0.10]));
+      /* 下胴の乾いた肉のかたまり（骨の山を一体にまとめる） */
+      G.add(mesh(THREE, F.warpBall(THREE, 0.150, 0.185, 0.145, 23), P.dry, [0.74, 0.96, 0.44]));
+      G.add(mesh(THREE, F.warpBall(THREE, 0.115, 0.140, 0.110, 29), P.dryWet, [0.70, 1.38, 0.24]));
+
+      /* ===== 3つ目の肋郭（子供・脊柱の下部に噛み合う） ===== */
+      G.add(F.ribcage(THREE, P.boneChild, {
+        n: 7, h: 0.30, w: 0.105, d: 0.112, r: 0.0072, seed: 61,
+        p: [0.59, 1.20, 0.00], rot: [-0.62, -0.95, 0.42]
+      }));
+
+      /* ===== 追加の肢（合計12本） ===== */
+      limb(THREE, P, G, { a: [0.72, 1.62, 0.46], b: [0.88, 1.92, 0.62], c: [0.95, 2.00, 0.46],
+        r0: 0.023, r1: 0.018, child: true, hand: 0.062, aim: [0.4, -1.5, 0.5], seed: 29, curl: 0.5 });
+      limb(THREE, P, G, { a: [0.74, 1.04, 0.28], b: [0.52, 0.68, -0.20], c: [0.41, 0.38, -0.40],
+        r0: 0.036, r1: 0.028, dirty: true, foot: 0.098, aim: [-0.9, -0.9, 0.4], seed: 31 });
+      limb(THREE, P, G, { a: [0.82, 0.76, 0.44], b: [0.70, 0.50, 0.16], c: [0.90, 0.33, 0.44],  /* 子供・逆関節 */
+        r0: 0.020, r1: 0.015, child: true, foot: 0.058, aim: [0.3, -1.5, -0.2], seed: 37 });
+      /* 前腕と手だけの肢（上腕は無い） */
+      G.add(F.bone(THREE, P.boneDirty, [0.80, 0.66, 0.02], [0.93, 0.50, -0.12], 0.022, 0.04, 8, 5));
+      G.add(F.hand(THREE, P.boneDirty, [0.94, 0.48, -0.14], [0.2, -1.6, 0.1], 0.086, 41, 0.5));
+      G.add(F.knob(THREE, P.boneDirty, [0.80, 0.66, 0.02], 0.030));
+
+      /* ===== 背骨1本の芯: 全部を癒合させる乾いた組織の鞘 ===== */
+      var core = F.tube(THREE, [[0.84, 0.58, 0.94], [0.80, 0.96, 0.62], [0.73, 1.34, 0.30],
+        [0.64, 1.71, 0.04], [0.56, 1.92, -0.12]], 0.066, 9);
+      L.warp(core, 0.016, 11, 5);
+      G.add(mesh(THREE, core, P.dry));
+      var core2 = F.tube(THREE, [[0.80, 0.74, 0.72], [0.72, 1.16, 0.40], [0.66, 1.55, 0.16]], 0.036, 8);
+      L.warp(core2, 0.013, 14, 12);
+      G.add(mesh(THREE, core2, P.dryWet));
+
       /* ===== 乾いた皮膚の膜・腱 ===== */
       G.add(F.web(THREE, P.dry, [0.64, 1.74, 0.02], [0.66, 1.46, 0.14], [0.80, 1.62, 0.26], 0.035));
       G.add(F.web(THREE, P.dry, [0.68, 1.62, 0.28], [0.58, 1.42, -0.02], [0.72, 1.40, 0.20], 0.05));
@@ -695,6 +797,22 @@
           [0.60 + R() * 0.1, 1.90 - t0 * 1.2, -0.10 + t0 * 0.7],
           [0.72 + R() * 0.12, 1.80 - t0 * 1.3, 0.02 + t0 * 0.8],
           [0.84 + R() * 0.08, 1.66 - t0 * 1.25, 0.16 + t0 * 0.75]], 0.0045 + R() * 0.004));
+      }
+
+      /* 追加の襞と腱（骨の隙間を埋めて一体にする） */
+      [[[0.62, 1.72, 0.02], [0.78, 1.52, 0.04], [0.70, 1.60, 0.30]],
+       [[0.78, 1.50, 0.00], [0.66, 1.30, 0.10], [0.80, 1.28, 0.26]],
+       [[0.62, 1.06, 0.26], [0.74, 1.22, 0.44], [0.66, 1.30, 0.14]],
+       [[0.76, 0.82, 0.60], [0.86, 0.72, 0.32], [0.80, 0.96, 0.46]],
+       [[0.58, 1.60, 0.52], [0.68, 1.48, 0.34], [0.62, 1.68, 0.30]],
+       [[0.74, 1.62, 0.46], [0.62, 1.78, 0.22], [0.72, 1.80, 0.44]]
+      ].forEach(function (w, k) { G.add(F.web(THREE, k % 2 ? P.dry : P.dryWet, w[0], w[1], w[2], 0.035)); });
+      for (i = 0; i < 10; i++) {
+        var u = i / 9;
+        G.add(F.sinew(THREE, P.sinew, [
+          [0.58 + R() * 0.22, 1.92 - u * 1.24, -0.10 + u * 0.92],
+          [0.70 + R() * 0.18, 1.84 - u * 1.28, 0.04 + u * 0.90],
+          [0.84 + R() * 0.10, 1.70 - u * 1.20, 0.22 + u * 0.72]], 0.0035 + R() * 0.0035));
       }
 
       /* ===== 髪の房・布の切れ端・根 ===== */
@@ -722,7 +840,7 @@
       return G;
     },
     cams: {
-      full: { pos: [-1.62, 1.32, -0.64], look: [0.68, 1.26, 0.34] },
+      full: { pos: [-1.80, 1.38, -0.80], look: [0.68, 1.18, 0.30] },
       face: { pos: [-0.09, 1.98, -0.40], look: [0.462, 1.966, -0.212], fov: 32 },
       corridor: { pos: [-0.10, 1.50, -8.60], look: [0.62, 1.40, 0.16] }
     }
