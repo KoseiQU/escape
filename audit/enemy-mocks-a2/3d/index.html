@@ -370,14 +370,14 @@ ESCAPE.__A2MOCKS = ESCAPE.__A2MOCKS || {};
   renderer.setPixelRatio(1);
   renderer.setSize(window.innerWidth || W, window.innerHeight || H);
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 0.92;
+  renderer.toneMappingExposure = 0.86;
   if (THREE.SRGBColorSpace) renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   document.body.appendChild(renderer.domElement);
 
   var scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x020305);
-  scene.fog = new THREE.FogExp2(0x05070a, 0.048);
+  scene.background = new THREE.Color(0x44515f);
+  scene.fog = new THREE.FogExp2(0x44515f, 0.048);
 
   function brickCanvas() {
     var S = 512, cv = document.createElement('canvas'); cv.width = cv.height = S;
@@ -440,21 +440,25 @@ ESCAPE.__A2MOCKS = ESCAPE.__A2MOCKS || {};
   var water = new THREE.Mesh(new THREE.PlaneGeometry(3.0, 26), waterMat);
   water.rotation.x = -Math.PI / 2; water.position.set(0, 0.035, 0); scene.add(water);
 
-  scene.add(new THREE.HemisphereLight(0x16222c, 0x060a0c, 0.46));
+  /* 照明（P5e-1 §6）: ナトリウム橙のキー1灯（斜め上）＋水面の緑のリム（下・背後）＋ごく弱いフィル */
+  var roomLights = [];
+  function addRoomLight(l) { roomLights.push(l); scene.add(l); return l; }
+  addRoomLight(new THREE.HemisphereLight(0x24374d, 0x0b1118, 2.20));
   var lampY = 4.35;
-  var lamp = new THREE.PointLight(0xffb470, 40, 24, 2);
+  var lamp = new THREE.PointLight(0xffae66, 24, 22, 2);
   lamp.position.set(0.55, lampY, -1.15); lamp.castShadow = true;
   lamp.shadow.mapSize.set(1024, 1024); lamp.shadow.bias = -0.0022;
-  scene.add(lamp);
-  var spot = new THREE.SpotLight(0xffb066, 26, 18, 0.72, 0.7, 2);
-  spot.position.set(0.55, lampY + 0.35, -1.15); spot.target.position.set(0.25, 0.9, -0.2);
-  scene.add(spot); scene.add(spot.target);
-  var greenA = new THREE.PointLight(0x3fa07a, 4.2, 13, 2); greenA.position.set(-1.05, 0.10, 2.5); scene.add(greenA);
-  var greenB = new THREE.PointLight(0x2f8a6a, 2.6, 11, 2); greenB.position.set(0.95, 0.10, -3.2); scene.add(greenB);
-  /* 水面から返る冷たい反射（蒼白い皮膚を成立させるためのフィル） */
-  var fill = new THREE.PointLight(0x7290a0, 4.6, 13, 2); fill.position.set(-1.9, 1.5, -2.4); scene.add(fill);
-  var rim = new THREE.PointLight(0x5a7a96, 7.5, 15, 2); rim.position.set(-2.5, 2.5, 3.2); scene.add(rim);
-  var rim2 = new THREE.PointLight(0x2f5f7a, 5.0, 14, 2); rim2.position.set(2.7, 2.2, 2.8); scene.add(rim2);
+  addRoomLight(lamp);
+  /* キー: 斜め上前方から。眼窩と眉弓の下に硬い影を落とす角度。 */
+  var spot = new THREE.SpotLight(0xffa858, 22, 17, 0.62, 0.55, 2);
+  spot.position.set(1.05, lampY + 0.30, -1.55); spot.target.position.set(0.10, 1.05, -0.10);
+  addRoomLight(spot); addRoomLight(spot.target);
+  /* 水面の緑のリム（下・背後） */
+  var greenA = new THREE.PointLight(0x46b189, 6.0, 13, 2); greenA.position.set(-1.25, 0.09, 2.9); addRoomLight(greenA);
+  var greenB = new THREE.PointLight(0x2f8a6a, 3.2, 11, 2); greenB.position.set(1.05, 0.09, -3.4); addRoomLight(greenB);
+  /* ごく弱いフィル（蒼白い皮膚が黒く潰れない最小限） */
+  var fill = new THREE.PointLight(0x6b8699, 6.5, 12, 2); fill.position.set(-2.2, 1.85, -1.10); addRoomLight(fill);
+  var rim = new THREE.PointLight(0x3f7690, 5.0, 14, 2); rim.position.set(-2.6, 2.5, 3.1); addRoomLight(rim);
 
   var cage = new THREE.Group();
   cage.add(L.m(new THREE.SphereGeometry(0.10, 14, 10), L.mat(0x1a1208, 0.5, 0.1, { emissive: 0xff9a40, emissiveIntensity: 3.0 }), [0, 0, 0]));
@@ -465,6 +469,35 @@ ESCAPE.__A2MOCKS = ESCAPE.__A2MOCKS || {};
   }
   cage.add(L.m(new THREE.CylinderGeometry(0.012, 0.012, 0.8, 6), cm, [0, 0.4, 0]));
   cage.position.set(0.55, lampY, -1.15); scene.add(cage);
+
+  /* ---- corridor ビュー: 幅1マス（2.0m）の煉瓦通路。被写体は 9m 先・専用の照明は当てない ---- */
+  var roomObjs = scene.children.slice();      /* ここまでが「部屋」の舞台＋照明 */
+  var CORR = { z: -9.0, group: null };
+  function buildCorridor() {
+    var g = new THREE.Group(), HW = 1.0, CH = 2.55, LEN = 34, Z0 = 3.0;
+    var fm = stdFromCanvas(floorCanvas(), [3, 34], 0.40, 0.04);
+    var f = new THREE.Mesh(new THREE.PlaneGeometry(2 * HW, LEN), fm);
+    f.rotation.x = -Math.PI / 2; f.position.set(0, 0, Z0 - LEN / 2); f.receiveShadow = true; g.add(f);
+    var wm = stdFromCanvas(brickCanvas(), [16, 1.5], 0.95, 0.02);
+    [-1, 1].forEach(function (s) {
+      var w = new THREE.Mesh(new THREE.PlaneGeometry(LEN, CH), wm);
+      w.position.set(s * HW, CH / 2, Z0 - LEN / 2); w.rotation.y = -s * Math.PI / 2;
+      w.receiveShadow = true; g.add(w);
+    });
+    var cg = new THREE.Mesh(new THREE.PlaneGeometry(2 * HW, LEN), L.mat(0x070707, 0.97, 0));
+    cg.rotation.x = Math.PI / 2; cg.position.set(0, CH, Z0 - LEN / 2); g.add(cg);
+    var wt = new THREE.Mesh(new THREE.PlaneGeometry(0.9, LEN), L.mat(0x081a15, 0.30, 0.25, { transparent: true, opacity: 0.95 }));
+    wt.rotation.x = -Math.PI / 2; wt.position.set(-0.2, 0.03, Z0 - LEN / 2); g.add(wt);
+    var end = new THREE.Mesh(new THREE.PlaneGeometry(2 * HW, CH), wm);
+    end.position.set(0, CH / 2, Z0 - LEN); end.receiveShadow = true; g.add(end);
+    /* 光源はカメラ側の1灯のみ（被写体まで 9m 届かない）＋水面の弱い緑 */
+    var lm = new THREE.PointLight(0xffa050, 6.5, 6.5, 2); lm.position.set(0.0, 2.35, 1.30); g.add(lm);
+    /* 背後の水面から返る緑（被写体を逆光で抜く。被写体に当てる灯は置かない） */
+    var lg = new THREE.PointLight(0x3c9070, 9.0, 17, 2.0); lg.position.set(-0.30, 0.14, -12.6); g.add(lg);
+    var lg2 = new THREE.PointLight(0x3d6a80, 3.6, 15, 2.0); lg2.position.set(0.45, 1.70, -13.2); g.add(lg2);
+    g.add(new THREE.HemisphereLight(0x0a1218, 0x030506, 0.10));
+    return g;
+  }
 
   var camera = new THREE.PerspectiveCamera(50, W / H, 0.03, 200);
   camera.position.set(0, 1.6, 5); camera.lookAt(0, 1.1, 0);
@@ -489,12 +522,33 @@ ESCAPE.__A2MOCKS = ESCAPE.__A2MOCKS || {};
     listGroups.forEach(function (g) { scene.remove(g); }); listGroups = [];
   }
 
+  /* 舞台の切替。corridor では部屋を消し、被写体に付いた専用光も外す（＝ライトなし）。 */
+  function stage(view) {
+    var corr = view === 'corridor';
+    roomObjs.forEach(function (o) { o.visible = !corr; });
+    if (corr && !CORR.group) { CORR.group = buildCorridor(); scene.add(CORR.group); }
+    if (CORR.group) CORR.group.visible = corr;
+    scene.background.set(corr ? 0x1a222c : 0x44515f);
+    scene.fog = new THREE.FogExp2(corr ? 0x1a222c : 0x44515f, corr ? 0.036 : 0.048);
+  }
+
   function show(id, view) {
     clear();
     var def = ESCAPE.__A2MOCKS[id];
     if (!def) { hud('案 ' + id + ' は未読込'); return false; }
     current = buildOne(id);
     if (!current) { hud('案 ' + id + ' の build に失敗: ' + window.__buildLog.join(' / ')); return false; }
+    stage(view);
+    if (view === 'corridor') {
+      var kill = [];
+      current.traverse(function (o) { if (o.isLight) kill.push(o); });
+      kill.forEach(function (o) { if (o.parent) o.parent.remove(o); });
+      var cp = (def.cams && def.cams.corridor && def.cams.corridor.place) || [0, 0, CORR.z];
+      current.position.set(cp[0], cp[1], cp[2]);
+      if (def.cams && def.cams.corridor && def.cams.corridor.rot) {
+        current.rotation.set(def.cams.corridor.rot[0], def.cams.corridor.rot[1], def.cams.corridor.rot[2]);
+      }
+    }
     scene.add(current);
     var cam = (def.cams && def.cams[view]) || (def.cams && def.cams.full);
     if (cam) {
@@ -510,7 +564,7 @@ ESCAPE.__A2MOCKS = ESCAPE.__A2MOCKS || {};
   }
 
   function showList() {
-    clear();
+    clear(); stage('full');
     var ids = Object.keys(ESCAPE.__A2MOCKS), i = 0, txt = [];
     ids.forEach(function (id) {
       var g = buildOne(id);
@@ -537,6 +591,7 @@ ESCAPE.__A2MOCKS = ESCAPE.__A2MOCKS || {};
     var ids = Object.keys(ESCAPE.__A2MOCKS), n = parseInt(e.key, 10);
     if (n >= 1 && n <= ids.length) { mid = ids[n - 1]; show(mid, 'full'); }
     else if (e.key === 'f' && mid) show(mid, 'face');
+    else if (e.key === 'c' && mid) show(mid, 'corridor');
     else if (e.key === '0') showList();
   });
   window.addEventListener('resize', function () {
