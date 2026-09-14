@@ -454,7 +454,7 @@ ESCAPE.__A2MOCKS = ESCAPE.__A2MOCKS || {};
   spot.position.set(1.05, lampY + 0.30, -1.55); spot.target.position.set(0.10, 1.05, -0.10);
   addRoomLight(spot); addRoomLight(spot.target);
   /* 水面の緑のリム（下・背後） */
-  var greenA = new THREE.PointLight(0x46b189, 6.0, 13, 2); greenA.position.set(-1.25, 0.09, 2.9); addRoomLight(greenA);
+  var greenA = new THREE.PointLight(0x46b189, 3.4, 13, 2); greenA.position.set(-1.25, 0.09, 2.9); addRoomLight(greenA);
   var greenB = new THREE.PointLight(0x2f8a6a, 3.2, 11, 2); greenB.position.set(1.05, 0.09, -3.4); addRoomLight(greenB);
   /* ごく弱いフィル（蒼白い皮膚が黒く潰れない最小限） */
   var fill = new THREE.PointLight(0x6b8699, 6.5, 12, 2); fill.position.set(-2.2, 1.85, -1.10); addRoomLight(fill);

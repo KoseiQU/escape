@@ -14,26 +14,31 @@
 
   function mats() {
     var M = {};
-    /* 水で膨れた皮膚: 張って光り、死斑と血管が透ける */
-    M.skin = L.skin({ seed: 501, base: '#99a296', dark: 'rgba(42,52,50,', veinColor: 'rgba(72,56,96,0.46)',
-      mottle: 210, vein: 96, wrinkle: 150, pore: 0.30, bump: 2.0, roughLo: 0.14, roughHi: 0.52,
-      tint: 0x87a9ad, repeat: [4, 4] });
-    M.face = L.skin({ seed: 503, base: '#9aa498', dark: 'rgba(48,58,54,', veinColor: 'rgba(92,54,62,0.40)',
-      mottle: 260, vein: 150, wrinkle: 220, pore: 0.42, bump: 1.4, roughLo: 0.16, roughHi: 0.56,
-      tint: 0x8aa8ac, repeat: [5, 4], nscale: 0.7 });
-    /* 防護服の残骸（黄ばんだゴム引き布） */
-    M.suit = L.skin({ seed: 507, base: '#57502f', dark: 'rgba(20,18,10,', veinColor: 'rgba(44,40,22,0.5)',
-      mottle: 160, vein: 26, wrinkle: 300, pore: 0.24, bump: 3.2, roughLo: 0.34, roughHi: 0.94,
-      tint: 0x8c8664, repeat: [3, 3], side: THREE.DoubleSide });
-    M.flesh = L.skin({ seed: 509, base: '#331414', dark: 'rgba(10,2,4,', veinColor: 'rgba(126,30,32,0.55)',
-      mottle: 170, vein: 120, wrinkle: 300, pore: 0.34, bump: 4.0, roughLo: 0.18, roughHi: 0.52,
-      tint: 0x3c1a16, repeat: [3, 3] });
-    M.rib = L.mat(0xc8c0a6, 0.48, 0.02);
-    M.void = L.mat(0x040506, 1.0, 0);
-    M.eye = L.mat(0x9c9782, 0.88, 0.0);
-    M.eyeVein = L.mat(0x43100f, 0.86, 0.0);
-    M.nail = L.mat(0x6c6a56, 0.40, 0.14);
-    M.iron = L.mat(0x4a4842, 0.44, 0.80);
+    /* 水で膨れた皮膚: 蒼白の地に死斑と血管。metalness 0。引き伸ばされた所だけ粗さが低い。 */
+    M.skin = L.skin({ seed: 501, base: '#5f645b', dark: 'rgba(14,18,18,', veinColor: 'rgba(62,48,84,0.50)',
+      mottle: 300, vein: 160, wrinkle: 300, pore: 0.50, bump: 4.6, roughLo: 0.24, roughHi: 0.90,
+      tint: 0x939e95, metalness: 0, repeat: [4, 4], nscale: 1.55 });
+    M.face = L.skin({ seed: 503, base: '#5e635b', dark: 'rgba(12,16,16,', veinColor: 'rgba(84,46,54,0.45)',
+      mottle: 340, vein: 210, wrinkle: 420, pore: 0.62, bump: 4.4, roughLo: 0.22, roughHi: 0.90,
+      tint: 0x939e95, metalness: 0, repeat: [5, 4], nscale: 1.7 });
+    /* 防護服の残骸（汚れた黄灰の PVC 布地） */
+    M.suit = L.skin({ seed: 507, base: '#49452a', dark: 'rgba(16,15,8,', veinColor: 'rgba(38,34,18,0.5)',
+      mottle: 180, vein: 30, wrinkle: 340, pore: 0.26, bump: 3.4, roughLo: 0.40, roughHi: 0.96,
+      tint: 0x8b855f, metalness: 0, repeat: [3, 3], side: THREE.DoubleSide });
+    /* 反射帯の名残（褪せて汚れた銀灰） */
+    M.band = L.mat(0x6a6d66, 0.52, 0.06);
+    M.flesh = L.skin({ seed: 509, base: '#2c1112', dark: 'rgba(8,2,3,', veinColor: 'rgba(110,26,28,0.55)',
+      mottle: 180, vein: 130, wrinkle: 320, pore: 0.36, bump: 4.2, roughLo: 0.22, roughHi: 0.58,
+      tint: 0x37160f, metalness: 0, repeat: [3, 3] });
+    M.rib = L.mat(0x8e8970, 0.58, 0);
+    M.void = new THREE.MeshBasicMaterial({ color: 0x000000 });
+    M.eye = L.mat(0x585446, 0.92, 0);          /* 白濁して濁った眼球。ハイライト無し。 */
+    M.eyeVein = L.mat(0x3a0d0c, 0.90, 0);
+    M.gum = L.mat(0x2c1211, 0.52, 0);
+    M.tooth = L.mat(0x6e6754, 0.50, 0);
+    M.hairM = L.mat(0x090a0a, 0.66, 0);
+    M.nail = L.mat(0x55533f, 0.46, 0);
+    M.iron = L.mat(0x39372f, 0.52, 0.70);
     return M;
   }
 
@@ -42,7 +47,7 @@
     var yb = HIP - 0.190, yt = SHOULDER + 0.045, cy = (yb + yt) / 2, hy = (yt - yb) / 2;
     var T = [[1, 0.90, 0.80], [0.70, 1.00, 0.92], [0.30, 1.06, 1.04], [-0.10, 1.10, 1.10],
       [-0.50, 1.02, 1.00], [-1, 0.72, 0.68]];
-    var geo = new THREE.SphereGeometry(1, 34, 26);
+    var geo = new THREE.SphereGeometry(1, 30, 22);
     geo.scale(0.315, hy, 0.255);
     L.deform(geo, function (x, y, z, o) {
       var ny = L.clamp(y / hy, -1, 1);
@@ -128,82 +133,177 @@
 
   /* 肩に沈んだ頭。目は膨れて眼窩から押し出され、充血する。 */
   function head(M) {
-    var g = new THREE.Group();
-    var sk = L.headShell({ rx: HRX, ry: HRY, rz: HRZ, seg: 44, socket: 0.027, eye: 0.011,
-      temple: 0.016, cheek: 0.012, nose: 0.019, jaw: 0.86, chin: 0.014, brow: 0.030,
+    var g = new THREE.Group(), X = HRX, Y = HRY, Z = HRZ;
+    /* 頭蓋から積む: 眉弓を重く、頬骨・下顎を彫り、眼窩は骨の縁が立った深い窪み */
+    var sk = L.headShell({ rx: X, ry: Y, rz: Z, seg: 50, socket: 0.052, eye: 0.004,
+      temple: 0.030, cheek: 0.020, nose: 0.020, jaw: 0.78, chin: 0.013, brow: 0.040,
       warp: 0.0030, seed: 51 });
-    /* 水で膨れた顔: 頬・顎下・額が張る */
-    L.bulge(sk, [0.085, -0.056, -0.082], 0.052, 0.007);
-    L.bulge(sk, [-0.082, -0.064, -0.080], 0.050, 0.010);
-    /* 頬骨弓と下顎枝を彫って輪郭を割る */
-    L.ridge(sk, [0.122, -0.004, -0.024], [0.066, -0.018, -0.106], 0.026, 0.015, 1.8);
-    L.ridge(sk, [-0.120, -0.014, -0.020], [-0.064, -0.028, -0.106], 0.024, 0.012, 1.8);
-    L.ridge(sk, [0.108, -0.046, -0.030], [0.044, -0.118, -0.074], 0.026, 0.013, 1.7);
-    L.ridge(sk, [-0.105, -0.056, -0.026], [-0.042, -0.124, -0.070], 0.024, 0.010, 1.7);
-    L.bulge(sk, [0.070, -0.030, -0.096], 0.034, -0.008);
-    L.bulge(sk, [-0.068, -0.040, -0.094], 0.032, -0.011);
-    L.bulge(sk, [0, -0.112, -0.062], 0.072, 0.014);
-    L.bulge(sk, [0, 0.092, -0.088], 0.070, 0.005);
+    /* 脳頭蓋を低く潰し、額を後退させる（眉の上がすぐ生え際） */
+    L.deform(sk, function (x, y, z, o) {
+      var t = L.clamp((y / Y - 0.28) / 0.72, 0, 1);
+      o[1] = y - Y * 0.30 * t * t;
+      o[2] = z + Z * 0.22 * t * t * (z < 0 ? 1 : -0.3);
+      o[0] = x * (1 - 0.10 * t * t);
+    });
+    /* 眉弓（庇）: 左右で高さと厚みが違う */
+    L.ridge(sk, [X * 0.10, Y * 0.40, -Z * 0.86], [X * 0.86, Y * 0.30, -Z * 0.48], X * 0.32, 0.021, 1.5);
+    L.ridge(sk, [-X * 0.10, Y * 0.36, -Z * 0.86], [-X * 0.80, Y * 0.22, -Z * 0.48], X * 0.28, 0.016, 1.5);
+    /* こめかみを抉り、頬骨弓を張らせ、その下を落とす */
+    L.bulge(sk, [X * 0.96, Y * 0.30, -Z * 0.30], 0.058, -0.022);
+    L.bulge(sk, [-X * 0.94, Y * 0.24, -Z * 0.32], 0.055, -0.026);
+    L.ridge(sk, [X * 0.66, Y * 0.00, -Z * 0.70], [X * 0.98, Y * 0.10, Z * 0.20], X * 0.24, 0.015, 1.8);
+    L.ridge(sk, [-X * 0.62, -Y * 0.04, -Z * 0.68], [-X * 0.94, Y * 0.06, Z * 0.18], X * 0.22, 0.012, 1.8);
+    L.ridge(sk, [X * 0.62, -Y * 0.22, -Z * 0.62], [X * 0.92, -Y * 0.12, Z * 0.14], X * 0.18, -0.010, 1.6);
+    /* 眼窩: 皮膚側も深く落とし、周囲の骨縁を立てる（左右非対称） */
+    L.bulge(sk, [X * 0.46, Y * 0.14, -Z * 0.80], 0.058, 0.011);
+    L.bulge(sk, [X * 0.46, Y * 0.14, -Z * 0.80], 0.041, -0.040);
+    L.bulge(sk, [-X * 0.46, Y * 0.10, -Z * 0.80], 0.054, 0.009);
+    L.bulge(sk, [-X * 0.46, Y * 0.10, -Z * 0.80], 0.038, -0.036);
+    /* 水で膨れた部位（額・頬の下・顎下）が張る。片側だけ大きく垂れる。 */
+    L.bulge(sk, [X * 0.58, -Y * 0.44, -Z * 0.58], 0.062, 0.016);
+    L.bulge(sk, [-X * 0.62, -Y * 0.52, -Z * 0.54], 0.066, 0.024);
+    L.bulge(sk, [0, -Y * 0.86, -Z * 0.40], 0.080, 0.020);
+    L.bulge(sk, [X * 0.30, Y * 0.72, -Z * 0.62], 0.062, 0.010);
+    /* 下顎角を張らせ、輪郭を四角くする */
+    L.bulge(sk, [X * 0.80, -Y * 0.62, -Z * 0.24], 0.046, 0.014);
+    L.bulge(sk, [-X * 0.76, -Y * 0.66, -Z * 0.22], 0.044, 0.011);
     /* 開いたままの口（下顎が落ち、口腔が奥へ抜ける） */
-    L.ridge(sk, [0.036, -0.086, -0.100], [-0.035, -0.090, -0.100], 0.030, -0.040, 1.2);
-    L.ridge(sk, [0.040, -0.066, -0.100], [-0.039, -0.070, -0.100], 0.015, 0.008, 1.6);
-    L.ridge(sk, [0.038, -0.108, -0.098], [-0.037, -0.112, -0.098], 0.016, 0.010, 1.6);
-    L.bulge(sk, [-0.070, -0.078, -0.088], 0.048, 0.013);      /* 片側だけ垂れる頬 */
-    L.bulge(sk, [0.062, 0.052, -0.086], 0.036, -0.010);        /* 片側の眉が落ちる */
-    L.ridge(sk, [0.100, -0.066, -0.058], [0.030, -0.116, -0.086], 0.026, -0.009, 1.5);
-    L.ridge(sk, [-0.098, -0.074, -0.054], [-0.028, -0.122, -0.084], 0.024, -0.011, 1.5);
-    L.warp(sk, 0.0030, 13, 17);
+    L.ridge(sk, [X * 0.28, -Y * 0.60, -Z * 0.78], [-X * 0.27, -Y * 0.62, -Z * 0.78], 0.030, -0.042, 1.2);
+    L.ridge(sk, [X * 0.32, -Y * 0.44, -Z * 0.78], [-X * 0.31, -Y * 0.46, -Z * 0.78], 0.015, 0.009, 1.6);
+    L.ridge(sk, [X * 0.30, -Y * 0.76, -Z * 0.76], [-X * 0.29, -Y * 0.78, -Z * 0.76], 0.016, 0.010, 1.6);
+    /* 鼻唇溝と、膨れた皮膚に走る深い皺 */
+    L.ridge(sk, [X * 0.18, -Y * 0.22, -Z * 0.84], [X * 0.44, -Y * 0.62, -Z * 0.66], 0.018, -0.009, 1.6);
+    L.ridge(sk, [-X * 0.17, -Y * 0.24, -Z * 0.84], [-X * 0.42, -Y * 0.66, -Z * 0.64], 0.017, -0.008, 1.6);
+    L.warp(sk, 0.0032, 13, 17);
     g.add(L.m(sk, M.face));
-    /* 眼球: 眼窩から押し出されて膨れる。ハイライトは入れない（粗い材質） */
-    [[0.056, 0.008, -0.093, 1], [-0.054, 0.000, -0.094, -1]].forEach(function (p, i) {
-      var eg = L.ell(0.0168 + i * 0.0008, 0.0160, 0.0158, 13);
-      L.warp(eg, 0.0012, 40, 60 + i);
+
+    /* 眼: 小さく白濁し、腫れた瞼で半分以上隠れ、影に沈む。ハイライト無し。 */
+    [[X * 0.46, Y * 0.14, -Z * 0.74, 1, 1.00], [-X * 0.46, Y * 0.10, -Z * 0.74, -1, 0.92]].forEach(function (p, i) {
+      var er = 0.0126 * p[4];
+      var eg = L.ell(er, er * 0.94, er * 0.92, 12);
+      L.warp(eg, 0.0009, 44, 60 + i);
       g.add(L.m(eg, M.eye, [p[0], p[1], p[2]]));
-      /* 充血: 眼球を這う血管 */
       var R = L.rng(600 + i * 13);
-      for (var v = 0; v < 7; v++) {
+      for (var v = 0; v < 6; v++) {
         var a0 = R() * 6.284, pts = [];
         for (var q = 0; q < 4; q++) {
-          var a = a0 + q * 0.35, r = 0.0168 * (0.30 + q * 0.24);
-          pts.push([p[0] + Math.cos(a) * r, p[1] + Math.sin(a) * r * 0.9, p[2] - Math.sqrt(Math.max(0, 1 - (r / 0.0176) * (r / 0.0176) * 0.9)) * 0.0148]);
+          var a = a0 + q * 0.38, r = er * (0.28 + q * 0.22);
+          pts.push([p[0] + Math.cos(a) * r, p[1] + Math.sin(a) * r * 0.9,
+            p[2] - Math.sqrt(Math.max(0, 1 - (r / er) * (r / er) * 0.9)) * er * 0.86]);
         }
-        g.add(L.m(L.tube(pts, 0.0008 + R() * 0.0006, 4), M.eyeVein));
+        g.add(L.m(L.tube(pts, 0.0006 + R() * 0.0005, 4), M.eyeVein));
       }
-      /* 瞳（白濁して濁る・光らせない） */
-      g.add(L.m(L.ell(0.0048, 0.0046, 0.004, 12), M.void, [p[0] + p[3] * 0.002, p[1] - 0.001, p[2] - 0.0152]));
-      /* 瞼が眼球に押し上げられて捲れる */
-      /* 瞼: 眼球に押し上げられて上下から半ば覆う */
-      var ul = L.ell(0.030, 0.021, 0.027, 13);
-      L.deform(ul, function (x, y, z, o) { o[1] = y * (y > 0 ? 1 : 0.55) + 0.004 * Math.sin(x * 40); });
-      g.add(L.m(ul, M.face, [p[0], p[1] + 0.0118 - i * 0.0018, p[2] + 0.004], [0.26, 0, p[3] * 0.22]));
-      var ll = L.ell(0.029, 0.019, 0.026, 13);
-      L.deform(ll, function (x, y, z, o) { o[1] = y * (y < 0 ? 1 : 0.50); });
-      g.add(L.m(ll, M.face, [p[0], p[1] - 0.0132, p[2] + 0.005], [-0.20, 0, p[3] * 0.14]));
+      g.add(L.m(L.ell(er * 0.34, er * 0.32, er * 0.28, 10), M.void, [p[0] + p[3] * 0.0015, p[1] - 0.0008, p[2] - er * 0.88]));
+      /* 腫れた瞼（上は 60% 覆う・下は袋状に垂れる） */
+      var ul = L.ell(er * 2.3, er * 1.9, er * 2.1, 13);
+      L.deform(ul, function (x, y, z, o) { o[1] = y * (y > 0 ? 1.15 : 0.34) + 0.0035 * Math.sin(x * 46); });
+      g.add(L.m(ul, M.face, [p[0], p[1] + er * 0.62, p[2] + er * 0.34], [0.24, 0, p[3] * 0.22]));
+      var ll = L.ell(er * 2.2, er * 1.7, er * 2.0, 13);
+      L.deform(ll, function (x, y, z, o) { o[1] = y * (y < 0 ? 1.10 : 0.30); });
+      g.add(L.m(ll, M.face, [p[0], p[1] - er * 0.92, p[2] + er * 0.40], [-0.20, 0, p[3] * 0.14]));
+      /* 眼窩の縁の影（瞼の上に落ちる庇の陰） */
+      g.add(L.m(L.ell(er * 2.7, er * 0.46, er * 1.1, 10), M.void,
+        [p[0], p[1] + er * 1.92, p[2] + er * 0.55]));
     });
-    /* 口腔と歯（数本が残る） */
-    g.add(L.m(L.ell(0.036, 0.022, 0.034, 16), M.void, [0, -0.092, -0.072]));
-    L.teeth(g, M.rib, 7, function (t) {
-      return [(t - 0.5) * 0.060, -0.081, -0.093 + 0.010 * (t - 0.5) * (t - 0.5) * 4];
-    }, [0.0044, 0.0092], 55, 0.5);
-    /* 鼻腔・耳 */
-    g.add(L.m(L.ell(0.0105, 0.0125, 0.011, 10), M.void, [0.015, -0.052, -0.121]));
-    g.add(L.m(L.ell(0.0098, 0.0120, 0.011, 10), M.void, [-0.014, -0.055, -0.121]));
-    g.add(L.m(new THREE.TorusGeometry(0.022, 0.0075, 6, 16, 4.2), M.face, [0.120, -0.018, -0.002], [0.2, 1.5, 0.7]));
-    g.add(L.m(new THREE.TorusGeometry(0.020, 0.0068, 6, 16, 3.6), M.face, [-0.119, -0.026, 0.002], [0.1, -1.5, -0.8]));
+
+    /* 口腔（奥へ抜ける闇）・歯茎・1本ずつ植わる不揃いの歯 */
+    var mo = L.ell(0.036, 0.026, 0.038, 16, 12);
+    L.deform(mo, function (x, y, z, o) {
+      o[0] = x * (1 + 0.22 * Math.sin(y * 90)); o[1] = y * (1 + 0.18 * Math.sin(x * 70));
+    });
+    g.add(L.m(mo, M.void, [0.004, -Y * 0.62, -Z * 0.48], [0.10, 0.10, 0.08]));
+    /* 垂れた下唇と、片側だけ捲れた上唇 */
+    var lipL = [];
+    for (var q2 = 0; q2 <= 10; q2++) {
+      var t4 = q2 / 10;
+      lipL.push([(-0.036 + 0.072 * t4), -Y * 0.80 - 0.006 * Math.sin(Math.PI * t4) + ((q2 % 3) - 1) * 0.0015,
+        -Z * 0.72 + 0.020 * (t4 - 0.5) * (t4 - 0.5) * 4]);
+    }
+    g.add(L.m(L.tube(lipL, 0.0085, 7), M.face));
+    var lipU = [];
+    for (var q3 = 0; q3 <= 10; q3++) {
+      var t5 = q3 / 10;
+      lipU.push([(-0.034 + 0.070 * t5), -Y * 0.44 + 0.008 * (t5 > 0.6 ? (t5 - 0.6) * 2 : 0) + ((q3 % 4) - 1.5) * 0.0012,
+        -Z * 0.74 + 0.020 * (t5 - 0.5) * (t5 - 0.5) * 4]);
+    }
+    g.add(L.m(L.tube(lipU, 0.0062, 7), M.face));
+    [1, -1].forEach(function (s) {
+      var R2 = L.rng(s > 0 ? 71 : 79), gp = [], q;
+      for (q = 0; q <= 6; q++) {
+        var t = q / 6;
+        gp.push([(-0.030 + 0.060 * t) * 1, -Y * (s > 0 ? 0.52 : 0.74) - 0.002,
+          -Z * 0.70 + 0.014 * (t - 0.5) * (t - 0.5) * 4]);
+      }
+      g.add(L.m(L.tube(gp, 0.0060, 6), M.gum));
+      for (var n = 0; n < 7; n++) {
+        if (R2() < 0.26) continue;                    /* 抜けた歯 */
+        var t2 = n / 6, hh = 0.006 + R2() * 0.013, cw = 0.0030 + R2() * 0.0026;
+        var cone = new THREE.ConeGeometry(cw, hh, 5);
+        cone.translate(0, -hh / 2, 0);
+        var tm = L.m(cone, M.tooth, [-0.030 + 0.060 * t2 + (R2() - 0.5) * 0.004,
+          -Y * (s > 0 ? 0.52 : 0.74) + s * 0.002, -Z * 0.70 + 0.014 * (t2 - 0.5) * (t2 - 0.5) * 4]);
+        tm.rotation.order = 'ZXY';
+        tm.rotation.x = (s > 0 ? 0.10 : Math.PI - 0.10) + (R2() - 0.5) * 0.7;
+        tm.rotation.z = (R2() - 0.5) * 0.8;
+        g.add(tm);
+      }
+    });
+    /* 鼻腔（2つの黒い穴）・耳（左右で残り方が違う）・外耳道の闇 */
+    /* 鼻: 骨の鼻梁 → 軟骨の鼻尖 → 斜めのスリット状の鼻孔（丸い穴は禁止） */
+    [1, -1].forEach(function (s2) {
+      var nos = L.ell(0.0072, 0.0038, 0.0115, 10);
+      L.deform(nos, function (x, y, z, o) { o[0] = x + 0.35 * z * s2; });
+      g.add(L.m(nos, M.void, [s2 * 0.0135, -Y * 0.30, -Z * 0.86], [0.55, s2 * 0.30, s2 * 0.42]));
+    });
+    g.add(L.m(new THREE.TorusGeometry(0.022, 0.0075, 6, 16, 4.2), M.face, [X * 0.96, -Y * 0.12, -0.002], [0.2, 1.5, 0.7]));
+    g.add(L.m(new THREE.TorusGeometry(0.017, 0.0060, 6, 14, 3.2), M.face, [-X * 0.95, -Y * 0.20, 0.004], [0.1, -1.5, -0.8]));
+    g.add(L.m(L.ell(0.0060, 0.0070, 0.0060, 8), M.void, [X * 0.92, -Y * 0.13, -0.006]));
+    /* 張りの限界で裂けた皮膚（左のこめかみ〜頬。縁が捲れ、下は暗い肉） */
+    var fa = [], fb = [], fc = [];
+    for (var q4 = 0; q4 <= 10; q4++) {
+      var t6 = q4 / 10, ww = 0.010 * Math.sin(Math.PI * t6) + 0.001;
+      var yy = Y * 0.24 - Y * 0.62 * t6, zz2 = -Z * (0.62 + 0.10 * t6);
+      var xx = -X * (0.74 - 0.16 * t6) + ((q4 % 3) - 1) * 0.0016;
+      fa.push([xx + ww, yy, zz2]); fb.push([xx - ww, yy, zz2]); fc.push([xx, yy, zz2 + 0.013]);
+    }
+    var fm1 = L.m(L.strip(fa, fc), M.flesh); fm1.material.side = THREE.DoubleSide; g.add(fm1);
+    var fm2 = L.m(L.strip(fc, fb), M.flesh); fm2.material.side = THREE.DoubleSide; g.add(fm2);
+    g.add(L.m(L.tube(fa, 0.0032, 5), M.face));
+    g.add(L.m(L.tube(fb, 0.0028, 5), M.face));
+    /* 濡れて張り付いた短い髪（額の生え際に残る数束） */
+    var RH = L.rng(311);
+    for (var h = 0; h < 12; h++) {
+      var a = (RH() - 0.5) * 2.4;
+      var hx = Math.sin(a) * X * 0.72, hz = -Math.cos(a) * Z * 0.52;
+      g.add(L.m(L.tube([
+        [hx, Y * 0.50, hz],
+        [hx * 1.02, Y * 0.50, hz + Z * 0.30],
+        [hx * 1.00, Y * 0.44 - RH() * 0.03, hz + Z * 0.62]
+      ], 0.0010 + RH() * 0.0009, 4), M.hairM));
+    }
     return g;
   }
 
   /* 皮膚に癒着した防護服の断片: 体の楕円体に沿う殻（縁は不揃いに欠ける） */
   function suitShell(M, g, center, radii, phi0, phiLen, th0, thLen, seed) {
     var R = L.rng(seed);
-    var q = new THREE.SphereGeometry(1, 13, 11, phi0, phiLen, th0, thLen);
+    var q = new THREE.SphereGeometry(1, 15, 12, phi0, phiLen, th0, thLen);
+    var uv = q.attributes.uv.array, pos = q.attributes.position.array, i;
+    /* 縁を不揃いに欠けさせ、皮膚の下へ沈ませる（板の直線的な断ち切りを消す） */
+    for (i = 0; i < pos.length / 3; i++) {
+      var u = uv[i * 2], v = uv[i * 2 + 1];
+      var d = Math.min(u, 1 - u, v, 1 - v);
+      var n = 0.5 + 0.5 * Math.sin(u * 41.3 + v * 17.7) * Math.cos(v * 29.1 - u * 11.3);
+      var edge = L.clamp((d - 0.02 - 0.10 * n) / 0.16, 0, 1);
+      var k = 0.955 + 0.045 * edge + 0.012 * Math.sin(u * 63 + v * 37);
+      pos[i * 3] *= k; pos[i * 3 + 1] *= k; pos[i * 3 + 2] *= k;
+    }
+    q.attributes.position.needsUpdate = true;
     q.scale(radii[0], radii[1], radii[2]);
     L.deform(q, function (x, y, z, o) {
-      var d = Math.sqrt(x * x + y * y + z * z) || 1;
-      var k = 1 + 0.010 * Math.sin(x * 26 + y * 17) + 0.006 * Math.sin(z * 33);
-      o[0] = x * k; o[1] = y * k; o[2] = z * k;
+      var kk = 1 + 0.012 * Math.sin(x * 26 + y * 17) + 0.008 * Math.sin(z * 33);
+      o[0] = x * kk; o[1] = y * kk; o[2] = z * kk;
     });
-    /* 縁を内側へ引き込み、皮膚との境を溶かす */
     var m = L.m(q, M.suit, center);
     m.material.side = THREE.DoubleSide;
     g.add(m);
@@ -305,12 +405,28 @@
     /* 肩の金具とベルトの残骸 */
     up.add(L.m(new THREE.TorusGeometry(0.030, 0.010, 6, 14), M.iron, [0.240, SHOULDER - 0.020, -0.150], [0.4, -0.5, 0.3]));
     up.add(L.m(new THREE.BoxGeometry(0.062, 0.030, 0.016), M.iron, [-0.215, cy - 0.150, -0.205], [0, 0.4, 0.15]));
+    /* ジッパー線（胸から腹へ・裂け目の脇を走る） */
+    up.add(L.m(L.tube([[-0.108, SHOULDER - 0.090, -0.245], [-0.126, cy - 0.020, -0.268], [-0.132, cy - 0.250, -0.238]], 0.0075, 5), M.band));
+    for (var zk = 0; zk < 14; zk++) {
+      var zt = zk / 13;
+      up.add(L.m(new THREE.BoxGeometry(0.009, 0.006, 0.005), M.band,
+        [-0.108 - 0.024 * zt, SHOULDER - 0.090 - (SHOULDER - 0.090 - (cy - 0.250)) * zt, -0.252 - 0.010 * Math.sin(Math.PI * zt)],
+        [0, 0.2, (zk % 2 ? 0.3 : -0.3)]));
+    }
 
     /* 肩（頭が沈むよう高く盛る） */
     [1, -1].forEach(function (s) {
-      up.add(L.m(L.ell(0.132, 0.116, 0.124, 18), M.skin, [s * 0.238, SHOULDER - 0.010 - (s < 0 ? 0.030 : 0), -0.010], [0, 0, -s * 0.24]));
+      var shg = L.ell(0.134, 0.118, 0.126, 18);
+      L.warp(shg, 0.010, 9, 400 + s * 7);
+      L.ridge(shg, [s * 0.05, 0.08, -0.10], [s * 0.11, -0.06, 0.06], 0.05, -0.010, 1.5);
+      up.add(L.m(shg, M.skin, [s * 0.238, SHOULDER - 0.010 - (s < 0 ? 0.030 : 0), -0.010], [0, 0, -s * 0.24]));
+      suitShell(M, up, [s * 0.238, SHOULDER - 0.010 - (s < 0 ? 0.030 : 0), -0.010],
+        [0.140, 0.124, 0.132], s > 0 ? 3.00 : 5.55, 1.45, 0.26, 0.86, 1300 + s * 17);
+      /* 反射帯の名残（上腕を巻く帯） */
+      up.add(L.m(new THREE.TorusGeometry(0.098, 0.011, 4, 18, 3.6), M.band,
+        [s * 0.300, SHOULDER - 0.215, -0.010], [0.06, 0, -s * 0.30]));
       /* 首を埋める肩の肉（頭の下半分を隠す） */
-      up.add(L.m(L.ell(0.104, 0.076, 0.100, 16), M.skin, [s * 0.118, SHOULDER + 0.068, -0.020]));
+      up.add(L.m(L.ell(0.118, 0.062, 0.106, 16), M.skin, [s * 0.168, SHOULDER - 0.014, -0.010]));
     });
     /* 鎖骨（膨れた皮膚の下に沈む） */
     up.add(L.m(L.tube([[0.020, SHOULDER - 0.075, -0.180], [0.130, SHOULDER - 0.050, -0.140], [0.225, SHOULDER - 0.070, -0.060]], 0.017, 7), M.skin));
@@ -319,8 +435,8 @@
     /* 異様に長い腕（手は膝より下） */
     [1, -1].forEach(function (s) {
       var sh = [s * 0.258, SHOULDER - 0.055, -0.020];
-      var el = s > 0 ? [0.352, 0.905, 0.060] : [-0.336, 0.880, -0.085];
-      var wr = s > 0 ? [0.330, 0.330, -0.070] : [-0.372, 0.300, 0.035];
+      var el = s > 0 ? [0.428, 0.905, 0.030] : [-0.412, 0.880, -0.115];
+      var wr = s > 0 ? [0.408, 0.315, -0.185] : [-0.452, 0.285, 0.010];
       limb(up, M.skin, sh, el, 0.092, 0.062, 0.20);
       up.add(L.m(L.ell(0.062, 0.058, 0.062, 14), M.skin, el));
       limb(up, M.skin, el, wr, 0.064, 0.046, 0.22);
@@ -348,7 +464,7 @@
 
     /* 鎖と鉤（右手から床へ垂れ、後ろへ引きずられる。鉤は0.4mの鋳鉄） */
     var chain = new THREE.Group();
-    var gx = 0.352, gy = 0.320, gz = -0.150, N = 16;
+    var gx = 0.430, gy = 0.305, gz = -0.265, N = 16;
     for (var i = 0; i < N; i++) {
       var t = i / (N - 1);
       var x = gx + 0.070 * t, y = gy * (1 - t) * (1 - t) + 0.030, z = gz + 0.70 * t * t + 0.10 * t;
@@ -382,8 +498,8 @@
       up.add(L.m(fr, M.skin, [-0.012, HEADY - 0.088 - nf * 0.040, -0.028], [1.42 + nf * 0.06, 0, 0.05]));
     }
     /* 斜め上からの橙1灯＋反対側の弱い緑で形を彫る */
-    var key = new THREE.PointLight(0xffa860, 11, 5.6, 2); key.position.set(-1.15, 2.55, -1.35); root.add(key);
-    var grn = new THREE.PointLight(0x5aa886, 5.0, 5.2, 2); grn.position.set(1.40, 0.60, -0.70); root.add(grn);
+    var key = new THREE.PointLight(0xffa860, 11.0, 6.4, 2); key.position.set(0.95, 2.55, -1.70); root.add(key);
+    var grn = new THREE.PointLight(0x6ab896, 5.0, 3.9, 2); grn.position.set(-1.10, 1.62, 0.50); root.add(grn);
     /* 裂け目の内側にわずかな回り込み（肋骨と内臓が読めるだけ） */
     var wl = new THREE.PointLight(0xffb494, 0.16, 0.80, 2); wl.position.set(0.04, 1.22, -0.44); root.add(wl);
     return root;
@@ -393,8 +509,10 @@
     name: '案E 肥大した作業員',
     build: build,
     cams: {
-      full: { pos: [0.48, 0.88, -2.08], look: [0.02, 1.06, -0.08], fov: 52 },
-      face: { pos: [0.14, 1.760, -1.01], look: [-0.02, 1.655, -0.21], fov: 32 }
+      full: { pos: [0.86, 0.98, -2.30], look: [0.05, 0.96, -0.02], fov: 58 },
+      face: { pos: [0.15, 1.800, -0.96], look: [-0.02, 1.700, -0.21], fov: 31 },
+      corridor: { pos: [0.0, 1.56, 1.20], look: [0.0, 1.20, -8.6], fov: 42,
+        place: [0.05, 0.0, -8.6], rot: [0, 0.30, 0] }
     }
   };
 })();
