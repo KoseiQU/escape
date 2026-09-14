@@ -9,7 +9,7 @@
   var L = ESCAPE.__A2LIB;
 
   var ANK = 0.095, KNEE = 0.505, HIP = 0.930, SHOULDER = 1.585;
-  var HEADY = 1.690, HRX = 0.125, HRY = 0.146, HRZ = 0.136;
+  var HEADY = 1.690, HRX = 0.141, HRY = 0.150, HRZ = 0.150;
   var SPLIT_TOP = 1.455, SPLIT_BOT = 1.010;
 
   function mats() {
@@ -47,8 +47,8 @@
     var yb = HIP - 0.190, yt = SHOULDER + 0.045, cy = (yb + yt) / 2, hy = (yt - yb) / 2;
     var T = [[1, 0.90, 0.80], [0.70, 1.00, 0.92], [0.30, 1.06, 1.04], [-0.10, 1.10, 1.10],
       [-0.50, 1.02, 1.00], [-1, 0.72, 0.68]];
-    var geo = new THREE.SphereGeometry(1, 30, 22);
-    geo.scale(0.315, hy, 0.255);
+    var geo = new THREE.SphereGeometry(1, 26, 18);
+    geo.scale(0.472, hy, 0.382);
     L.deform(geo, function (x, y, z, o) {
       var ny = L.clamp(y / hy, -1, 1);
       var k = (function (n) {
@@ -88,9 +88,9 @@
     var N = 16, Lft = [], Rgt = [], Bot = [], Bot2 = [], R = L.rng(521);
     for (var i = 0; i <= N; i++) {
       var t = i / N, y = SPLIT_TOP - (SPLIT_TOP - SPLIT_BOT) * t;
-      var w = 0.118 * Math.sin(Math.PI * Math.pow(t, 0.85)) + 0.016;   /* 中ほどが最も開く */
-      var zEdge = -0.262 + 0.020 * Math.abs(t - 0.5);
-      var zBot = -0.118 - 0.016 * Math.sin(Math.PI * t);
+      var w = 0.164 * Math.sin(Math.PI * Math.pow(t, 0.85)) + 0.022;   /* 中ほどが最も開く */
+      var zEdge = -0.436 + 0.030 * Math.abs(t - 0.5);
+      var zBot = -0.280 - 0.030 * Math.sin(Math.PI * t);
       Lft.push([w * (1 + 0.10 * R()), y, zEdge]);
       Rgt.push([-w * (1 + 0.10 * R()), y, zEdge]);
       Bot.push([0.006 * Math.sin(t * 9), y, zBot]);
@@ -101,31 +101,31 @@
     g.add(L.m(L.strip(Bot2, Rgt), M.flesh));
     g.add(L.m(L.strip(Rgt, Bot2), M.flesh));
     /* 谷の底の暗がり */
-    g.add(L.m(L.ell(0.026, (SPLIT_TOP - SPLIT_BOT) / 2, 0.030, 14), M.void,
-      [0, (SPLIT_TOP + SPLIT_BOT) / 2, -0.108]));
+    g.add(L.m(L.ell(0.030, (SPLIT_TOP - SPLIT_BOT) / 2, 0.034, 14), M.void,
+      [0, (SPLIT_TOP + SPLIT_BOT) / 2, -0.228]));
     /* 肋骨の断端（両壁から折れて覗く） */
     for (var r = 0; r < 5; r++) {
       var yy = SPLIT_TOP - 0.045 - r * 0.082;
       [1, -1].forEach(function (sgn) {
-        var tor = new THREE.TorusGeometry(0.062 + r * 0.005, 0.0125, 6, 14, 1.15);
-        g.add(L.m(tor, M.rib, [sgn * 0.066, yy, -0.206],
+        var tor = new THREE.TorusGeometry(0.082 + r * 0.007, 0.0145, 6, 14, 1.20);
+        g.add(L.m(tor, M.rib, [sgn * 0.086, yy, -0.330],
           [0.15 + r * 0.05, sgn > 0 ? -0.9 : Math.PI + 0.9, sgn > 0 ? 0.65 : -0.65]));
       });
     }
     /* 濡れた内臓（谷の底に詰まる） */
     for (var j = 0; j < 8; j++) {
       var y2 = SPLIT_TOP - 0.055 - j * 0.055;
-      g.add(L.m(L.ell(0.024 + R() * 0.012, 0.022 + R() * 0.010, 0.022, 9), M.flesh,
-        [(R() - 0.5) * 0.038, y2, -0.150 + (R() - 0.5) * 0.024]));
+      g.add(L.m(L.ell(0.030 + R() * 0.014, 0.028 + R() * 0.012, 0.028, 9), M.flesh,
+        [(R() - 0.5) * 0.046, y2, -0.286 + (R() - 0.5) * 0.028]));
     }
     var pts = [];
-    for (var k = 0; k < 7; k++) pts.push([Math.sin(k * 1.7) * 0.028, SPLIT_BOT + 0.13 - k * 0.026, -0.168 + Math.cos(k * 1.3) * 0.014]);
+    for (var k = 0; k < 7; k++) pts.push([Math.sin(k * 1.7) * 0.032, SPLIT_BOT + 0.13 - k * 0.026, -0.300 + Math.cos(k * 1.3) * 0.016]);
     g.add(L.m(L.tube(pts, 0.016, 7), M.flesh));
     /* 裂けた皮膚の縁（捲れて垂れる） */
     [1, -1].forEach(function (sg) {
       var fl = new THREE.PlaneGeometry(0.040, 0.13, 2, 4);
       L.deform(fl, function (x, y, z, o) { o[2] = z + Math.sin(y * 18) * 0.010; o[0] = x * (1 - 0.45 * Math.max(0, -y / 0.13)); });
-      var mm = L.m(fl, M.skin, [sg * 0.134, SPLIT_BOT + 0.06, -0.238], [0.20, sg * 1.1, sg * 0.28]);
+      var mm = L.m(fl, M.skin, [sg * 0.176, SPLIT_BOT + 0.06, -0.386], [0.20, sg * 1.1, sg * 0.28]);
       mm.material.side = THREE.DoubleSide;
       g.add(mm);
     });
@@ -135,19 +135,19 @@
   function head(M) {
     var g = new THREE.Group(), X = HRX, Y = HRY, Z = HRZ;
     /* 頭蓋から積む: 眉弓を重く、頬骨・下顎を彫り、眼窩は骨の縁が立った深い窪み */
-    var sk = L.headShell({ rx: X, ry: Y, rz: Z, seg: 50, socket: 0.052, eye: 0.004,
+    var sk = L.headShell({ rx: X, ry: Y, rz: Z, seg: 44, socket: 0.052, eye: 0.004,
       temple: 0.030, cheek: 0.020, nose: 0.020, jaw: 0.78, chin: 0.013, brow: 0.040,
       warp: 0.0030, seed: 51 });
     /* 脳頭蓋を低く潰し、額を後退させる（眉の上がすぐ生え際） */
     L.deform(sk, function (x, y, z, o) {
       var t = L.clamp((y / Y - 0.28) / 0.72, 0, 1);
-      o[1] = y - Y * 0.30 * t * t;
-      o[2] = z + Z * 0.22 * t * t * (z < 0 ? 1 : -0.3);
-      o[0] = x * (1 - 0.10 * t * t);
+      o[1] = y - Y * 0.15 * t * t;
+      o[2] = z + Z * 0.11 * t * t * (z < 0 ? 1 : -0.3);
+      o[0] = x * (1 + 0.05 * t * t);
     });
     /* 眉弓（庇）: 左右で高さと厚みが違う */
-    L.ridge(sk, [X * 0.10, Y * 0.40, -Z * 0.86], [X * 0.86, Y * 0.30, -Z * 0.48], X * 0.32, 0.021, 1.5);
-    L.ridge(sk, [-X * 0.10, Y * 0.36, -Z * 0.86], [-X * 0.80, Y * 0.22, -Z * 0.48], X * 0.28, 0.016, 1.5);
+    L.ridge(sk, [X * 0.10, Y * 0.40, -Z * 0.86], [X * 0.86, Y * 0.30, -Z * 0.48], X * 0.32, 0.027, 1.5);
+    L.ridge(sk, [-X * 0.10, Y * 0.36, -Z * 0.86], [-X * 0.80, Y * 0.22, -Z * 0.48], X * 0.28, 0.021, 1.5);
     /* こめかみを抉り、頬骨弓を張らせ、その下を落とす */
     L.bulge(sk, [X * 0.96, Y * 0.30, -Z * 0.30], 0.058, -0.022);
     L.bulge(sk, [-X * 0.94, Y * 0.24, -Z * 0.32], 0.055, -0.026);
@@ -159,11 +159,21 @@
     L.bulge(sk, [X * 0.46, Y * 0.14, -Z * 0.80], 0.041, -0.040);
     L.bulge(sk, [-X * 0.46, Y * 0.10, -Z * 0.80], 0.054, 0.009);
     L.bulge(sk, [-X * 0.46, Y * 0.10, -Z * 0.80], 0.038, -0.036);
-    /* 水で膨れた部位（額・頬の下・顎下）が張る。片側だけ大きく垂れる。 */
-    L.bulge(sk, [X * 0.58, -Y * 0.44, -Z * 0.58], 0.062, 0.016);
-    L.bulge(sk, [-X * 0.62, -Y * 0.52, -Z * 0.54], 0.066, 0.024);
-    L.bulge(sk, [0, -Y * 0.86, -Z * 0.40], 0.080, 0.020);
-    L.bulge(sk, [X * 0.30, Y * 0.72, -Z * 0.62], 0.062, 0.010);
+    /* 水で膨れた肉が骨の上に張る（風船状の頬・顎下・こめかみ）。片側だけ大きく垂れる。 */
+    L.bulge(sk, [X * 0.66, -Y * 0.20, -Z * 0.58], 0.068, 0.034);      /* 頬（張る） */
+    L.bulge(sk, [-X * 0.70, -Y * 0.26, -Z * 0.54], 0.072, 0.042);
+    L.bulge(sk, [X * 0.60, -Y * 0.58, -Z * 0.46], 0.066, 0.032);      /* 頬袋（下半分） */
+    L.bulge(sk, [-X * 0.64, -Y * 0.64, -Z * 0.42], 0.070, 0.040);
+    L.bulge(sk, [0, -Y * 0.92, -Z * 0.34], 0.092, 0.040);             /* 顎下の肉 */
+    L.bulge(sk, [X * 0.86, -Y * 0.10, -Z * 0.10], 0.062, 0.024);      /* 耳の前が張る */
+    L.bulge(sk, [-X * 0.84, -Y * 0.16, -Z * 0.08], 0.060, 0.028);
+    L.bulge(sk, [X * 0.38, Y * 0.76, -Z * 0.58], 0.070, 0.020);       /* 額が張る */
+    L.bulge(sk, [-X * 0.34, Y * 0.80, -Z * 0.54], 0.068, 0.016);
+    L.bulge(sk, [0, Y * 0.40, Z * 0.86], 0.088, 0.022);               /* 後頭も膨れる */
+    /* 膨れた肉に食い込む皺（張りの境目）＝肉が骨の上に載っていることを示す */
+    L.ridge(sk, [X * 0.30, -Y * 0.40, -Z * 0.78], [X * 0.78, -Y * 0.26, -Z * 0.42], 0.020, -0.011, 1.6);
+    L.ridge(sk, [-X * 0.28, -Y * 0.44, -Z * 0.78], [-X * 0.76, -Y * 0.32, -Z * 0.40], 0.019, -0.012, 1.6);
+    L.ridge(sk, [X * 0.52, -Y * 0.80, -Z * 0.52], [-X * 0.50, -Y * 0.84, -Z * 0.50], 0.024, -0.013, 1.5);
     /* 下顎角を張らせ、輪郭を四角くする */
     L.bulge(sk, [X * 0.80, -Y * 0.62, -Z * 0.24], 0.046, 0.014);
     L.bulge(sk, [-X * 0.76, -Y * 0.66, -Z * 0.22], 0.044, 0.011);
@@ -171,6 +181,10 @@
     L.ridge(sk, [X * 0.28, -Y * 0.60, -Z * 0.78], [-X * 0.27, -Y * 0.62, -Z * 0.78], 0.030, -0.042, 1.2);
     L.ridge(sk, [X * 0.32, -Y * 0.44, -Z * 0.78], [-X * 0.31, -Y * 0.46, -Z * 0.78], 0.015, 0.009, 1.6);
     L.ridge(sk, [X * 0.30, -Y * 0.76, -Z * 0.76], [-X * 0.29, -Y * 0.78, -Z * 0.76], 0.016, 0.010, 1.6);
+    /* 鼻: 膨れた肉の中でも鼻梁→鼻尖の稜が残り、その下に鼻孔が影で沈む */
+    L.ridge(sk, [0, Y * 0.26, -Z * 0.88], [0, -Y * 0.20, -Z * 0.94], 0.024, 0.016, 2.0);
+    L.bulge(sk, [0, -Y * 0.21, -Z * 0.92], 0.024, 0.016);
+    L.bulge(sk, [0, -Y * 0.33, -Z * 0.86], 0.022, -0.010);
     /* 鼻唇溝と、膨れた皮膚に走る深い皺 */
     L.ridge(sk, [X * 0.18, -Y * 0.22, -Z * 0.84], [X * 0.44, -Y * 0.62, -Z * 0.66], 0.018, -0.009, 1.6);
     L.ridge(sk, [-X * 0.17, -Y * 0.24, -Z * 0.84], [-X * 0.42, -Y * 0.66, -Z * 0.64], 0.017, -0.008, 1.6);
@@ -253,7 +267,7 @@
     [1, -1].forEach(function (s2) {
       var nos = L.ell(0.0072, 0.0038, 0.0115, 10);
       L.deform(nos, function (x, y, z, o) { o[0] = x + 0.35 * z * s2; });
-      g.add(L.m(nos, M.void, [s2 * 0.0135, -Y * 0.30, -Z * 0.86], [0.55, s2 * 0.30, s2 * 0.42]));
+      g.add(L.m(nos, M.void, [s2 * 0.0142, -Y * 0.245, -Z * 0.905], [0.72, s2 * 0.30, s2 * 0.42]));
     });
     g.add(L.m(new THREE.TorusGeometry(0.022, 0.0075, 6, 16, 4.2), M.face, [X * 0.96, -Y * 0.12, -0.002], [0.2, 1.5, 0.7]));
     g.add(L.m(new THREE.TorusGeometry(0.017, 0.0060, 6, 14, 3.2), M.face, [-X * 0.95, -Y * 0.20, 0.004], [0.1, -1.5, -0.8]));
@@ -287,7 +301,7 @@
   /* 皮膚に癒着した防護服の断片: 体の楕円体に沿う殻（縁は不揃いに欠ける） */
   function suitShell(M, g, center, radii, phi0, phiLen, th0, thLen, seed) {
     var R = L.rng(seed);
-    var q = new THREE.SphereGeometry(1, 15, 12, phi0, phiLen, th0, thLen);
+    var q = new THREE.SphereGeometry(1, 13, 10, phi0, phiLen, th0, thLen);
     var uv = q.attributes.uv.array, pos = q.attributes.position.array, i;
     /* 縁を不揃いに欠けさせ、皮膚の下へ沈ませる（板の直線的な断ち切りを消す） */
     for (i = 0; i < pos.length / 3; i++) {
@@ -322,15 +336,17 @@
     grp.add(L.m(L.strip(A, B), M.flesh)); grp.add(L.m(L.strip(B, A), M.flesh));
     grp.add(L.m(L.strip(D, C), M.flesh)); grp.add(L.m(L.strip(C, D), M.flesh));
     /* 渡る繊維（引き伸ばされた皮膚） */
-    for (var f = 0; f < 5; f++) {
-      var tt = 0.18 + 0.64 * f / 4 + (R() - 0.5) * 0.06, yy = (tt - 0.5) * len;
+    for (var f = 0; f < 4; f++) {
+      var tt = 0.20 + 0.58 * f / 3 + (R() - 0.5) * 0.06, yy = (tt - 0.5) * len;
       var ww2 = w * Math.sin(Math.PI * Math.pow(tt, 0.9));
       grp.add(L.m(L.tube([[ww2 * 0.92, yy, 0.002], [0, yy + (R() - 0.5) * 0.012, -w * 0.34], [-ww2 * 0.92, yy, 0.002]],
-        0.0018 + R() * 0.0014, 4), M.skin));
+        0.0018 + R() * 0.0014, 3), M.skin));
     }
-    /* 縁の捲れ */
-    grp.add(L.m(L.tube(A, 0.0062, 6), M.skin));
-    grp.add(L.m(L.tube(C, 0.0058, 6), M.skin));
+    /* 縁の捲れ（頂点を間引いて軽くする） */
+    var A2 = A.filter(function (_, i2) { return i2 % 2 === 0; });
+    var C2 = C.filter(function (_, i2) { return i2 % 2 === 0; });
+    grp.add(L.m(L.tube(A2, 0.0062, 4), M.skin));
+    grp.add(L.m(L.tube(C2, 0.0058, 4), M.skin));
     grp.position.set(at[0], at[1], at[2]);
     grp.rotation.set(rot[0], rot[1], rot[2]);
     g.add(grp);
@@ -366,14 +382,14 @@
 
     /* 脚: 水で膨れて太い。膝から下は水に浸かってふやける。 */
     [1, -1].forEach(function (s) {
-      var hipP = [s * 0.132, HIP - 0.070, -0.010];
-      var kneeP = [s * (s > 0 ? 0.150 : 0.128), KNEE, s > 0 ? -0.070 : 0.055];
-      var ankP = [s * (s > 0 ? 0.148 : 0.120), ANK, s > 0 ? -0.010 : 0.115];
-      limb(root, M.skin, hipP, kneeP, 0.128, 0.088, 0.16);
-      root.add(L.m(L.ell(0.086, 0.082, 0.090, 16), M.skin, kneeP));
-      limb(root, M.skin, kneeP, ankP, 0.092, 0.062, 0.20);
-      root.add(L.m(L.ell(0.064, 0.056, 0.064, 14), M.skin, ankP));
-      var ft = L.ell(0.072, 0.044, 0.132, 16);
+      var hipP = [s * 0.186, HIP - 0.070, -0.010];
+      var kneeP = [s * (s > 0 ? 0.196 : 0.170), KNEE, s > 0 ? -0.070 : 0.055];
+      var ankP = [s * (s > 0 ? 0.190 : 0.158), ANK, s > 0 ? -0.010 : 0.115];
+      limb(root, M.skin, hipP, kneeP, 0.182, 0.132, 0.26);
+      root.add(L.m(L.ell(0.128, 0.120, 0.132, 14), M.skin, kneeP));
+      limb(root, M.skin, kneeP, ankP, 0.134, 0.090, 0.30);
+      root.add(L.m(L.ell(0.092, 0.080, 0.092, 12), M.skin, ankP));
+      var ft = L.ell(0.098, 0.058, 0.150, 14);
       L.deform(ft, function (x, y, z, o) { o[1] = y * (1 - 0.4 * Math.max(0, -z / 0.132)); });
       root.add(L.m(ft, M.skin, [ankP[0], 0.042, ankP[2] - 0.070], [0, s * 0.10, 0]));
       for (var t = 0; t < 5; t++) {
@@ -381,11 +397,11 @@
           [ankP[0] + (t - 2) * 0.027, 0.026, ankP[2] - 0.185 + Math.abs(t - 2) * 0.010]));
       }
       /* 太腿に癒着した防護服の裾 */
-      suitShell(M, root, [s * 0.140, HIP - 0.170, -0.010], [0.150, 0.190, 0.150], s > 0 ? 2.05 : 3.45, 1.55, 0.30, 1.30, 900 + s * 11);
+      suitShell(M, root, [s * 0.192, HIP - 0.170, -0.010], [0.212, 0.205, 0.212], s > 0 ? 2.05 : 3.45, 1.55, 0.30, 1.30, 900 + s * 11);
     });
 
     /* 胴に癒着した防護服の板（胸・背・肩） */
-    var SR = [0.334, 0.452, 0.266];
+    var SR = [0.500, 0.452, 0.400];
     suitShell(M, up, [0, cy, 0], SR, 4.02, 0.44, 0.62, 0.52, 941);
     suitShell(M, up, [0, cy, 0], SR, 5.06, 0.50, 1.18, 0.48, 947);
     suitShell(M, up, [0, cy, 0], SR, 6.15, 1.25, 0.72, 0.95, 953);
@@ -396,6 +412,11 @@
     tear(up, M, [0.110, cy - 0.330, -0.240], [0.16, -0.30, 1.35], 0.15, 0.018, 1213);
     tear(up, M, [-0.298, SHOULDER - 0.300, -0.060], [0.10, 0.40, 0.22], 0.17, 0.020, 1217);
     tear(up, M, [0.318, SHOULDER - 0.420, 0.010], [0.05, -0.45, -0.16], 0.14, 0.017, 1223);
+    tear(up, M, [0.300, cy - 0.300, -0.330], [0.12, -0.20, 0.95], 0.20, 0.024, 1229);
+    tear(up, M, [-0.330, cy - 0.060, -0.270], [-0.08, 0.30, -0.75], 0.19, 0.023, 1231);
+    tear(up, M, [-0.060, cy - 0.430, -0.390], [0.20, 0.10, 1.50], 0.17, 0.021, 1237);
+    tear(up, M, [0.415, SHOULDER - 0.230, -0.090], [0.06, -0.30, 0.40], 0.15, 0.018, 1241);
+    tear(up, M, [-0.400, SHOULDER - 0.150, 0.060], [0.02, 0.55, -0.20], 0.13, 0.016, 1249);
     for (var fk = 0; fk < 8; fk++) {
       var fa = R() * 6.284, fy = cy + (R() - 0.9) * 0.42, frr = 0.30 + R() * 0.05;
       up.add(L.m(L.ell(0.024 + R() * 0.028, 0.020 + R() * 0.024, 0.008, 7), M.suit,
@@ -416,32 +437,32 @@
 
     /* 肩（頭が沈むよう高く盛る） */
     [1, -1].forEach(function (s) {
-      var shg = L.ell(0.134, 0.118, 0.126, 18);
+      var shg = L.ell(0.186, 0.158, 0.174, 15);
       L.warp(shg, 0.010, 9, 400 + s * 7);
       L.ridge(shg, [s * 0.05, 0.08, -0.10], [s * 0.11, -0.06, 0.06], 0.05, -0.010, 1.5);
-      up.add(L.m(shg, M.skin, [s * 0.238, SHOULDER - 0.010 - (s < 0 ? 0.030 : 0), -0.010], [0, 0, -s * 0.24]));
-      suitShell(M, up, [s * 0.238, SHOULDER - 0.010 - (s < 0 ? 0.030 : 0), -0.010],
-        [0.140, 0.124, 0.132], s > 0 ? 3.00 : 5.55, 1.45, 0.26, 0.86, 1300 + s * 17);
+      up.add(L.m(shg, M.skin, [s * 0.310, SHOULDER - 0.010 - (s < 0 ? 0.034 : 0), -0.010], [0, 0, -s * 0.24]));
+      suitShell(M, up, [s * 0.310, SHOULDER - 0.010 - (s < 0 ? 0.034 : 0), -0.010],
+        [0.192, 0.164, 0.180], s > 0 ? 3.00 : 5.55, 1.45, 0.26, 0.86, 1300 + s * 17);
       /* 反射帯の名残（上腕を巻く帯） */
-      up.add(L.m(new THREE.TorusGeometry(0.098, 0.011, 4, 18, 3.6), M.band,
-        [s * 0.300, SHOULDER - 0.215, -0.010], [0.06, 0, -s * 0.30]));
+      up.add(L.m(new THREE.TorusGeometry(0.138, 0.013, 4, 18, 3.6), M.band,
+        [s * 0.390, SHOULDER - 0.215, -0.010], [0.06, 0, -s * 0.30]));
       /* 首を埋める肩の肉（頭の下半分を隠す） */
-      up.add(L.m(L.ell(0.118, 0.062, 0.106, 16), M.skin, [s * 0.168, SHOULDER - 0.014, -0.010]));
+      up.add(L.m(L.ell(0.150, 0.074, 0.134, 14), M.skin, [s * 0.208, SHOULDER - 0.018, -0.010]));
     });
     /* 鎖骨（膨れた皮膚の下に沈む） */
-    up.add(L.m(L.tube([[0.020, SHOULDER - 0.075, -0.180], [0.130, SHOULDER - 0.050, -0.140], [0.225, SHOULDER - 0.070, -0.060]], 0.017, 7), M.skin));
-    up.add(L.m(L.tube([[-0.020, SHOULDER - 0.080, -0.180], [-0.126, SHOULDER - 0.058, -0.136], [-0.220, SHOULDER - 0.080, -0.058]], 0.016, 7), M.skin));
+    up.add(L.m(L.tube([[0.024, SHOULDER - 0.075, -0.268], [0.170, SHOULDER - 0.050, -0.210], [0.295, SHOULDER - 0.070, -0.090]], 0.023, 7), M.skin));
+    up.add(L.m(L.tube([[-0.024, SHOULDER - 0.080, -0.268], [-0.166, SHOULDER - 0.058, -0.204], [-0.288, SHOULDER - 0.080, -0.088]], 0.022, 7), M.skin));
 
     /* 異様に長い腕（手は膝より下） */
     [1, -1].forEach(function (s) {
-      var sh = [s * 0.258, SHOULDER - 0.055, -0.020];
-      var el = s > 0 ? [0.428, 0.905, 0.030] : [-0.412, 0.880, -0.115];
-      var wr = s > 0 ? [0.408, 0.315, -0.185] : [-0.452, 0.285, 0.010];
-      limb(up, M.skin, sh, el, 0.092, 0.062, 0.20);
-      up.add(L.m(L.ell(0.062, 0.058, 0.062, 14), M.skin, el));
-      limb(up, M.skin, el, wr, 0.064, 0.046, 0.22);
+      var sh = [s * 0.336, SHOULDER - 0.055, -0.020];
+      var el = s > 0 ? [0.512, 0.905, 0.030] : [-0.496, 0.880, -0.115];
+      var wr = s > 0 ? [0.492, 0.315, -0.185] : [-0.536, 0.285, 0.010];
+      limb(up, M.skin, sh, el, 0.134, 0.092, 0.30);
+      up.add(L.m(L.ell(0.092, 0.086, 0.092, 12), M.skin, el));
+      limb(up, M.skin, el, wr, 0.096, 0.070, 0.32);
       var hand = new THREE.Group();
-      hand.add(L.m(L.ell(0.056, 0.070, 0.028, 16), M.skin, [0, -0.058, 0]));
+      hand.add(L.m(L.ell(0.074, 0.090, 0.040, 14), M.skin, [0, -0.070, 0]));
       for (var f = 0; f < 4; f++) {
         var fx = (f - 1.5) * 0.030, spread = (f - 1.5) * 0.14, y0 = -0.112, zz = 0;
         for (var k = 0; k < 3; k++) {
@@ -464,7 +485,7 @@
 
     /* 鎖と鉤（右手から床へ垂れ、後ろへ引きずられる。鉤は0.4mの鋳鉄） */
     var chain = new THREE.Group();
-    var gx = 0.430, gy = 0.305, gz = -0.265, N = 16;
+    var gx = 0.512, gy = 0.305, gz = -0.270, N = 16;
     for (var i = 0; i < N; i++) {
       var t = i / (N - 1);
       var x = gx + 0.070 * t, y = gy * (1 - t) * (1 - t) + 0.030, z = gz + 0.70 * t * t + 0.10 * t;
@@ -491,17 +512,17 @@
     hd.rotation.set(0.10, -0.18, 0.06);
     up.add(hd);
     /* 首は無く、顎下の肉と首の皮膚の襞が肩へ続く（頭の下半分が沈む） */
-    up.add(L.m(L.ell(0.112, 0.076, 0.106, 16), M.skin, [-0.010, HEADY - 0.112, -0.030]));
+    up.add(L.m(L.ell(0.146, 0.092, 0.138, 14), M.skin, [-0.010, HEADY - 0.118, -0.030]));
     for (var nf = 0; nf < 3; nf++) {
-      var fr = new THREE.TorusGeometry(0.092 + nf * 0.012, 0.020 + nf * 0.004, 5, 16);
+      var fr = new THREE.TorusGeometry(0.118 + nf * 0.016, 0.026 + nf * 0.005, 5, 16);
       L.deform(fr, function (x, y, z, o) { o[1] = y + 0.010 * Math.sin(x * 22) - 0.006; o[0] = x * (1 + 0.06 * Math.sin(z * 18)); });
       up.add(L.m(fr, M.skin, [-0.012, HEADY - 0.088 - nf * 0.040, -0.028], [1.42 + nf * 0.06, 0, 0.05]));
     }
     /* 斜め上からの橙1灯＋反対側の弱い緑で形を彫る */
-    var key = new THREE.PointLight(0xffa860, 11.0, 6.4, 2); key.position.set(0.95, 2.55, -1.70); root.add(key);
+    var key = new THREE.PointLight(0xffa860, 13.0, 7.0, 2); key.position.set(0.95, 2.55, -1.70); root.add(key);
     var grn = new THREE.PointLight(0x6ab896, 5.0, 3.9, 2); grn.position.set(-1.10, 1.62, 0.50); root.add(grn);
     /* 裂け目の内側にわずかな回り込み（肋骨と内臓が読めるだけ） */
-    var wl = new THREE.PointLight(0xffb494, 0.16, 0.80, 2); wl.position.set(0.04, 1.22, -0.44); root.add(wl);
+    var wl = new THREE.PointLight(0xffb494, 0.30, 0.78, 2); wl.position.set(0.03, 1.26, -0.60); root.add(wl);
     return root;
   }
 
@@ -509,8 +530,8 @@
     name: '案E 肥大した作業員',
     build: build,
     cams: {
-      full: { pos: [0.86, 0.98, -2.30], look: [0.05, 0.96, -0.02], fov: 58 },
-      face: { pos: [0.15, 1.800, -0.96], look: [-0.02, 1.700, -0.21], fov: 31 },
+      full: { pos: [0.92, 0.92, -2.42], look: [0.03, 0.98, -0.02], fov: 54 },
+      face: { pos: [0.17, 1.815, -1.14], look: [-0.02, 1.678, -0.20], fov: 31 },
       corridor: { pos: [0.0, 1.56, 1.20], look: [0.0, 1.20, -8.6], fov: 42,
         place: [0.05, 0.0, -8.6], rot: [0, 0.30, 0] }
     }
