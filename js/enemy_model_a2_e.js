@@ -40,39 +40,41 @@
   /* ---------------- 材質 ---------------- */
   E.prototype._mats = function () {
     var M = this.mats;
+    /* 値はモック mock_E.js の mats() をそのまま移植（色・粗さ・法線の強さ・繰り返し）。
+       ここを弄ると「同一の存在」に見えなくなる（2026-09-20 事前ゲート差し戻しの主因）。 */
     M.skin = this._lit(A2.skin({
-      seed: 501, size: 256, base: '#5f645b', dark: 'rgba(14,18,18,', veinColor: 'rgba(62,48,84,0.50)',
-      mottle: 300, vein: 160, wrinkle: 300, pore: 0.50, bump: 4.6, roughLo: 0.38, roughHi: 0.94,
-      tint: 0x3a443a, metalness: 0, repeat: [3, 3], nscale: 1.55
+      seed: 501, base: '#5f645b', dark: 'rgba(14,18,18,', veinColor: 'rgba(62,48,84,0.50)',
+      mottle: 300, vein: 160, wrinkle: 300, pore: 0.50, bump: 4.6, roughLo: 0.24, roughHi: 0.90,
+      tint: 0x939e95, metalness: 0, repeat: [4, 4], nscale: 1.55
     }), 'body');
     M.face = this._lit(A2.skin({
-      seed: 503, size: 384, base: '#5e635b', dark: 'rgba(12,16,16,', veinColor: 'rgba(84,46,54,0.45)',
-      mottle: 340, vein: 210, wrinkle: 420, pore: 0.62, bump: 4.4, roughLo: 0.40, roughHi: 0.94,
-      tint: 0x3e463d, metalness: 0, repeat: [6, 5], nscale: 1.80
+      seed: 503, base: '#5e635b', dark: 'rgba(12,16,16,', veinColor: 'rgba(84,46,54,0.45)',
+      mottle: 340, vein: 210, wrinkle: 420, pore: 0.62, bump: 4.4, roughLo: 0.22, roughHi: 0.90,
+      tint: 0x939e95, metalness: 0, repeat: [5, 4], nscale: 1.70
     }), 'face');
     /* 防護服の残骸（汚れた黄灰の PVC 布地）。皮膚と境が溶けている */
     M.suit = this._lit(A2.skin({
-      seed: 507, size: 256, base: '#49452a', dark: 'rgba(16,15,8,', veinColor: 'rgba(38,34,18,0.5)',
-      mottle: 180, vein: 30, wrinkle: 340, pore: 0.26, bump: 3.4, roughLo: 0.52, roughHi: 0.98,
-      tint: 0x565236, metalness: 0, repeat: [2, 2], side: THREE.DoubleSide
+      seed: 507, base: '#49452a', dark: 'rgba(16,15,8,', veinColor: 'rgba(38,34,18,0.5)',
+      mottle: 180, vein: 30, wrinkle: 340, pore: 0.26, bump: 3.4, roughLo: 0.40, roughHi: 0.96,
+      tint: 0x8b855f, metalness: 0, repeat: [3, 3], side: THREE.DoubleSide
     }), 'cloth');
     M.cloth = M.suit;
     M.fleshT = this._lit(A2.skin({
-      seed: 509, size: 256, base: '#2c1112', dark: 'rgba(8,2,3,', veinColor: 'rgba(110,26,28,0.55)',
-      mottle: 180, vein: 130, wrinkle: 320, pore: 0.36, bump: 4.2, roughLo: 0.34, roughHi: 0.70,
-      tint: 0x4a1d18, metalness: 0, repeat: [2, 2], side: THREE.DoubleSide
+      seed: 509, base: '#2c1112', dark: 'rgba(8,2,3,', veinColor: 'rgba(110,26,28,0.55)',
+      mottle: 180, vein: 130, wrinkle: 320, pore: 0.36, bump: 4.2, roughLo: 0.22, roughHi: 0.58,
+      tint: 0x37160f, metalness: 0, repeat: [3, 3], side: THREE.DoubleSide
     }), 'flesh');
     M.flesh = M.fleshT;
-    M.band = this._lit(A2.mat(0x53564f, 0.60, 0.06), 'metal');
-    M.rib = this._lit(A2.mat(0x6d6a55, 0.66, 0), 'tooth');
+    M.band = this._lit(A2.mat(0x6a6d66, 0.52, 0.06), 'metal');
+    M.rib = this._lit(A2.mat(0x8e8970, 0.58, 0), 'tooth');
     M.void = this._track(new THREE.MeshBasicMaterial({ color: 0x000000, fog: true }));
-    M.eye = this._lit(A2.mat(0x484436, 0.94, 0), 'tooth');       /* 白濁して濁った眼球 */
-    M.eyeVein = this._lit(A2.mat(0x2e0a09, 0.92, 0), 'flesh');
-    M.gum = this._lit(A2.mat(0x34130f, 0.72, 0), 'flesh');
-    M.tooth = this._lit(A2.mat(0x4a4533, 0.88, 0), 'tooth');
-    M.hair = this._lit(A2.mat(0x090a0a, 0.70, 0), 'hair');
-    M.nail = this._lit(A2.mat(0x3b392c, 0.56, 0), 'body');
-    M.iron = this._lit(A2.mat(0x2b2a24, 0.58, 0.62), 'metal');
+    M.eye = this._lit(A2.mat(0x585446, 0.92, 0), 'tooth');       /* 白濁して濁った眼球 */
+    M.eyeVein = this._lit(A2.mat(0x3a0d0c, 0.90, 0), 'flesh');
+    M.gum = this._lit(A2.mat(0x2c1211, 0.52, 0), 'flesh');
+    M.tooth = this._lit(A2.mat(0x6e6754, 0.50, 0), 'tooth');
+    M.hair = this._lit(A2.mat(0x090a0a, 0.66, 0), 'hair');
+    M.nail = this._lit(A2.mat(0x55533f, 0.46, 0), 'body');
+    M.iron = this._lit(A2.mat(0x39372f, 0.52, 0.70), 'metal');
     return M;
   };
 
@@ -120,7 +122,7 @@
     bulge(sk, [X * 0.80, -Y * 0.62, -Z * 0.24], 0.046, 0.014);
     bulge(sk, [-X * 0.76, -Y * 0.66, -Z * 0.22], 0.044, 0.011);
     /* 開いたままの口（下顎が落ち、口腔が奥へ抜ける） */
-    ridge(sk, [X * 0.28, -Y * 0.60, -Z * 0.78], [-X * 0.27, -Y * 0.62, -Z * 0.78], 0.030, -0.042, 1.2);
+    ridge(sk, [X * 0.30, -Y * 0.60, -Z * 0.78], [-X * 0.29, -Y * 0.62, -Z * 0.78], 0.042, -0.058, 1.1);
     ridge(sk, [X * 0.32, -Y * 0.44, -Z * 0.78], [-X * 0.31, -Y * 0.46, -Z * 0.78], 0.015, 0.009, 1.6);
     ridge(sk, [X * 0.30, -Y * 0.76, -Z * 0.76], [-X * 0.29, -Y * 0.78, -Z * 0.76], 0.016, 0.010, 1.6);
     /* 鼻: 膨れた肉の中でも鼻梁→鼻尖の稜が残り、その下に鼻孔が沈む */
@@ -136,7 +138,7 @@
   /* ---------------- 顔一式（頭ノードの下に積む） ---------------- */
   E.prototype._buildHead = function (head, jaw) {
     var X = HRX, Y = HRY, Z = HRZ, M = this.mats, self = this;
-    var hi = this._skullGeo(52), lo = this._skullGeo(18);
+    var hi = this._skullGeo(52), lo = this._skullGeo(16);
     var face = this._mesh(hi, M.face, head, 'faceShell');
     this._track(lo);
     this.lodSwap.push({ mesh: face, hi: hi, lo: lo });
@@ -145,30 +147,30 @@
     /* 眼: 小さく白濁し、腫れた瞼で半分以上隠れ、影に沈む。ハイライト無し */
     this.sockets = [];
     [[X * 0.46, Y * 0.14, -Z * 0.74, 1, 1.00], [-X * 0.46, Y * 0.10, -Z * 0.74, -1, 0.92]].forEach(function (p, i) {
-      var er = 0.0126 * p[4];
-      var eg = ell(er, er * 0.94, er * 0.92, 8);
+      var er = 0.0180 * p[4];                 /* 差し戻し②: 眼が小さすぎて別人 → 拡大 */
+      var eg = ell(er, er * 0.94, er * 0.92, 12);
       warp(eg, 0.0009, 44, 60 + i);
       self._mesh(eg, M.eye, head, 'eyeball').position.set(p[0], p[1], p[2]);
       var R = rng(600 + i * 13);
-      for (var v = 0; v < 5; v++) {
+      for (var v = 0; v < 6; v++) {
         var a0 = R() * 6.284, pts = [];
         for (var q = 0; q < 4; q++) {
           var a = a0 + q * 0.38, r = er * (0.28 + q * 0.22);
           pts.push([p[0] + Math.cos(a) * r, p[1] + Math.sin(a) * r * 0.9,
             p[2] - Math.sqrt(Math.max(0, 1 - (r / er) * (r / er) * 0.9)) * er * 0.86]);
         }
-        self._mesh(tube(pts, 0.0006 + R() * 0.0005, 3, false, 1.2), M.eyeVein, head, 'eyeVein', 1);
+        self._mesh(tube(pts, 0.0011 + R() * 0.0009, 4, false, 1.3), M.eyeVein, head, 'eyeVein', 1);
       }
       self._mesh(ell(er * 0.34, er * 0.32, er * 0.28, 6), M.void, head, 'pupil')
         .position.set(p[0] + p[3] * 0.0015, p[1] - 0.0008, p[2] - er * 0.88);
       /* 腫れた瞼（上は 60% 覆う・下は袋状に垂れる） */
-      var ul = ell(er * 2.3, er * 1.9, er * 2.1, 9);
+      var ul = ell(er * 1.95, er * 1.62, er * 1.80, 11);
       deform(ul, function (x, y, z, o) { o[1] = y * (y > 0 ? 1.15 : 0.34) + 0.0035 * Math.sin(x * 46); });
-      var um = self._mesh(ul, M.face, head, 'lidUp', 1);
+      var um = self._mesh(ul, M.face, head, 'lidUp');
       um.position.set(p[0], p[1] + er * 0.62, p[2] + er * 0.34); um.rotation.set(0.24, 0, p[3] * 0.22);
-      var ll = ell(er * 2.2, er * 1.7, er * 2.0, 9);
+      var ll = ell(er * 1.86, er * 1.46, er * 1.72, 11);
       deform(ll, function (x, y, z, o) { o[1] = y * (y < 0 ? 1.10 : 0.30); });
-      var lm = self._mesh(ll, M.face, head, 'lidLo', 1);
+      var lm = self._mesh(ll, M.face, head, 'lidLo');
       lm.position.set(p[0], p[1] - er * 0.92, p[2] + er * 0.40); lm.rotation.set(-0.20, 0, p[3] * 0.14);
       /* 眼窩の縁の影（庇の陰） */
       self._mesh(ell(er * 2.7, er * 0.46, er * 1.1, 8), M.void, head, 'browShade')
@@ -177,12 +179,12 @@
     });
 
     /* 口腔（奥へ抜ける闇）と、下顎側に持つ歯茎・歯（顎ノードで開く） */
-    var mo = ell(0.036, 0.026, 0.038, 12, 9);
+    var mo = ell(0.052, 0.040, 0.052, 14, 10);
     deform(mo, function (x, y, z, o) {
       o[0] = x * (1 + 0.22 * Math.sin(y * 90)); o[1] = y * (1 + 0.18 * Math.sin(x * 70));
     });
     var mm2 = this._mesh(mo, M.void, head, 'oral');
-    mm2.position.set(0.004, -Y * 0.62, -Z * 0.48); mm2.rotation.set(0.10, 0.10, 0.08);
+    mm2.position.set(0.004, -Y * 0.62, -Z * 0.56); mm2.rotation.set(0.10, 0.10, 0.08);
     var lipU = [];
     for (var q3 = 0; q3 <= 10; q3++) {
       var t5 = q3 / 10;
@@ -204,13 +206,13 @@
         gp.push([(-0.030 + 0.060 * t), -Y * (s > 0 ? 0.52 : 0.74) - 0.002,
           -Z * 0.70 + 0.014 * (t - 0.5) * (t - 0.5) * 4]);
       }
-      self._mesh(tube(gp, 0.0060, 5, false, 1.2), M.gum, par, 'gum');
+      self._mesh(tube(gp, 0.0092, 6, false, 1.4), M.gum, par, 'gum');
       for (var n = 0; n < 7; n++) {
-        if (R2() < 0.26) continue;                    /* 抜けた歯 */
-        var t2 = n / 6, hh = 0.006 + R2() * 0.013, cw = 0.0030 + R2() * 0.0026;
+        if (R2() < 0.18) continue;                    /* 抜けた歯 */
+        var t2 = n / 6, hh = 0.010 + R2() * 0.017, cw = 0.0044 + R2() * 0.0034;
         var cone = new THREE.ConeGeometry(cw, hh, 5);
         cone.translate(0, -hh / 2, 0);
-        var tm = self._mesh(cone, M.tooth, par, 'tooth', 1);
+        var tm = self._mesh(cone, M.tooth, par, 'tooth');
         tm.position.set(-0.030 + 0.060 * t2 + (R2() - 0.5) * 0.004,
           -Y * (s > 0 ? 0.52 : 0.74) + s * 0.002, -Z * 0.70 + 0.014 * (t2 - 0.5) * (t2 - 0.5) * 4);
         tm.rotation.order = 'ZXY';
@@ -397,7 +399,7 @@
     abs.position.set(0, -SHOULDER, 0);
     chest.add(abs);
 
-    var tHi = this._trunkGeo(26), tLo = this._trunkGeo(12);
+    var tHi = this._trunkGeo(26), tLo = this._trunkGeo(10);
     var tm = this._mesh(tHi, M.skin, abs, 'trunk');
     this._track(tLo);
     this.lodSwap.push({ mesh: tm, hi: tHi, lo: tLo });
@@ -445,7 +447,7 @@
         [0.192, 0.164, 0.180], s > 0 ? 3.00 : 5.55, 1.45, 0.26, 0.86, 1300 + s * 17, 1);
       var bm = self._mesh(new THREE.TorusGeometry(0.138, 0.013, 4, 14, 3.6), M.band, abs, 'reflect', 1);
       bm.position.set(s * 0.390, SHOULDER - 0.215, -0.010); bm.rotation.set(0.06, 0, -s * 0.30);
-      self._mesh(ell(0.150, 0.074, 0.134, 11), M.skin, abs, 'neckFill')
+      self._mesh(ell(0.150, 0.074, 0.134, 11), M.skin, abs, 'neckFill', 1)
         .position.set(s * 0.208, SHOULDER - 0.018, -0.010);
     });
     this._mesh(tube([[0.024, SHOULDER - 0.075, -0.268], [0.170, SHOULDER - 0.050, -0.210], [0.295, SHOULDER - 0.070, -0.090]], 0.023, 6, false, 1.3), M.skin, abs, 'clavL', 1);
@@ -453,14 +455,14 @@
 
     /* 首は無い: 顎下の肉と首の皮膚の襞が肩へ続く（頭の下半分が沈む） */
     var neck = this._node('neck', chest, -0.010, HEADY - SHOULDER - 0.118, -0.030);
-    this._mesh(ell(0.146, 0.092, 0.138, 11), M.skin, neck, 'jowlBase');
+    this._mesh(ell(0.158, 0.104, 0.150, 12), M.skin, neck, 'jowlBase');
     for (var nf = 0; nf < 3; nf++) {
-      var fr = new THREE.TorusGeometry(0.118 + nf * 0.016, 0.026 + nf * 0.005, 4, 12);
+      var fr = new THREE.TorusGeometry(0.126 + nf * 0.020, 0.032 + nf * 0.007, 5, 14);
       deform(fr, function (x, y, z, o) { o[1] = y + 0.010 * Math.sin(x * 22) - 0.006; o[0] = x * (1 + 0.06 * Math.sin(z * 18)); });
       var fm = this._mesh(fr, M.skin, neck, 'jowl', nf > 0 ? 1 : 0);
-      fm.position.set(-0.002, 0.030 - nf * 0.040, 0.002);
+      fm.position.set(-0.002, 0.034 - nf * 0.042, -0.026 - nf * 0.008);
       fm.rotation.set(1.42 + nf * 0.06, 0, 0.05);
-      this.jowls.push({ n: fm, p: nf * 1.3 });
+      this.jowls.push({ n: fm, p: nf * 1.3, y0: 0.034 - nf * 0.042, z0: -0.026 - nf * 0.008 });
     }
     var head = this._node('head', neck, -0.010, 0.118, -0.018);
     var jaw = this._node('jaw', head, 0, 0, 0);
@@ -560,14 +562,14 @@
       var nd2 = new THREE.Group();
       nd2.position.set(0.016 + 0.022 * t, 0.014 * Math.max(0, 1 - t * 2.4), 0.070 + 0.012 * t);
       root.add(nd2);
-      var lk2 = this._mesh(new THREE.TorusGeometry(0.032, 0.0100, 4, 8), M.iron, nd2, 'link');
+      var lk2 = this._mesh(new THREE.TorusGeometry(0.032, 0.0100, 4, 8), M.iron, nd2, 'link', j > 4 ? 1 : 0);
       lk2.rotation.set(j % 2 ? 1.57 : 0, 0.30 + t * 0.6, 0.34 - t * 0.30);
       this.chain.push({ n: nd2, p: 1.2 + j * 0.55, k: 0.45 + 0.55 * t });
       root = nd2;
     }
     /* 鉤: 柄＋アイ＋湾曲＋尖った先端 */
     var hook = this._node('hook', root, 0, 0, 0.10);
-    var hm = this._mesh(new THREE.TorusGeometry(0.030, 0.0115, 5, 10), M.iron, hook, 'hookEye');
+    var hm = this._mesh(new THREE.TorusGeometry(0.030, 0.0115, 5, 10), M.iron, hook, 'hookEye', 1);
     hm.position.set(-0.020, -0.002, -0.055); hm.rotation.set(0.1, 0.4, 1.50);
     var sm = this._mesh(limbGeo(0.155, 0.0165, 0.0150, 0.02, 7), M.iron, hook, 'hookShaft');
     sm.position.set(-0.010, 0.000, -0.040); sm.rotation.set(-1.50, 0.42, 0);
@@ -576,7 +578,7 @@
       var a2 = -0.35 + h / 14 * 4.6;
       hk.push([0.052 + Math.cos(a2) * 0.105, Math.sin(a2) * 0.020, 0.105 + Math.sin(a2) * 0.105]);
     }
-    this._mesh(tube(hk, 0.0155, 6, false, 1.4), M.iron, hook, 'hookCurve');
+    this._mesh(tube(hk, 0.0155, 6, false, 1.4), M.iron, hook, 'hookCurve', 1);
     var tipm = this._mesh(limbGeo(0.085, 0.0150, 0.0010, 0.02, 6), M.iron, hook, 'hookTip');
     tipm.position.set(hk[14][0], hk[14][1], hk[14][2]); tipm.rotation.set(-1.15, -0.55, 0);
   };
@@ -673,7 +675,7 @@
       p.neck[0] = p.neck[0] * (1 - c) + 0.46 * c;
       p.head[0] = p.head[0] * (1 - c) + 0.28 * c;
       p.head[1] = p.head[1] * (1 - c) + (-0.10) * c;
-      p.jaw[0] = p.jaw[0] * (1 - c) + 0.44 * c;
+      p.jaw[0] = p.jaw[0] * (1 - c) + 0.30 * c;
       p.spine[0] = p.spine[0] * (1 - c) + (-0.34) * c;
     }
   };
@@ -688,8 +690,8 @@
     }
     for (i = 0; i < this.jowls.length; i++) {
       var j = this.jowls[i];
-      j.n.position.z = 0.002 + Math.sin(t * (3.0 + i * 0.7) + j.p) * 0.006 * k;
-      j.n.position.y = (0.030 - i * 0.040) + Math.sin(t * (2.6 + i * 0.5) + j.p + 1.2) * 0.005 * k;
+      j.n.position.z = j.z0 + Math.sin(t * (3.0 + i * 0.7) + j.p) * 0.006 * k;
+      j.n.position.y = j.y0 + Math.sin(t * (2.6 + i * 0.5) + j.p + 1.2) * 0.005 * k;
     }
   };
 
