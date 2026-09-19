@@ -86,9 +86,9 @@
 
   /* ナトリウム橙のキー1灯（斜め上）＋水面の緑のリム（下・背後）＋ごく弱いフィル */
   scene.add(new THREE.AmbientLight(0x1a2028, 0.34));
-  var key = new THREE.PointLight(0xffa64a, 9.0, 16, 2); key.position.set(1.05, 2.25, 8.6); scene.add(key);
+  var key = new THREE.PointLight(0xffa64a, 11.0, 16, 2); key.position.set(1.55, 2.28, 8.35); scene.add(key);
   var key2 = new THREE.PointLight(0xffb060, 3.2, 12, 2); key2.position.set(2.6, 2.2, 14.4); scene.add(key2);
-  var rim = new THREE.PointLight(0x2f8f6a, 2.4, 9, 2); rim.position.set(2.9, .22, 11.4); scene.add(rim);
+  var rim = new THREE.PointLight(0x2f8f6a, 3.0, 9, 2); rim.position.set(2.7, .22, 12.2); scene.add(rim);
   var fill = new THREE.PointLight(0x556070, 0.9, 10, 2); fill.position.set(3.2, 1.6, 7.2); scene.add(fill);
 
   /* ---- 地図（幅1の支線＝左右に壁。F の縄張り） ---- */
@@ -119,7 +119,7 @@
   var fakeWorld = {
     lightIndex: true,
     _shade: function (x, y, z, nx, ny, nz, key, u, out) {
-      var d = Math.hypot(x - 1.05, y - 2.25, z - 8.6);
+      var d = Math.hypot(x - 1.55, y - 2.28, z - 8.35);
       var k = 0.42 / (1 + d * d * 0.12) + 0.035;
       out[0] = k * 1.00; out[1] = k * 0.62; out[2] = k * 0.30; return out;
     }
@@ -131,7 +131,7 @@
   }
 
   function pump(form, secs, detail) {
-    enemy.placeAt(3.0, 10.2, Math.PI, map);       /* 支線の中・南向き（−Z が前） */
+    enemy.placeAt(3.0, 10.2, 0, map);            /* 支線の中・−Z が前＝カメラ側を向く */
     enemy.setForm(form, true);
     enemy.setDetail(detail || 'normal');
     var t = 0, dt = 1 / 60;
@@ -144,13 +144,13 @@
     /* 壁を這う: 斜め前から。左の壁（x=0 側）に貼りついているはず */
     stand: function () {
       var t = pump('stand', 3.4);
-      cam.fov = 52; cam.position.set(3.35, 1.62, 6.55); cam.lookAt(2.55, 1.30, 10.1);
+      cam.fov = 52; cam.position.set(1.70, 1.52, 6.90); cam.lookAt(3.30, 1.24, 10.15);
       cap('案F 本番モデル — stand（壁を這う）', tri().toLocaleString() + ' 三角形 / detail normal');
     },
     /* 床を走る: 低い視点から正面 */
     crawl: function () {
       var t = pump('crawl', 4.1);
-      cam.fov = 58; cam.position.set(2.75, 0.82, 6.10); cam.lookAt(2.85, 0.42, 9.9);
+      cam.fov = 58; cam.position.set(2.45, 0.78, 6.60); cam.lookAt(3.05, 0.40, 10.0);
       cap('案F 本番モデル — crawl（床を走る・肢12本）', tri().toLocaleString() + ' 三角形 / detail normal');
     },
     /* 顔アップ: capture.js と同じ据え方（顔の正面 0.42m・少し見上げ） */
@@ -161,9 +161,10 @@
       enemy.nodes.head.getWorldPosition(fp);
       var f = { x: -Math.sin(enemy.facing), z: -Math.cos(enemy.facing) };
       fp.x += f.x * 0.055; fp.z += f.z * 0.055; fp.y += 0.015;
-      var d = 0.42;
+      var d = 0.44;
       cam.fov = 46;
-      cam.position.set(fp.x - f.x * d, fp.y - d * 0.34, fp.z - f.z * d);
+      /* capture.js の _nearOf と同じ: 敵の正面（= facing 方向）へ離れ、少し見上げる */
+      cam.position.set(fp.x + f.x * d, fp.y - d * 0.34, fp.z + f.z * d);
       cam.lookAt(fp);
       cap('案F 本番モデル — 顔の寄り（捕獲演出 detail hi）', tri().toLocaleString() + ' 三角形');
     },
@@ -180,7 +181,7 @@
       maw.group.position.set(0, -0.02 + 0.05 * 0.86, -0.40 + 0.33 * 0.86);
       enemy.group.visible = false;
       enemy.pulseEyes(2.0, 1);
-      cam.fov = 46; cam.position.set(2.2, 1.5, 6.0); cam.lookAt(2.2, 1.5, 4.0);
+      cam.fov = 46; cam.position.set(2.4, 1.5, 9.4); cam.lookAt(2.4, 1.5, 7.4);
       cap('案F 本番モデル — 捕獲の口（複数の頭蓋が覗き込む）', tri().toLocaleString() + ' 三角形');
     },
     /* 遷移の途中（壁から剥がれ落ちる 0.9 秒の中ほど） */
@@ -190,11 +191,52 @@
       var t = 2.0, dt = 1 / 60;
       while (t < 2.0 + 0.45) { t += dt; enemy.update(dt, t); }
       enemy.syncLight(fakeWorld, map);
-      cam.fov = 55; cam.position.set(3.45, 1.45, 6.9); cam.lookAt(2.5, 1.0, 10.0);
+      cam.fov = 55; cam.position.set(1.85, 1.40, 7.10); cam.lookAt(3.25, 1.05, 10.1);
       cap('案F 本番モデル — 遷移 0.45s（壁から剥がれ落ちる）', tri().toLocaleString() + ' 三角形');
     }
   };
 
+  /* モックの顔と並べる比較図（左=モック F_face.png・右=本番の顔の寄り） */
+  window.__compare = function (cb) {
+    VIEWS.maw();
+    cam.aspect = 640 / 720; cam.updateProjectionMatrix();
+    renderer.setSize(640, 720, false);
+    renderer.render(scene, cam);
+    var right = document.createElement('canvas'); right.width = 640; right.height = 720;
+    right.getContext('2d').drawImage(renderer.domElement, 0, 0, 640, 720);
+    var img = new Image();
+    img.onload = function () {
+      renderer.setSize(W, H, false);
+      cam.aspect = W / H; cam.updateProjectionMatrix();
+      var cv = renderer.domElement, g = cv.getContext('2d');
+      var out = document.createElement('canvas'); out.width = W; out.height = H;
+      var o = out.getContext('2d');
+      o.fillStyle = '#000'; o.fillRect(0, 0, W, H);
+      /* 左: モック（1280x720 の中央 640 幅を切り出して 640x720 に伸ばさず中央寄せ） */
+      o.drawImage(img, 320, 0, 640, 720, 0, 0, 640, 720);
+      o.drawImage(right, 640, 0, 640, 720);
+      o.strokeStyle = 'rgba(200,190,170,.55)'; o.beginPath(); o.moveTo(640, 0); o.lineTo(640, 720); o.stroke();
+      o.font = '600 17px "Hiragino Sans",sans-serif'; o.fillStyle = 'rgba(232,224,206,.92)';
+      o.fillText('モック mock_F.js（59,142 三角形）', 18, 30);
+      o.fillText('本番 enemy_model_a2_f.js（' + enemy.activeTriangles().toLocaleString() + ' 三角形）', 658, 30);
+      out.style.position = 'fixed'; out.style.left = '0'; out.style.top = '0'; out.style.zIndex = '9';
+      cv.style.visibility = 'hidden';
+      document.body.appendChild(out);
+      document.getElementById('cap').style.display = 'none';
+      window.__cmpReady = true;
+      if (cb) cb();
+    };
+    img.onerror = function () { window.__cmpReady = 'err'; };
+    img.src = '../enemy-mocks-a2/3d/F_face.png';
+  };
+  window.__r = renderer; window.__cam = cam; window.__scene = scene; window.__map = map;
+  window.__probe = function (names, hex) {
+    enemy.group.traverse(function (o) {
+      if (!o.isMesh) return;
+      if (names.indexOf(o.name) >= 0) { o.material = new THREE.MeshBasicMaterial({ color: hex }); }
+    });
+    renderer.render(scene, cam);
+  };
   window.__shot = function (v) {
     (VIEWS[v] || VIEWS.stand)();
     cam.updateProjectionMatrix();
@@ -215,12 +257,15 @@
     return { hi: hi, lo: lo, cine: cine, hands: withHands, maw: withMaw,
       top: { stand: enemy.TOP_STAND, crawl: enemy.TOP_CRAWL, lift: enemy.LIFT, off: enemy.WALL_OFF } };
   };
-  var m = document.createElement('div');
-  m.id = 'm'; m.style.display = 'none';
-  document.body.appendChild(m);
-  m.textContent = JSON.stringify(window.__measure());
-  window.__shot(VIEW);
-  window.__ready = true;
+  /* 三角形の実測は重い（口の頭蓋5個を作る）ので ?m=1 の時だけ */
+  if (q('m', '') === '1') {
+    var mEl = document.createElement('div');
+    mEl.id = 'm'; mEl.style.display = 'none';
+    document.body.appendChild(mEl);
+    mEl.textContent = JSON.stringify(window.__measure());
+  }
+  if (VIEW === 'compare') { window.__compare(); }
+  else { window.__shot(VIEW); window.__ready = true; }
 })();
 </script>
 </body>

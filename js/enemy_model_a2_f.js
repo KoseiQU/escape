@@ -320,6 +320,7 @@
     function std(t, tint, rep, ns, side) {
       var m = new THREE.MeshStandardMaterial({
         map: t.map, normalMap: t.normalMap, roughnessMap: t.roughnessMap,
+        emissiveMap: t.map,                    /* 闇での下限光も絵柄で濁る＝のっぺり光らない */
         color: new THREE.Color(tint), roughness: 1, metalness: 0,
         side: side || THREE.FrontSide
       });
@@ -329,28 +330,29 @@
         m.map = t.map.clone(); m.map.needsUpdate = true; m.map.repeat.set(rep[0], rep[1]);
         m.normalMap = t.normalMap.clone(); m.normalMap.needsUpdate = true; m.normalMap.repeat.set(rep[0], rep[1]);
         m.roughnessMap = t.roughnessMap.clone(); m.roughnessMap.needsUpdate = true; m.roughnessMap.repeat.set(rep[0], rep[1]);
+        m.emissiveMap = m.map;
         self._track(m.map); self._track(m.normalMap); self._track(m.roughnessMap);
       }
       return m;
     }
-    P.bone = self._lit(std(T.bone, 0x8f886d, [3, 3], 1.0), 'body');
-    P.boneSkull = self._lit(std(T.bone, 0x9a9178, [4, 4], 0.75), 'face');
-    P.boneDirty = self._lit(std(T.boneDirty, 0x6e6a53, [2, 2], 1.3), 'body');
-    P.boneChild = self._lit(std(T.bone, 0xa39a7c, [3, 3], 1.2), 'body');
+    P.bone = self._lit(std(T.bone, 0x8f886d, [3, 3], 1.0), 'body', 0.85);
+    P.boneSkull = self._lit(std(T.bone, 0x9a9178, [4, 4], 0.75), 'face', 0.62);
+    P.boneDirty = self._lit(std(T.boneDirty, 0x6e6a53, [2, 2], 1.3), 'body', 0.85);
+    P.boneChild = self._lit(std(T.bone, 0xa39a7c, [3, 3], 1.2), 'body', 0.85);
     P.dry = self._lit(std(T.dry, 0x80765f, [2, 2], 1.1, THREE.DoubleSide), 'flesh');
     P.dryWet = self._lit(std(T.dry, 0x6d6252, [2, 2], 1.5, THREE.DoubleSide), 'flesh');
-    P.dryWet.roughness = 0.62;
-    P.cloth = self._lit(std(T.cloth, 0x6d6a55, [2, 2], 1.0, THREE.DoubleSide), 'cloth');
+    P.dryWet.roughness = 0.74;
+    P.cloth = self._lit(std(T.cloth, 0x36342b, [2, 2], 1.0, THREE.DoubleSide), 'cloth');
     P.cavity = self._lit(new THREE.MeshStandardMaterial({
       color: 0x030303, roughness: 1, metalness: 0, side: THREE.DoubleSide
     }), 'hollow');
-    P.gum = self._lit(new THREE.MeshStandardMaterial({ color: 0x2a1512, roughness: 0.62, metalness: 0 }), 'flesh');
-    P.hair = self._lit(new THREE.MeshStandardMaterial({ color: 0x100d0b, roughness: 0.58, metalness: 0 }), 'hair');
-    P.root = self._lit(new THREE.MeshStandardMaterial({ color: 0x9c9478, roughness: 0.78, metalness: 0 }), 'body');
-    P.sinew = self._lit(new THREE.MeshStandardMaterial({ color: 0x94886a, roughness: 0.45, metalness: 0 }), 'flesh');
+    P.gum = self._lit(new THREE.MeshStandardMaterial({ color: 0x2a1512, roughness: 0.88, metalness: 0 }), 'flesh');
+    P.hair = self._lit(new THREE.MeshStandardMaterial({ color: 0x100d0b, roughness: 0.94, metalness: 0 }), 'hair');
+    P.root = self._lit(new THREE.MeshStandardMaterial({ color: 0x5f5947, roughness: 0.96, metalness: 0 }), 'body', 0.7);
+    P.sinew = self._lit(new THREE.MeshStandardMaterial({ color: 0x6d6450, roughness: 0.86, metalness: 0 }), 'flesh');
     /* 歯は1本ごとに色を変える（白く均一な歯列は禁止） */
     P.teeth = [0x7c7150, 0x655b3e, 0x877a57, 0x534930, 0x6f6446, 0x3f3722].map(function (hx) {
-      return self._lit(new THREE.MeshStandardMaterial({ color: hx, roughness: 0.46, metalness: 0 }), 'tooth');
+      return self._lit(new THREE.MeshStandardMaterial({ color: hx, roughness: 0.70, metalness: 0 }), 'tooth');
     });
     return P;
   }
@@ -385,7 +387,7 @@
   }
   /** 関節の瘤 */
   function knobGeo(p, r, seg) {
-    var g = new THREE.SphereGeometry(r, seg || 7, Math.max(5, Math.round((seg || 7) * 0.78)));
+    var g = new THREE.SphereGeometry(r, seg || 6, Math.max(4, Math.round((seg || 6) * 0.72)));
     g.scale(1, 0.85, 1.05);
     g.translate(p[0], p[1], p[2]);
     return g;
@@ -416,7 +418,7 @@
       var t = i / (n - 1), p = arc(t);
       var m = P.teeth[(R() * P.teeth.length) | 0];
       self._mesh(toothGeo(R, p, up, size[0] * (0.72 + R() * 0.62), size[1] * (0.6 + R() * 0.85), R()),
-        m, parent, 'tooth', lod);
+        m, parent, 'tooth', 1);
     }
   }
 
@@ -466,7 +468,6 @@
       { c: [-rx * 0.42, ry * 0.15, -rz * 0.66], r: 0.0345, s: -1 }
     ];
     var SEG = opt.seg || 26;
-    var v = new THREE.SphereGeometry(1, SEG, Math.max(7, Math.round(SEG * 0.68))); v.scale(rx, ry, rz);
     function shape(x, y, z, o) {
       var ny = y / ry, nz = z / rz;
       var dn = Math.max(0, -ny), up = Math.max(0, ny), fw = Math.max(0, -nz);
@@ -476,6 +477,9 @@
              + rz * 0.34 * up * up * fw) * col;
       o[1] = y - 0.18 * ry * Math.pow(dn, 2.0) + ry * 0.34 * t * t;
     }
+    function shell(seg) {
+    var v = new THREE.SphereGeometry(1, seg, Math.max(7, Math.round(seg * 0.68)));
+    v.scale(rx, ry, rz);
     deform(v, shape);
     bulge(v, [0, ry * 0.50, -rz * 0.66], rx * 0.88, -0.0075);            /* 額を平らに */
     bulge(v, [rx * 0.36, ry * 0.66, -rz * 0.56], rx * 0.30, 0.0072);     /* 前頭隆起 右 */
@@ -521,8 +525,19 @@
       { c: [0.001, -ry * 0.10, -rz * 0.62], r: [0.0094, 0.0115, 0.060] },
       { c: [0.001, -ry * 0.20, -rz * 0.62], r: [0.0124, 0.0100, 0.060] }
     ]);
-    self._mesh(v, P.boneSkull, G, 'calvarium');
-    var inn = new THREE.SphereGeometry(1, slim ? 8 : 12, slim ? 6 : 9);
+    return v;
+    }
+    var v = shell(SEG);
+    var shellMesh = self._mesh(v, P.boneSkull, G, 'calvarium');
+    /* 主頭蓋だけ低詳細用の粗い殻を持つ（遠景では丸みだけ残ればよい） */
+    if (opt.swapLo) {
+      var vLo = shell(16);
+      self._track(vLo);
+      var hiT = v.index.count / 3, loT = vLo.index.count / 3;
+      self.lodSwap.push({ m: shellMesh, hi: v, lo: vLo });
+      self.loTriangles += loT - hiT;
+    }
+    var inn = new THREE.SphereGeometry(1, slim ? 7 : 12, slim ? 5 : 9);
     inn.scale(rx, ry, rz); deform(inn, shape); inn.scale(0.90, 0.90, 0.90);
     self._mesh(inn, P.cavity, G, 'skullVoid');
     out.sockets = OR; out.r = [rx, ry, rz];
@@ -555,14 +570,14 @@
       ], 0.0033 * (s2 > 0 ? 1 : 0.80), 4), P.boneSkull, G, 'zygoma', lod);
     });
     /* 上顎（歯槽突起）と歯 */
-    var mx = new THREE.SphereGeometry(1, slim ? 12 : 16, slim ? 8 : 11);
+    var mx = new THREE.SphereGeometry(1, slim ? 9 : 16, slim ? 6 : 11);
     mx.scale(rx * 0.60, ry * 0.24, rz * 0.42);
     deform(mx, function (x, y, z, o) { o[2] = z * (z < 0 ? 1.02 : 0.74); o[1] = y * (y < 0 ? 1.2 : 0.9); });
     bulge(mx, [0, -ry * 0.22, -rz * 0.34], rx * 0.26, -0.0055);
     bulge(mx, [rx * 0.34, -ry * 0.04, -rz * 0.30], rx * 0.20, -0.0072);
     bulge(mx, [-rx * 0.30, -ry * 0.08, -rz * 0.28], rx * 0.18, -0.0058);
     warp(mx, 0.0022, 21, (opt.seed || 5) + 2);
-    self._mesh(place(mx, [0.002, -ry * 0.52, -rz * 0.22]), P.boneSkull, G, 'maxilla');
+    self._mesh(place(mx, [0.002, -ry * 0.52, -rz * 0.22]), P.boneSkull, G, 'maxilla', slim ? 1 : 0);
     self._mesh(tube([[rx * 0.54, -ry * 0.62, -rz * 0.36], [0, -ry * 0.64, -rz * 0.52],
       [-rx * 0.52, -ry * 0.66, -rz * 0.34]], 0.0090, 4), P.gum, G, 'gumUp', lod);
     teethRow(self, P, G, 11, function (t) {
@@ -594,8 +609,8 @@
       J.userData.base = [J.rotation.x, J.rotation.y, J.rotation.z];
       out.jaw = J;
       /* 喉の闇 */
-      var th = new THREE.SphereGeometry(0.032, 10, 8);
-      self._mesh(place(th, [0.004, -ry * 0.78, -rz * 0.22], null, [1, 1, 0.85]), P.cavity, G, 'throat');
+      var th = new THREE.SphereGeometry(0.032, slim ? 7 : 10, slim ? 5 : 8);
+      self._mesh(place(th, [0.004, -ry * 0.78, -rz * 0.22], null, [1, 1, 0.85]), P.cavity, G, 'throat', slim ? 1 : 0);
     }
     if (slim) return;
     /* 骨に張り付いた羊皮紙状の皮膚と腱（3か所・非対称） */
@@ -619,7 +634,7 @@
     for (i = 0; i < 3; i++) {
       var l = L * segs[i];
       var n = [p[0] + d[0] * l, p[1] + d[1] * l, p[2] + d[2] * l];
-      self._mesh(boneGeo(p, n, r * (1 - i * 0.20), 0, 4, 2), mat, parent, 'phal', i === 2 ? lod : 0);
+      self._mesh(boneGeo(p, n, r * (1 - i * 0.20), 0, 3, 1), mat, parent, 'phal', 1);
       p = n;
       d[1] -= curl;
       var dl = Math.sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]) || 1;
@@ -629,9 +644,9 @@
   /** 手: 掌の小骨＋5指。壁を掴む。 */
   function hand(self, mat, parent, size, seed, curl, lod) {
     var R = rng(seed), i;
-    var pal = new THREE.SphereGeometry(1, 9, 7);
+    var pal = new THREE.SphereGeometry(1, 7, 5);
     pal.scale(size * 0.34, size * 0.13, size * 0.30);
-    self._mesh(pal, mat, parent, 'palm');
+    self._mesh(pal, mat, parent, 'palm', 1);
     for (i = 0; i < 5; i++) {
       var a = (i / 4 - 0.5) * 1.55 + (R() - 0.5) * 0.22;
       var dir = [Math.sin(a) * 0.42, -0.12 + (R() - 0.5) * 0.2, -Math.cos(a) * 0.9];
@@ -645,9 +660,9 @@
   /** 足: 踵＋短い趾 */
   function foot(self, mat, parent, size, seed, lod) {
     var R = rng(seed), i;
-    var hl = new THREE.SphereGeometry(1, 9, 7);
+    var hl = new THREE.SphereGeometry(1, 7, 5);
     hl.scale(size * 0.22, size * 0.20, size * 0.26);
-    self._mesh(place(hl, [0, 0, size * 0.16]), mat, parent, 'heel');
+    self._mesh(place(hl, [0, 0, size * 0.16]), mat, parent, 'heel', 1);
     for (i = 0; i < 5; i++) {
       var a = (i / 4 - 0.5) * 0.95;
       var dir = [Math.sin(a) * 0.4, -0.30, -Math.cos(a) * 0.86];
@@ -667,8 +682,8 @@
     self.limbs.push({ root: root, elbow: null, tip: null, seed: (o.seed || 3) });
     var L = self.limbs[self.limbs.length - 1];
     var d1 = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
-    self._mesh(boneGeo([0, 0, 0], d1, o.r0, o.bow0 === undefined ? 0.03 : o.bow0, 7, 4), mat, root, 'humerus');
-    self._mesh(knobGeo([0, 0, 0], o.r0 * 1.5, 7), mat, root, 'knobA');
+    self._mesh(boneGeo([0, 0, 0], d1, o.r0, o.bow0 === undefined ? 0.03 : o.bow0, 6, 3), mat, root, 'humerus');
+    self._mesh(knobGeo([0, 0, 0], o.r0 * 1.5, 6), mat, root, 'knobA');
     self._mesh(tube([[-o.r0, 0, 0], [d1[0] / 2 - o.r0 * 1.4, d1[1] / 2, d1[2] / 2 - o.r0],
       [d1[0] - o.r0 * 0.6, d1[1], d1[2]]], o.r0 * 0.22, 4), P.sinew, root, 'sinew', 1);
     var elb = new THREE.Group();
@@ -677,8 +692,8 @@
     root.add(elb);
     L.elbow = elb;
     var d2 = [c[0] - b[0], c[1] - b[1], c[2] - b[2]];
-    self._mesh(boneGeo([0, 0, 0], d2, o.r1, o.bow1 === undefined ? -0.02 : o.bow1, 7, 4), mat, elb, 'ulna');
-    self._mesh(knobGeo([0, 0, 0], o.r0 * 1.42, 7), mat, elb, 'knobB');
+    self._mesh(boneGeo([0, 0, 0], d2, o.r1, o.bow1 === undefined ? -0.02 : o.bow1, 6, 3), mat, elb, 'ulna');
+    self._mesh(knobGeo([0, 0, 0], o.r0 * 1.42, 6), mat, elb, 'knobB');
     var tip = new THREE.Group();
     tip.name = 'limb' + idx + 'T';
     tip.position.set(d2[0], d2[1], d2[2]);
@@ -707,7 +722,8 @@
         var pts = [[0, y, 0], [s * w * 0.42, y - 0.012, -dep * 0.42], [s * w * 0.86, y - 0.038, -dep * 0.86],
           [s * w * 0.80, y - 0.085, -dep * 1.20], [s * w * 0.34, y - 0.105, -dep * 1.36]];
         if (brk) pts = pts.slice(0, 3);
-        self._mesh(tube(pts, o.r * (0.78 + R() * 0.5), 4, 1.6), mat, G, 'rib', o.lod || 0);
+        self._mesh(tube(pts, o.r * (0.78 + R() * 0.5), 4, 1.6), mat, G, 'rib',
+          o.lod || ((i % 2) ? 1 : 0));
       }
     }
     return G;
@@ -751,6 +767,8 @@
     this.disposables = [];
     this.litMats = [];
     this.lodHi = [];                /* 低詳細で消す飾り */
+    this.lodSwap = [];              /* {m,hi,lo} 低詳細で粗い殻へ差し替える */
+    this._forceLod = 0;
     this.limbs = [];
     this.skulls = [];
     this.triangles = 0;
@@ -792,8 +810,10 @@
   }
 
   EnemyF.prototype._track = function (o) { this.disposables.push(o); return o; };
-  EnemyF.prototype._lit = function (mat, prof) {
-    mat.userData.a2lit = prof; this.litMats.push(mat); this._track(mat); return mat;
+  EnemyF.prototype._lit = function (mat, prof, k) {
+    mat.userData.a2lit = prof;
+    mat.userData.a2k = (k === undefined ? 1 : k);
+    this.litMats.push(mat); this._track(mat); return mat;
   };
   /** lod=1 のメッシュは setDetail('low') で消える飾り */
   EnemyF.prototype._mesh = function (geo, mat, parent, name, lod) {
@@ -803,9 +823,10 @@
     parent.add(m);
     this._track(geo);
     var tri = geo.index ? (geo.index.count / 3) : (geo.attributes.position.count / 3);
+    var hide = lod || this._forceLod;
     if (this._countExtra) this.extraTriangles += tri;
-    else { this.triangles += tri; if (!lod) this.loTriangles += tri; }
-    if (lod) this.lodHi.push(m);
+    else { this.triangles += tri; if (!hide) this.loTriangles += tri; }
+    if (hide) this.lodHi.push(m);
     return m;
   };
   EnemyF.prototype._node = function (name, parent, x, y, z) {
@@ -891,7 +912,7 @@
     var neck = this._node('neck', rig, 0.56, 1.92, -0.10);
     this._mesh(boneGeo([0, -0.02, 0], [-0.05, 0.05, -0.08], 0.026, 0, 7, 3), P.bone, neck, 'cervical');
     var head = this._node('head', neck, -0.06, 0.10, -0.10);
-    var hA = buildSkull(this, P, head, { seed: 5, gape: 0.42, slip: 0.018, seg: 30 });
+    var hA = buildSkull(this, P, head, { seed: 5, gape: 0.42, slip: 0.018, seg: 40, swapLo: true });
     this.mainSkull = hA;
     this.nodes.headScale = hA.group;
     this.skulls.push({ n: head, jaw: hA.jaw, f: 6.1, g: 4.3, a: 1.0, main: 1 });
@@ -923,10 +944,13 @@
       nd.rotation.set(s.r[0], s.r[1], s.r[2]);
       nd.userData.base = [s.r[0], s.r[1], s.r[2]];
       rig.add(nd);
+      /* 低詳細では肩の1個だけ残し、他は乾いた肉の玉（bury）が輪郭を引き継ぐ */
+      this._forceLod = (i >= 1) ? 1 : 0;
       var sk = buildSkull(this, P, nd, s.o);
+      this._forceLod = 0;
       this.skulls.push({ n: nd, jaw: sk.jaw, f: 5.0 + i * 0.77, g: 3.1 + i * 0.53, a: 0.55 + (i % 3) * 0.22 });
       if (s.bury) {
-        this._mesh(place(warpBall(s.br[0], s.br[1], s.br[2], s.bs, 10), s.bury), P.dry, rig, 'bury', 1);
+        this._mesh(place(warpBall(s.br[0], s.br[1], s.br[2], s.bs, 10), s.bury), P.dry, rig, 'bury', 0);
       }
     }
     /* 下胴の乾いた肉のかたまり（骨の山を一体にまとめる＝「一体の怪物」） */
@@ -983,11 +1007,14 @@
     }
     /* 髪の房（主頭蓋の後ろから垂れる。二次揺れの対象） */
     var hair = this._node('hair', rig, 0, 0, 0);
-    for (i = 0; i < 9; i++) {
-      var a = (i / 8 - 0.5) * 1.5, hx = 0.50 + Math.sin(a) * 0.05, hz = -0.20 - Math.cos(a) * 0.05;
-      var hl = 0.20 + R() * 0.20;
-      this._mesh(tube([[hx, 2.08, hz], [hx + (R() - 0.5) * 0.03, 2.08 - hl * 0.5, hz + 0.02],
-        [hx + (R() - 0.5) * 0.06, 2.08 - hl, hz + 0.05 + R() * 0.04]], 0.006 + R() * 0.005, 4, 1.6),
+    for (i = 0; i < 11; i++) {
+      /* 房は頭皮の球面から生やして前後にも散らす（束ねると板に見える） */
+      var a = (i / 10 - 0.5) * 2.6 + (R() - 0.5) * 0.3, rr = 0.058 + R() * 0.022;
+      var hx = 0.50 + Math.sin(a) * rr, hz = -0.20 - Math.cos(a) * rr * 1.25;
+      var hl = 0.17 + R() * 0.26, dx = (R() - 0.5) * 0.10, dz = (R() - 0.5) * 0.10;
+      this._mesh(tube([[hx, 2.07 + R() * 0.03, hz],
+        [hx + dx * 0.4, 2.06 - hl * 0.45, hz + dz * 0.4 + 0.02],
+        [hx + dx, 2.05 - hl, hz + dz + 0.05]], 0.0035 + R() * 0.004, 3, 1.6),
         P.hair, hair, 'hair', 1);
     }
     for (i = 0; i < 5; i++) {
@@ -998,8 +1025,8 @@
     /* 布の切れ端 */
     [[0.70, 1.20, 0.20, 0.26, 0.34, 0.7], [0.84, 0.86, 0.60, 0.20, 0.26, -0.5],
      [0.60, 1.52, -0.18, 0.16, 0.22, 1.2]].forEach(function (c, k) {
-      var pg = new THREE.PlaneGeometry(c[3], c[4], 3, 4);
-      warp(pg, 0.03, 9, 13 + k);
+      var pg = new THREE.PlaneGeometry(c[3], c[4], 4, 5);
+      warp(pg, 0.055, 14, 13 + k);
       this._mesh(place(pg, [c[0], c[1], c[2]], [0.25 + k * 0.3, c[5], 0.2 * k]), P.cloth, rig, 'rag', 1);
     }, this);
     /* 白い根（壁の隙間から垂れて絡む） */
@@ -1308,7 +1335,7 @@
     for (var i = 0; i < this.litMats.length; i++) {
       var m = this.litMats[i], Pf = LIT[m.userData.a2lit] || LIT.body;
       var lo = cine ? Pf.cine[0] : Pf.min, hi = cine ? Pf.cine[1] : Pf.max;
-      var k = cl(lo + lum * Pf.gain, lo, hi);
+      var k = cl(lo + lum * Pf.gain, lo, hi) * (m.userData.a2k === undefined ? 1 : m.userData.a2k);
       if (m.userData.a2lit === 'face') k *= breathe;
       m.emissive.setRGB(k * tr, k * tg, k * tb);
     }
@@ -1328,6 +1355,10 @@
     this.lowDetail = (want === 'low');
     var vis = !this.lowDetail, i;
     for (i = 0; i < this.lodHi.length; i++) this.lodHi[i].visible = vis;
+    for (i = 0; i < this.lodSwap.length; i++) {
+      var sw = this.lodSwap[i];
+      sw.m.geometry = this.lowDetail ? sw.lo : sw.hi;
+    }
     if (this.detailHi) this._buildEyes().visible = true;
     else if (this.eyes) this.eyes.visible = false;
     return this.detail;
