@@ -336,7 +336,7 @@
       return m;
     }
     P.bone = self._lit(std(T.bone, 0x8f886d, [3, 3], 1.0), 'body', 0.85);
-    P.boneSkull = self._lit(std(T.bone, 0x9a9178, [4, 4], 0.75), 'face', 0.62);
+    P.boneSkull = self._lit(std(T.bone, 0x9a9178, [4, 4], 0.75), 'face', 0.46);
     P.boneDirty = self._lit(std(T.boneDirty, 0x6e6a53, [2, 2], 1.3), 'body', 0.85);
     P.boneChild = self._lit(std(T.bone, 0xa39a7c, [3, 3], 1.2), 'body', 0.85);
     P.dry = self._lit(std(T.dry, 0x80765f, [2, 2], 1.1, THREE.DoubleSide), 'flesh');
@@ -352,7 +352,8 @@
     P.sinew = self._lit(new THREE.MeshStandardMaterial({ color: 0x6d6450, roughness: 0.86, metalness: 0 }), 'flesh');
     /* 歯は1本ごとに色を変える（白く均一な歯列は禁止） */
     P.teeth = [0x7c7150, 0x655b3e, 0x877a57, 0x534930, 0x6f6446, 0x3f3722].map(function (hx) {
-      return self._lit(new THREE.MeshStandardMaterial({ color: hx, roughness: 0.70, metalness: 0 }), 'tooth');
+      /* 白く均一な歯列は禁止。粗さを上げて鏡面を殺し、闇での底上げも弱める */
+      return self._lit(new THREE.MeshStandardMaterial({ color: hx, roughness: 0.88, metalness: 0 }), 'tooth', 0.55);
     });
     return P;
   }
@@ -924,7 +925,7 @@
     var neck = this._node('neck', rig, 0.56, 1.92, -0.10);
     this._mesh(boneGeo([0, -0.02, 0], [-0.05, 0.05, -0.08], 0.026, 0, 7, 3), P.bone, neck, 'cervical');
     var head = this._node('head', neck, -0.06, 0.10, -0.10);
-    var hA = buildSkull(this, P, head, { seed: 5, gape: 0.42, slip: 0.018, seg: 40, swapLo: true });
+    var hA = buildSkull(this, P, head, { seed: 5, gape: 0.42, slip: 0.018, seg: 48, swapLo: true });
     this.mainSkull = hA;
     this.nodes.headScale = hA.group;
     this.skulls.push({ n: head, jaw: hA.jaw, f: 6.1, g: 4.3, a: 1.0, main: 1 });
@@ -1258,7 +1259,6 @@
     if (!(dt > 0)) this.scale = want;
     else this.scale += (want - this.scale) * (1 - Math.exp(-4.5 * dt));
     var self = this;
-    this.groundSnap = (this.poseT > 0.55);
     this.applyPose(this.poseT, function (p, u) {
       if (!inTrans) return;
       /* 落下の身震い（剥がれる瞬間に骨が総立ちになる） */
@@ -1309,7 +1309,6 @@
     if (typeof yawRad === 'number') this.facing = yawRad;
     this._stepWall(0);
     this.scale = this.scaleTarget();
-    this.groundSnap = (this.poseT > 0.55);
     this.applyPose(this.poseT);
   };
 
@@ -1511,7 +1510,8 @@
     root.name = 'maw';
     root.visible = false;
     this.mawSprites = [];
-    var K = 11.5;                       /* 頭蓋 rx=0.080 → 幅およそ 1.0 */
+    var K = 11.5;                       /* 頭蓋 rx=0.080 → 半幅およそ 0.92 */
+    var U = K * 0.080;                  /* 主頭蓋の半幅＝寄せる距離の単位 */
 
     /* 主頭蓋: 正面。顔は camera（+Z 側）を向く */
     var mainN = new THREE.Group();
@@ -1542,14 +1542,14 @@
     for (var i = 0; i < RING.length; i++) {
       var c = RING[i], nd = new THREE.Group();
       nd.name = 'mawRing' + i;
-      nd.position.set(c.p[0] * K, c.p[1] * K, c.p[2] * K);
+      nd.position.set(c.p[0] * U * 1.45, c.p[1] * U * 1.45, c.p[2] * U * 1.45);
       nd.rotation.set(c.r[0], c.r[1], c.r[2]);
       nd.scale.setScalar(K * c.s);
       root.add(nd);
       var sk = buildSkull(this, P, nd, c.o);
       this._sockGlow(sk.group, sk.socket0, 0.0175, 0.62, this.mawSprites);
       this._sockGlow(sk.group, sk.socket1, 0.0175, 0.50, this.mawSprites);
-      ring.push({ n: nd, jaw: sk.jaw, home: [c.p[0] * K, c.p[1] * K, c.p[2] * K], rot: c.r.slice() });
+      ring.push({ n: nd, jaw: sk.jaw, home: nd.position.toArray(), rot: c.r.slice() });
     }
 
     var jawBase = mainSk.jaw ? mainSk.jaw.userData.base.slice() : [0, 0, 0];
@@ -1560,12 +1560,12 @@
           mainSk.jaw.rotation.set(jawBase[0] - 1.05 * u, jawBase[1] + 0.10 * u, jawBase[2]);
           mainSk.jaw.position.y = -0.098 * 0.54 - 0.052 * u;
         }
-        mainN.position.set(0, -0.16 * K * u, 0.34 * K * u);
+        mainN.position.set(0, -0.16 * U * u, 0.34 * U * u);
         mainN.rotation.x = 0.10 + 0.30 * u;
         for (var j = 0; j < ring.length; j++) {
           var g = ring[j], h = g.home;
           /* 寄ってくる＝中心へ 34% 詰め、カメラ側へ出る */
-          g.n.position.set(h[0] * (1 - 0.34 * u), h[1] * (1 - 0.34 * u), h[2] + (0.46 + 0.20 * j) * K * u);
+          g.n.position.set(h[0] * (1 - 0.34 * u), h[1] * (1 - 0.34 * u), h[2] + (0.46 + 0.20 * j) * U * u);
           g.n.rotation.set(g.rot[0] + (j % 2 ? 0.34 : -0.28) * u, g.rot[1], g.rot[2] * (1 + 0.45 * u));
           if (g.jaw) {
             var b = g.jaw.userData.base;
