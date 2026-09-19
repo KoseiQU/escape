@@ -50,7 +50,7 @@
     M.face = this._lit(A2.skin({
       seed: 313, size: 384, base: '#5b6166', dark: 'rgba(7,9,10,', veinColor: 'rgba(30,40,52,0.5)',
       mottle: 250, vein: 130, wrinkle: 300, pore: 0.55, bump: 3.0, roughLo: 0.44, roughHi: 0.94,
-      tint: 0x59636b, metalness: 0, repeat: [4, 3], nscale: 1.45
+      tint: 0x444d54, metalness: 0, repeat: [6, 5], nscale: 1.55
     }), 'face');
     M.bone = this._lit(A2.skin({
       seed: 319, size: 256, base: '#7c7867', dark: 'rgba(34,31,24,', veinColor: 'rgba(58,48,34,0.4)',
