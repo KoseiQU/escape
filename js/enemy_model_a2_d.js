@@ -24,6 +24,8 @@
   var BODY_Y = 0.80;                            /* 床形態での胴の高さ(m) */
   var CEIL_GAP = 0.40;                          /* 天井形態で胴が天井から下がる量(m) */
   var LOW_CEIL = 3.20;                          /* これ未満なら支線＝壁の上部へ */
+  var WALL_OFF = 0.62;                          /* 壁面姿勢で壁の側へ寄せる量(m) */
+  var WALL_ROLL = 0.52;                         /* 壁面姿勢の転がり(rad) */
   var WALL_Y = 1.90;                            /* 支線で張り付く高さ(m) */
 
   function D(opts) {
@@ -416,12 +418,37 @@
     }
   };
 
+  /** P5e-2b: 支線（低天井）での壁面姿勢。**壁の向きは AI が測って渡す**（見た目だけで、
+   *  当たり判定・経路・視界は一切変えない）。wallYaw は「体から壁へ向かう向き」の
+   *  ワールド yaw（js/enemy_ai.js の yawOf と同じ表現）。on=0 で通路の中央へ戻る。 */
+  D.prototype.setWall = function (wallYaw, on) {
+    this.wallOn = on ? 1 : 0;
+    if (on) this.wallYaw = wallYaw || 0;
+  };
+
   /** 天井高に応じて張り付く高さを決める（幹線＝天井／支線＝壁の上部） */
   D.prototype.applyPose = function (u, extra) {
     var ceil = this.ceilH || 2.4;
     this.POSE_STAND.mountY = (ceil >= LOW_CEIL) ? (ceil - 0.86) : WALL_Y;
     A2.Base.prototype.applyPose.call(this, u, extra);
+    this._applyWall();
     this._snapSurface();
+  };
+
+  /** 壁へ寄せて体を横倒しにする（支線の直立形態のときだけ）。
+   *  mount を壁の側へ WALL_OFF ずらし、進行方向まわりに転がす。 */
+  D.prototype._applyWall = function () {
+    var m = this.nodes.mount;
+    if (!m) return;
+    var k = this._wallSm || 0;
+    if (k < 1e-3) { m.position.x = 0; m.position.z = 0; m.rotation.z = 0; return; }
+    /* 体のローカル座標へ（group は facing で回っている） */
+    var a = this.wallYaw - this.facing;
+    var ox = Math.cos(a), oz = -Math.sin(a);      /* yawOf の逆変換（+X が体の右） */
+    m.position.x = ox * WALL_OFF * k;
+    m.position.z = oz * WALL_OFF * k;
+    m.rotation.z = -ox * WALL_ROLL * k;           /* 壁の側へ倒れ込む */
+    this.group.updateMatrixWorld(true);
   };
 
   /** 面に吸い付かせる: 床形態は最下点を床へ、天井形態は最上点を天井へ */
@@ -519,6 +546,11 @@
 
   /** 髪の二次揺れ（垂れる方向は形態で変わるので world の重力では見ない） */
   D.prototype._secondary = function (t, dt, st) {
+    /* 壁面姿勢の出入りをなめらかに（支線に入った瞬間に横へ飛ばない） */
+    var want = (this.wallOn && this.poseT < 0.5 && (this.ceilH || 2.4) < LOW_CEIL) ? 1 : 0;
+    if (this._wallSm === undefined) this._wallSm = want;
+    else if (dt > 0) this._wallSm += (want - this._wallSm) * (1 - Math.exp(-6.0 * dt));
+    else this._wallSm = want;
     var k = (st === 'chase') ? 1.9 : 0.8;
     for (var i = 0; i < this.hair.length; i++) {
       var h = this.hair[i];

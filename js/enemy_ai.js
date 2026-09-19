@@ -135,6 +135,55 @@
       { name: '敵①', seed: 3 },
       { name: '敵②', seed: 11, chaseSpeed: 4.70, patrolSpeed: 1.45, lockerHuntSpeed: 4.60 }
     ],
+    /* ---- P5e-2b エリア2の敵3体（契約 §4「P5e-2」の P5e-2b）----
+     * 定数はここ1か所。kind が決まれば個体差が全部決まる（マップは kind を指すだけ）。
+     * 読み出しは ai.T（原型鎖で ENEMY_TUNING へ落ちる＝差分だけ書く）。
+     * 下の共通キーは「この3体のために足した規則」で、既定値は area1 を変えない値にしてある:
+     *   waterSpeedMul   水路(TILE.WATER)の上での速度倍率（既定 0.75。area1 に水路は無い）
+     *   hearMul         音イベントの検知距離の倍率（既定 1.0）
+     *   searchDurMul    探索の持続の倍率（既定 1.0）
+     *   revisitLastSeen 探索中、見失った最後の位置へ来続ける（既定 false）
+     *   crushBoards     倒された板を踏み潰して通る（既定 false＝引っかかって足止め）
+     *   wireSpeedMul    ワイヤー罠のマスを越える間の速度倍率（既定 0.35＝屈んで潜る一拍）
+     *   noCatchDuringTrans 形態遷移中は捕まえない（既定 false）
+     *   fallLandSfx     形態遷移の終わりに着地音を鳴らす（既定 false）
+     *   roarSfx         形態遷移の始まりに咆哮を鳴らす（既定 false）
+     *   chainLoop       鎖の常時音を鳴らす（既定 false）
+     *   lowCeilChaseSpeed / lowCeilH  低天井のマスでの追跡速度（既定 null＝切替なし）
+     *   wallPose        支線で壁面姿勢を取る（モデルへ壁の向きを渡す。既定 false） */
+    waterSpeedMul: 0.75,
+    hearMul: 1.00,
+    searchDurMul: 1.00,
+    revisitLastSeen: false,
+    crushBoards: false,
+    wireSpeedMul: 0.35,
+    noCatchDuringTrans: false,
+    fallLandSfx: false,
+    roarSfx: false,
+    chainLoop: false,
+    chainRange: 25.0,          // 鎖の音が届く距離(m)（契約「25m まで聞こえる」）
+    lowCeilChaseSpeed: null,
+    lowCeilH: 2.50,
+    wallPose: false,
+    kinds: {
+      /* D 配管を這う: 天井から見下ろす。見つけてから落ちるまで 1.2 秒の猶予がある */
+      D: { name: '這うもの', seed: 311, kind: 'D',
+        patrolSpeed: 1.40, chaseSpeed: 5.40, fovDeg: 140, sightDark: 7.0, sightLit: 14.0,
+        transMoveScale: 0.00,      /* 落下(1.2秒)の間は動かない＝契約の猶予 */
+        noCatchDuringTrans: true, fallLandSfx: true,
+        waterSpeedMul: 1.00, wallPose: true },
+      /* E 肥大した作業員: 遅いが執拗。鎖の音で自分の位置を知らせる */
+      E: { name: '膨れたもの', seed: 317, kind: 'E',
+        patrolSpeed: 1.10, chaseSpeed: 3.80, investigateSpeed: 3.80,
+        trapInvestigateSpeed: 4.40, lockerHuntSpeed: 3.80, searchSpeed: 1.90,
+        hearMul: 1.50, searchDurMul: 2.00, revisitLastSeen: true,
+        crushBoards: true, lockerPeekChance: 0, trapLockerPeekChance: 0,
+        waterSpeedMul: 1.00, chainLoop: true, roarSfx: true },
+      /* F 寄り集まった亡骸: 狭い支線で最速。聴覚は最鋭。ワイヤーは壁を伝って越える */
+      F: { name: '群れたもの', seed: 331, kind: 'F',
+        patrolSpeed: 1.80, chaseSpeed: 3.60, lowCeilChaseSpeed: 5.80, lowCeilH: 2.50,
+        fovDeg: 80, hearMul: 2.00, wireSpeedMul: 1.00 }
+    },
     /* 縄張りの外に出た時に戻る判断（追跡中は出てよい。見失ったら戻る） */
     territoryStartClear: 18.0,   // 巡回地点をプレイヤーのスタートから離す最短距離(m)
                               // （復帰＝スタート地点なので、契約§4「復帰直後に鉢合わせない」を保つ）
@@ -317,20 +366,71 @@
     this.r0 = Math.min(r0, r1);
     this.r1 = Math.max(r0, r1);
     this.zones = zones || [];
+    /* P5e-2b: 帯（行範囲）で切れないマップ（area2＝下水道）用の区画マスク。
+       mask があるときは行範囲ではなくマス単位で判定する。area1 は mask 無し＝不変。 */
+    this.kind = null;
+    this.mask = null;
+    this.mw = 0; this.mh = 0;
+    this.cells = 0;
   }
+  Territory.prototype.setMask = function (mask, w, h, cells) {
+    this.mask = mask; this.mw = w; this.mh = h; this.cells = cells;
+    return this;
+  };
   Territory.prototype.contains = function (col, row) {
+    if (this.mask) {
+      if (col < 0 || row < 0 || col >= this.mw || row >= this.mh) return false;
+      return this.mask[row * this.mw + col] === 1;
+    }
     return row >= this.r0 && row <= this.r1;
   };
   Territory.prototype.containsXZ = function (map, x, z) {
     return this.contains(map.colOf(x), map.rowOf(z));
   };
 
+  /** 区画マスク（P5e-2b）。zones（zone名）/ regions（区画id）/ maxCeil（天井高以下）の和。
+   *  区画の当たりは world._zoneAt と同じ「前方一致で最初に当たった区画」の規則で引く
+   *  （meta.regions の並び順が意味を持つ＝マップの宣言とAIの解釈を一致させる）。
+   *  宣言に3つとも無いとき、または meta.regions を持たないマップでは null（＝従来の行範囲）。 */
+  function buildTerritoryMask(map, d) {
+    var list = (map.meta && map.meta.regions) || [];
+    var zones = d.zones || (d.zone ? [d.zone] : []);
+    var ids = d.regions || [];
+    var maxCeil = (typeof d.maxCeil === 'number') ? d.maxCeil : null;
+    if (!list.length) return null;
+    if (!zones.length && !ids.length && maxCeil === null) return null;
+    var w = map.width, h = map.height;
+    var mask = new Uint8Array(w * h), cells = 0, lo = h, hi = -1, col, row, i, a, b;
+    for (row = 0; row < h; row++) {
+      for (col = 0; col < w; col++) {
+        if (!map.isWalkable(col, row)) continue;
+        var hit = false;
+        if (maxCeil !== null && map.ceilHAt && map.ceilHAt(col, row) <= maxCeil + 1e-9) hit = true;
+        for (i = 0; i < list.length && !hit; i++) {
+          var g = list[i];
+          if (col < g.c0 || col > g.c1 || row < g.r0 || row > g.r1) continue;
+          for (a = 0; a < ids.length; a++) if (g.id === ids[a]) hit = true;
+          for (b = 0; b < zones.length && !hit; b++) if (g.zone === zones[b]) hit = true;
+          break;                                  /* 前方一致＝最初に当たった区画が正 */
+        }
+        if (!hit) continue;
+        mask[row * w + col] = 1; cells++;
+        if (row < lo) lo = row;
+        if (row > hi) hi = row;
+      }
+    }
+    if (!cells) return null;
+    return { data: mask, cells: cells, r0: lo, r1: hi };
+  }
+
   /** meta の1宣言を Territory へ正規化する */
   function normTerritory(d, i, map) {
     var meta = map.meta || {};
     var r0 = null, r1 = null, zones = d.zones || d.zone && [d.zone] || [];
+    var mk = null;
     if (typeof d.r0 === 'number' && typeof d.r1 === 'number') { r0 = d.r0; r1 = d.r1; }
     else if (d.rows && d.rows.length === 2) { r0 = d.rows[0]; r1 = d.rows[1]; }
+    else if ((mk = buildTerritoryMask(map, d))) { r0 = mk.r0; r1 = mk.r1; }
     else {
       /* zones / regions から行範囲を組み立てる */
       var ids = d.regions || [];
@@ -346,6 +446,10 @@
     }
     if (r0 === null) { r0 = 0; r1 = map.height - 1; }
     var terr = new Territory(d.id || ('t' + i), r0, r1, zones);
+    if (mk) terr.setMask(mk.data, map.width, map.height, mk.cells);
+    /* P5e-2b: 種類は縄張りに紐づく（解決順が入れ替わっても体と縄張りがずれない） */
+    if (d.kind) terr.kind = d.kind;
+    if (d.name) terr.name = d.name;
     /* マップが個体別の巡回路を宣言しているならその名前を持ち回る（meta.patrols[key]） */
     if (d.patrol && typeof d.patrol === 'string') terr.patrolKey = d.patrol;
     return terr;
@@ -468,6 +572,8 @@
         for (var r = terr.r0; r <= terr.r1; r++) {
           for (var c = 0; c < map.width; c++) {
             if (!map.isWalkable(c, r) || map.isBlocked(c, r)) continue;
+            /* 区画マスクの縄張り（P5e-2b）は行範囲だけでは足りない。area1 は常に真＝不変 */
+            if (!terr.contains(c, r)) continue;
             if (map.isCrawl && map.isCrawl(c, r)) continue;
             if (!reach[c + ',' + r]) continue;
             if (!farFromStart(c, r)) continue;
@@ -593,6 +699,11 @@
     this.map = this.game.map;
     this.pf = new Pathfinder(this.map);
     this._lum = Object.create(null);
+    this._wire = null;              /* ワイヤー罠のマス索引（P5e-2b。マップごとに作り直す） */
+    this._chain = null;             /* 鎖の常時音のハンドル（E だけが持つ） */
+    this._lands = 0;                /* 落下の着地音を鳴らした回数（D。機械テスト用） */
+    this._roars = 0;                /* 咆哮の回数（E。機械テスト用） */
+    this._crushed = 0;              /* 踏み潰した板の枚数（E。機械テスト用） */
     this._rng = 20260902 + this.index * 7919;
     var meta = this.map.meta || {};
     /* P4.10: 巡回は縄張りの中だけ。plan が無い（単体運用）なら従来どおり meta.patrol 全周 */
@@ -826,13 +937,19 @@
     var mv = Math.min(speed * this._speedScale() * dt, len);
     var nx = e.x + ux * mv, nz = e.z + uz * mv;
 
-    /* 倒された板に引っかかる（マスに入る瞬間だけ判定する） */
+    /* 倒された板に引っかかる（マスに入る瞬間だけ判定する）。
+       P5e-2b: 契約「E は板で止まらない＝踏み潰して通る（板は消費される）」。
+       板は tripBoard の時点で used になる＝どちらの体でも1枚は1回しか効かない。 */
     var nc = map.colOf(nx), nr = map.rowOf(nz);
     if ((nc !== map.colOf(e.x) || nr !== map.rowOf(e.z)) &&
         this.game.stealth && this.game.stealth.tripBoard(nc, nr)) {
-      this._face(dt, { x: ux, z: uz });
-      this.toStalled();
-      return false;
+      if (!T.crushBoards) {
+        this._face(dt, { x: ux, z: uz });
+        this.toStalled();
+        return false;
+      }
+      this._crushed++;
+      sfx('boardCrush', { x: nx, z: nz });   /* 踏み潰す音（既存の板の音に倣う） */
     }
     e.x = nx; e.z = nz;
     e.floorY = map.floorYAt(nx, nz);
@@ -841,8 +958,42 @@
     return false;
   };
 
+  /* ---------------- P5e-2b 床と罠による速度の変化 ----------------
+   * 契約: D・E は「水路で減速しない」＝既定は減速する（0.75）。area1 に水路は無いので不変。
+   *       F は「ワイヤー罠を潜らず壁を伝って越える」＝他の体はそのマスで屈む一拍を払う。 */
+
+  /** ワイヤー罠のマスか（meta.traps が唯一の出どころ。マス索引は縄張りと同じく1回だけ作る） */
+  EnemyAI.prototype._wireAt = function (col, row) {
+    if (!this._wire) {
+      this._wire = Object.create(null);
+      var list = (this.map.meta && this.map.meta.traps) || [];
+      for (var i = 0; i < list.length; i++) {
+        if (list[i].kind === 'wire') this._wire[list[i].col + ',' + list[i].row] = true;
+      }
+    }
+    return !!this._wire[col + ',' + row];
+  };
+
   EnemyAI.prototype._speedScale = function () {
-    return (this.enemy.state === 'trans') ? this.T.transMoveScale : 1;
+    if (this.enemy.state === 'trans') return this.T.transMoveScale;
+    var T = this.T, map = this.map, e = this.enemy, s = 1;
+    var col = map.colOf(e.x), row = map.rowOf(e.z);
+    var TILE = ESCAPE.TILE;
+    if (TILE && TILE.WATER !== undefined && map.tileAt(col, row) === TILE.WATER) {
+      s *= T.waterSpeedMul;
+    }
+    if (T.wireSpeedMul !== 1 && this._wireAt(col, row)) s *= T.wireSpeedMul;
+    return s;
+  };
+
+  /** いまの追跡速度。低天井の支線で速くなる体（F）はここで切り替わる */
+  EnemyAI.prototype.chaseSpeedNow = function () {
+    var T = this.T;
+    if (T.lowCeilChaseSpeed === null || T.lowCeilChaseSpeed === undefined || !this.map.ceilHAt) {
+      return T.chaseSpeed;
+    }
+    var c = this.map.colOf(this.enemy.x), r = this.map.rowOf(this.enemy.z);
+    return (this.map.ceilHAt(c, r) <= T.lowCeilH) ? T.lowCeilChaseSpeed : T.chaseSpeed;
   };
 
   EnemyAI.prototype._face = function (dt, dir) {
@@ -954,8 +1105,10 @@
   EnemyAI.prototype.hears = function (ev, alert) {
     var e = this.enemy;
     var d = Math.hypot(ev.x - e.x, ev.z - e.z);
-    if (alert) return d <= Math.max(ev.radius, this.T.trapHearRadius);
-    return d <= ev.radius && d <= this.T.hearMax;
+    /* P5e-2b: 聴覚の鋭さは kind ごと（E 1.5倍・F 2.0倍。既定 1.0＝area1 は不変） */
+    var mul = this.T.hearMul || 1;
+    if (alert) return d <= Math.max(ev.radius, this.T.trapHearRadius) * mul;
+    return d <= ev.radius * mul && d <= this.T.hearMax * mul;
   };
 
   /**
@@ -1023,9 +1176,38 @@
 
   /* ---------------- 形態（上書き事故の防止つき） ---------------- */
 
+  /* P5e-2b: 形態遷移の音。D＝落下の着地（水路なら水しぶき・それ以外は鈍い音）、
+   * E＝咆哮（0.8秒の遷移の頭で鳴る）。どちらも kind のプロファイルで on/off する。 */
+  EnemyAI.prototype._landSfx = function () {
+    var e = this.enemy, map = this.map, TILE = ESCAPE.TILE;
+    var col = map.colOf(e.x), row = map.rowOf(e.z);
+    var wet = !!(TILE && TILE.WATER !== undefined && map.tileAt(col, row) === TILE.WATER);
+    this._lands++;
+    sfx(wet ? 'splash' : 'thud', { x: e.x, z: e.z });
+  };
+
+  /** 支線（低天井）で壁面姿勢を取らせる。**壁の向きを測って渡すだけ**＝見た目だけの変更で、
+   *  視界・経路・当たり判定には一切触らない（契約 P5e-2b の D）。 */
+  EnemyAI.prototype._syncWallPose = function () {
+    var T = this.T, e = this.enemy;
+    if (!T.wallPose || !e.setWall) return;
+    var map = this.map, col = map.colOf(e.x), row = map.rowOf(e.z);
+    var low = map.ceilHAt ? (map.ceilHAt(col, row) <= T.lowCeilH) : false;
+    if (!low || this.form !== 'stand') { e.setWall(0, 0); return; }
+    var D4 = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+    for (var i = 0; i < 4; i++) {
+      if (!map.isSolid(col + D4[i][0], row + D4[i][1])) continue;
+      e.setWall(yawOf(D4[i][0], D4[i][1]), 1);
+      return;
+    }
+    e.setWall(0, 0);
+  };
+
   EnemyAI.prototype._applyForm = function () {
-    var e = this.enemy;
+    var e = this.enemy, T = this.T;
     if (e.state === 'trans') return;             /* 遷移アニメ中は一切触らない */
+    /* 遷移が終わったフレーム: 落下の着地音（D） */
+    if (this._falling) { this._falling = false; this._landSfx(); }
     /* P4.6: 音を聞いた時点で反転形態に落ちる（契約 §4「その場で反転形態に落ちて疾走」）。
        探索・ロッカー狩りも警戒中なので反転のまま。巡回へ戻る時だけ直立に起き上がる。 */
     var s = this.state;
@@ -1033,6 +1215,11 @@
     if (this.form !== want) {
       e.setForm(want === 'crawl' ? 'crawl' : 'stand', false);
       this.form = want;
+      if (want === 'crawl') {
+        /* E: 形態遷移＝0.8秒の咆哮（音）。D: 落下しきったら着地の音 */
+        if (T.roarSfx) { this._roars++; sfx('roar', { x: e.x, z: e.z }); }
+        if (T.fallLandSfx) this._falling = true;
+      }
       return;
     }
     var anim;
@@ -1098,8 +1285,10 @@
         if (see) { this.lastSeen = { x: p.x, z: p.z }; this.lostTime = 0; }
         else this.lostTime += dt;
         var tgt = this.lastSeen || { x: p.x, z: p.z };
-        this._moveTo(dt, tgt.x, tgt.z, T.chaseSpeed);
-        if (dist <= this.catchDist() && !(st && st.hidden())) { this.onCatch(); break; }
+        this._moveTo(dt, tgt.x, tgt.z, this.chaseSpeedNow());
+        /* P5e-2b: D は天井から落ちきるまで捕まえられない（契約の 1.2 秒の猶予） */
+        if (dist <= this.catchDist() && !(st && st.hidden()) &&
+            !(T.noCatchDuringTrans && e.state === 'trans')) { this.onCatch(); break; }
         if ((this.lostTime > T.loseSightGrace && dist > T.giveUpDist) || this.lostTime > T.giveUpTime) {
           this.toSearch();
         }
@@ -1107,8 +1296,11 @@
 
       case 'search':
         if (see) { this.toChase(); break; }
-        /* P4.10: 罠に反応した探索は執拗（searchDur 8 → trapSearchDur 14） */
-        if (this.stateTime >= (this.alert ? T.trapSearchDur : T.searchDur)) { this.toPatrol(); break; }
+        /* P4.10: 罠に反応した探索は執拗（searchDur 8 → trapSearchDur 14）
+           P5e-2b: 体ごとの倍率（E は 2倍＝逃げ切っても諦めない） */
+        if (this.stateTime >= (this.alert ? T.trapSearchDur : T.searchDur) * T.searchDurMul) {
+          this.toPatrol(); break;
+        }
         /* 契約 §4「探索中の敵は近くのロッカーを1つ開けて覗く（ランダム）」 */
         if (!this.peekDone) {
           this.peekDone = true;
@@ -1147,8 +1339,24 @@
     }
 
     this._applyForm();
+    this._syncWallPose();
+    this._syncChain();
     e.update(dt, g.simTime);
     e.syncLight(g.world, this.map);
+  };
+
+  /** P5e-2b: E の鎖の常時音。距離減衰つきのループを音響へ渡すだけ（位置の更新のみ）。 */
+  EnemyAI.prototype._syncChain = function () {
+    if (!this.T.chainLoop) return;
+    var au = ESCAPE.audio;
+    if (!au || !au.chainLoop) return;
+    var e = this.enemy;
+    au.chainLoop(this.index, {
+      x: e.x, z: e.z, y: e.floorY,
+      range: this.T.chainRange,
+      moving: this.speed > 0.05,
+      on: this.state !== 'caught'
+    });
   };
 
   EnemyAI.prototype._patrolStep = function (dt) {
@@ -1208,6 +1416,17 @@
 
   EnemyAI.prototype._pickSearchSpot = function () {
     var map = this.map, base = this.lastSeen || { x: this.enemy.x, z: this.enemy.z };
+    /* P5e-2b: 契約「E は見失った最後の位置へ来続ける」。1回おきにその点そのものへ戻る
+       （残り半分は従来どおり周辺を散らす＝同じ場所で固まらない）。 */
+    if (this.T.revisitLastSeen && this.lastSeen) {
+      this._revisit = !this._revisit;
+      if (this._revisit) {
+        this.revisits = (this.revisits || 0) + 1;
+        this.goal = { x: base.x, z: base.z };
+        this.path = null; this.repathT = 0;
+        return;
+      }
+    }
     var bc = map.colOf(base.x), br = map.rowOf(base.z);
     for (var i = 0; i < 24; i++) {
       var c = bc + Math.round((this.rand() * 2 - 1) * 4);
@@ -1306,6 +1525,11 @@
       alerts: this.alerts, heard: this.heard, stallT: this.stallT,
       /* P4.10 */
       index: this.index, name: this.name,
+      /* P5e-2b */
+      kind: this.kind, lands: this._lands, roars: this._roars, crushed: this._crushed,
+      revisits: this.revisits || 0, speedScale: this._speedScale(),
+      chaseSpeedNow: this.chaseSpeedNow(), ceilH: this.map.ceilHAt ?
+        this.map.ceilHAt(this.map.colOf(e.x), this.map.rowOf(e.z)) : null,
       territory: this.territory ? (this.territory.id + ':' + this.territory.r0 + '-' + this.territory.r1) : null,
       inTerritory: this.territory ? this.territory.containsXZ(this.map, e.x, e.z) : true,
       routeLen: this.route.length, alert: this.alert, screams: this.screams,
@@ -1338,7 +1562,10 @@
     if (n > 0) {
       var plans = this._plan(game.map, n);
       for (var i = 0; i < n; i++) {
-        var ai = new EnemyAI(game, { index: i, plan: plans[i], tuning: tuningFor(i) });
+        /* P5e-2b: 種類は「縄張りの宣言 ＞ meta.enemyKinds[i]」。縄張りに紐づけてあるので
+           縄張りの解決順が入れ替わっても体と個性がずれない（area2 は D/E/F）。 */
+        var kind = kindFor(game.map, plans[i], i);
+        var ai = new EnemyAI(game, { index: i, plan: plans[i], kind: kind, tuning: tuningFor(i, kind) });
         ai.manager = this;
         this.list.push(ai);
       }
@@ -1352,9 +1579,20 @@
     return Math.max(1, ENEMY_TUNING.enemyCount | 0);
   };
 
-  /** 個体差の定数（原型鎖で ENEMY_TUNING に落ちる） */
-  function tuningFor(i) {
-    var ind = (ENEMY_TUNING.individuals || [])[i];
+  /** その個体の種類（kind）。縄張りの宣言 ＞ meta.enemyKinds[i] ＞ 未指定（＝'A1'） */
+  function kindFor(map, plan, i) {
+    if (plan && plan.territory && plan.territory.kind) return plan.territory.kind;
+    var ks = map && map.meta && map.meta.enemyKinds;
+    if (ks && ks[i]) return ks[i];
+    return null;
+  }
+
+  /** 個体差の定数（原型鎖で ENEMY_TUNING に落ちる）。
+   *  kind のプロファイル（ENEMY_TUNING.kinds）があればそれが個体差の実体になり、
+   *  無ければ従来どおり individuals[i]（area1 の 敵①/敵② は完全に不変）。 */
+  function tuningFor(i, kind) {
+    var ind = (kind && ENEMY_TUNING.kinds && ENEMY_TUNING.kinds[kind]) ||
+      (ENEMY_TUNING.individuals || [])[i];
     if (!ind) return ENEMY_TUNING;
     var t = Object.create(ENEMY_TUNING);
     for (var k in ind) if (Object.prototype.hasOwnProperty.call(ind, k)) t[k] = ind[k];
@@ -1367,6 +1605,7 @@
   };
 
   AIManager.prototype.reset = function () {
+    if (ESCAPE.audio && ESCAPE.audio.chainStopAll) ESCAPE.audio.chainStopAll();
     if (!this.list.length) {         /* P5: 敵0体のマップ。音イベントの窓口だけ初期化する */
       this.territories = [];
       this.noiseEvents = 0;
@@ -1464,6 +1703,8 @@
     /* 捕獲演出中は全個体を止める。演出が画面を握っている間に別個体が歩き回ると、
        復帰した瞬間に理不尽な再捕獲が起きる（契約 §6 の中断安全）。 */
     var frozen = !!(st && st.jail && st.jail.phase !== 'none');
+    /* P5e-2b: 演出中は鎖の常時音も止める（画面を握っている間に鳴り続けない） */
+    if (frozen && ESCAPE.audio && ESCAPE.audio.chainStopAll) ESCAPE.audio.chainStopAll();
     if (frozen) ESCAPE.noise.consume();      /* 溜め込まない */
     else this.dispatchNoise();
     for (var i = 0; i < this.list.length; i++) {
