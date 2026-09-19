@@ -49,7 +49,8 @@
  *   N  壁のメモ       L  ロッカー（壁・隠れ場所）   B  倒せる板   M  音地盤（ガラス/金属）
  *   S  センサー       P  セーブ端末の立ち位置（端末そのものは dir の壁）
  *
- * 敵は0体（meta.enemyCount: 0）。罠・音・声は動くが敵は生成されない（契約 P5）。
+ * 敵3体（meta.enemyCount: 3・kind D/E/F。P5e-2b で 0 から載せ替え）。縄張り・出現地点・
+ * 巡回点は meta.territories / enemySpawns / patrols（AI は js/enemy_ai.js）。
  * 見た目（素材・灯・小物・水面）は P5b-B / P5c の領分。本ファイルは配置データのみ。
  */
 (function (global) {
@@ -160,8 +161,43 @@
       /* 鍵＝水門の操作ハンドル置き場（旧坑区画の奥。スタートから 303 マス） */
       keySafe: { col: 15, row: 59, id: 'a2_valve_handle' },
 
-      /* 敵0体（契約 P5「敵の実装は後回し」）。既定は 2（js/enemy_ai.js ENEMY_TUNING） */
-      enemyCount: 0,
+      /* ---- 敵3体（契約 DESIGN.md §4「P5e-2」の P5e-2b）。既定は 2（js/enemy_ai.js） ----
+       * kind は js/enemy_factory.js の登録名。個体差の定数は ENEMY_TUNING.kinds に集約。 */
+      enemyCount: 3,
+      enemyKinds: ['D', 'E', 'F'],
+      /* 縄張り。行レンジ（area1 の帯方式）ではなく **区画マスク** で宣言する
+       * （下水道は帯構造ではないので行では切れない。js/enemy_ai.js normTerritory が
+       *  regions[].zone / 区画id / 天井高からマスを機械的に導出する）。
+       * 3つの和が歩行可能マス 2989 を被覆する（未被覆 0＝機械テストで検証）:
+       *   D 1514 ＋ E 1352 ＋ F 1464（重なりは合流槽・支線＝出会い頭が起きる場所）
+       * 契約の本文は D＝区画B（幹線と合流槽）／E＝区画C・D＋合流槽／F＝区画E＋天井2.4の支線。
+       * 被覆のために足した分だけ明記する:
+       *   D に区画A（流入区画）… 天井 6.0 の縦坑は天井を這う D の領分
+       *   E に区画F（水門区画）… ポンプ室から水門へ続く機関系。出口を塞ぐのは執拗な E */
+      territories: [
+        { id: 'D', kind: 'D', name: '幹線と合流槽', zones: ['B', 'A'], patrol: 'D' },
+        { id: 'E', kind: 'E', name: '沈殿槽・ポンプ室・水門', zones: ['C', 'D', 'F'],
+          regions: ['jn1', 'jn2', 'jn3', 'jn4', 'jn5', 'jn6', 'jn7', 'jn8', 'jn9'], patrol: 'E' },
+        { id: 'F', kind: 'F', name: '旧坑と支線', zones: ['E'], maxCeil: 2.4, patrol: 'F' }
+      ],
+      /* 出現地点（各縄張りの中・プレイヤーの spawn から BFS で 40 マス以上）。
+       * D 169 / E 180 / F 225 マス。3体は互いに 30 マス以上離れて出る。 */
+      enemySpawns: [
+        { territory: 'D', col: 65, row: 12, yawDeg: 180 },
+        { territory: 'E', col: 51, row: 51, yawDeg: 0 },
+        { territory: 'F', col: 25, row: 70, yawDeg: 90 }
+      ],
+      /* 巡回点（BFS で連結を確認済み・全点が spawn から 40 マス以上）。
+       * D＝合流槽をつなぐ幹線の環／E＝沈殿槽→東の合流槽→ポンプ室→中央→南→水門／
+       * F＝旧坑の崩落部と南北の支線。 */
+      patrols: {
+        D: [{ col: 38, row: 12 }, { col: 65, row: 12 }, { col: 64, row: 38 },
+            { col: 38, row: 64 }, { col: 12, row: 64 }, { col: 12, row: 38 }],
+        E: [{ col: 51, row: 20 }, { col: 64, row: 38 }, { col: 51, row: 51 },
+            { col: 38, row: 38 }, { col: 38, row: 64 }, { col: 72, row: 72 }],
+        F: [{ col: 21, row: 51 }, { col: 5, row: 55 }, { col: 25, row: 70 },
+            { col: 33, row: 47 }, { col: 8, row: 30 }, { col: 19, row: 46 }]
+      },
       /* 足音の既定素材（js/audio.js floorMaterial）と環境音（下水道） */
       floorDefault: 'stone',
       ambience: 'sewer',
