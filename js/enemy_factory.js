@@ -299,14 +299,16 @@
 
   /* 暗がりでの見え方（emissive の下限/傾き/上限）。
      契約: 顔は闇でも読める／眼窩と口腔は光っても闇のまま／捕獲演出中だけ顔を底上げ。 */
+  /* 実測較正（2026-09-20・area2 の暗い合流槽で捕獲の寄りを撮り、顔の中央値輝度で合わせた）:
+     cine の上限 0.15→中央値29 / 0.45→72 / 1.1→107。読めてなお暗い 70〜90 を狙う。 */
   var LIT = {
-    body: { min: 0.020, gain: 0.46, max: 0.150, cine: [0.055, 0.230] },
-    face: { min: 0.062, gain: 0.72, max: 0.300, cine: [0.135, 0.460] },
-    tooth: { min: 0.040, gain: 0.52, max: 0.210, cine: [0.100, 0.330] },
-    cloth: { min: 0.014, gain: 0.38, max: 0.120, cine: [0.036, 0.180] },
-    hair: { min: 0.007, gain: 0.22, max: 0.070, cine: [0.018, 0.100] },
-    metal: { min: 0.012, gain: 0.44, max: 0.140, cine: [0.034, 0.200] },
-    flesh: { min: 0.016, gain: 0.34, max: 0.110, cine: [0.048, 0.190] },
+    body: { min: 0.030, gain: 0.85, max: 0.200, cine: [0.090, 0.300] },
+    face: { min: 0.075, gain: 1.30, max: 0.340, cine: [0.220, 0.550] },
+    tooth: { min: 0.040, gain: 0.80, max: 0.190, cine: [0.140, 0.380] },
+    cloth: { min: 0.020, gain: 0.65, max: 0.140, cine: [0.060, 0.210] },
+    hair: { min: 0.010, gain: 0.40, max: 0.080, cine: [0.030, 0.120] },
+    metal: { min: 0.018, gain: 0.75, max: 0.150, cine: [0.050, 0.220] },
+    flesh: { min: 0.024, gain: 0.60, max: 0.130, cine: [0.080, 0.230] },
     hollow: { min: 0.000, gain: 0.00, max: 0.000, cine: [0.000, 0.000] }
   };
   A2.LIT = LIT;
@@ -533,7 +535,15 @@
       var lo = cine ? P.cine[0] : P.min, hi = cine ? P.cine[1] : P.max;
       var k = clamp(lo + lum * P.gain, lo, hi);
       if (m.userData.a2lit === 'face') k *= breathe;
-      m.emissive.setRGB(k * tr, k * tg, k * tb);
+      if (m.emissiveMap) {
+        m.emissive.setRGB(k * tr, k * tg, k * tb);
+      } else {
+        /* 単色材質（歯・歯茎・肉・金属）は emissiveMap を持たないので、そのまま同じ k を
+           入れると「アルベドに関係なく一律に光る板」になって白飛びする（差し戻しの主因）。
+           自分のアルベドに比例させる＝暗い部位は暗いまま微光だけ乗る。 */
+        var c = m.color;
+        m.emissive.setRGB(k * tr * c.r * 3.0, k * tg * c.g * 3.0, k * tb * c.b * 3.0);
+      }
     }
   };
 
@@ -582,7 +592,7 @@
       for (var L = 0; L < 2; L++) {
         var mat = this._track(new THREE.SpriteMaterial({
           map: A2.glowTex(), color: 0xffffff, fog: true, transparent: true,
-          opacity: (L ? 0.30 : 0.62) * (s.k === undefined ? 1 : s.k),
+          opacity: (L ? 0.46 : 0.92) * (s.k === undefined ? 1 : s.k),
           blending: THREE.AdditiveBlending, depthWrite: false
         }));
         var sp = new THREE.Sprite(mat);
