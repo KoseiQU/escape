@@ -713,19 +713,19 @@
       } catch (e2) { /* 無視 */ }
     }
 
-    /* --- 敵の体数（meta.enemyCount） --- */
+    /* --- 敵の体数（meta.enemyCount）。P5e-2b で area2 は 0 → 3 になった --- */
     var A2 = ESCAPE.Maps.has('area2') ? ESCAPE.Maps.load('area2') : null;
     t.ok(!!ESCAPE.AIManager && typeof ESCAPE.AIManager.countFor === 'function',
-      'P5 敵0: 体数の決定関数がある');
+      'P5 体数: 体数の決定関数がある');
     if (ESCAPE.AIManager && A2) {
-      t.ok(ESCAPE.AIManager.countFor(A2) === 0, 'P5 敵0: area2 は敵0体',
+      t.ok(ESCAPE.AIManager.countFor(A2) === 3, 'P5e-2b: area2 は敵3体',
         ESCAPE.AIManager.countFor(A2));
-      t.ok(ESCAPE.AIManager.countFor(g.map) === 2, 'P5 敵0: area1 は従来どおり2体（未指定＝既定）',
+      t.ok(ESCAPE.AIManager.countFor(g.map) === 2, 'P5 体数: area1 は従来どおり2体（未指定＝既定）',
         ESCAPE.AIManager.countFor(g.map));
       t.ok(ESCAPE.AIManager.countFor({ meta: {} }) === ESCAPE.ENEMY_TUNING.enemyCount,
-        'P5 敵0: meta.enemyCount 未指定は ENEMY_TUNING の既定');
+        'P5 体数: meta.enemyCount 未指定は ENEMY_TUNING の既定');
     }
-    t.ok(A2 && A2.meta.enemyCount === 0, 'P5 敵0: area2 の meta.enemyCount が 0');
+    t.ok(A2 && A2.meta.enemyCount === 3, 'P5e-2b: area2 の meta.enemyCount が 3');
     t.ok(A2 && A2.meta.floorDefault === 'stone', 'P5 音: area2 の既定の足音素材が石');
     t.ok(A2 && A2.meta.ambience === 'sewer', 'P5 音: area2 の環境音が下水道');
 
@@ -831,6 +831,11 @@
     this.results.push(r);
     if (r.pass) this.passed++; else this.failed++;
     return r.pass;
+  };
+  /** 数値の近さ（js/test.js の Runner と同じ形。P5e-2b の数値検査が使う） */
+  A2Runner.prototype.near = function (v, want, tol, name, detail) {
+    return this.ok(Math.abs(v - want) <= tol, name,
+      detail === undefined ? (v + ' vs ' + want) : detail);
   };
   function a2Summarize(t) {
     return { passed: t.passed, failed: t.failed, total: t.results.length, results: t.results };
@@ -1017,28 +1022,477 @@
     g.input.reset();
   }
 
-  /* ---------------- 4) 敵0体 ---------------- */
-  function testA2RunEnemyZero(t, g) {
-    g.reset();
-    t.ok(g.ai === null, 'P5 段階2 敵0: game.ai が null', g.ai);
-    t.ok(!!g.ais && g.ais.list.length === 0, 'P5 段階2 敵0: AIリストが空',
-      g.ais ? g.ais.list.length : 'ais無し');
+  /* ================================================================
+   * 4) 敵3体（契約 DESIGN.md §4「P5e-2」の P5e-2b「機械テスト」）
+   * ============================================================== */
 
-    var au = ESCAPE.audio, errBefore = au ? au.errors : 0, threw = null;
-    try { global.__pump(120); } catch (e) { threw = e; }
-    t.ok(threw === null, 'P5 段階2 敵0: 敵なしで120フレーム回してもゲームループが例外を出さない',
-      threw && (threw.message || String(threw)));
-    t.ok(!au || au.errors === errBefore, 'P5 段階2 敵0: 音響系の例外も増えない', au ? au.errors : 0);
-
-    var threw2 = null;
-    if (g.stealth && typeof g.stealth.capture === 'function') {
-      try { g.stealth.capture(g.ai); } catch (e2) { threw2 = e2; }
+  function a2Sim(g, n) { for (var i = 0; i < n; i++) g.stepFrame(ESCAPE.FIXED_DT); }
+  function a2SimUntil(g, cond, max) {
+    for (var i = 0; i < max; i++) { if (cond()) return i; g.stepFrame(ESCAPE.FIXED_DT); }
+    return cond() ? max : -1;
+  }
+  function a2Player(g, col, row, yawDeg) {
+    var c = g.map.cellCenter(col, row), p = g.player;
+    p.x = c.x; p.z = c.z; p.y = g.map.floorYAt(c.x, c.z);
+    p.yaw = (yawDeg || 0) * Math.PI / 180;
+    p.pitch = 0; p.speed = 0; p.crouching = false;
+  }
+  function a2Put(ai, col, row, yawDeg) {
+    ai.enemy.placeCell(col, row, yawDeg === undefined ? 180 : yawDeg, ai.map);
+    ai.path = null; ai.goal = null; ai.repathT = 0;
+  }
+  /** kind で個体を引く */
+  function a2Ai(g, kind) {
+    var L = g.ais.list;
+    for (var i = 0; i < L.length; i++) if (L[i].kind === kind) return L[i];
+    return null;
+  }
+  /** 主役以外を凍結する（駆け引きを1体ぶんだけ見たいとき）。解除は g.reset() */
+  function a2Solo(g, ai) {
+    var L = g.ais.list;
+    for (var i = 0; i < L.length; i++) L[i].manual = (L[i] !== ai);
+  }
+  /** その体の縄張りの中で、条件 fn を満たす歩行可能マスを探す */
+  function a2CellIn(g, ai, fn) {
+    var map = g.map;
+    for (var r = 1; r < map.height - 1; r++) {
+      for (var c = 1; c < map.width - 1; c++) {
+        if (!map.isWalkable(c, r)) continue;
+        if (ai.territory && !ai.territory.contains(c, r)) continue;
+        if (fn && !fn(c, r)) continue;
+        return { col: c, row: r };
+      }
     }
-    t.ok(threw2 === null, 'P5 段階2 敵0: 捕獲処理を直接呼んでも例外にならない（体が居ない）',
-      threw2 && (threw2.message || String(threw2)));
+    return null;
+  }
+
+  /* ---- 4-1) 3体の生成・種類・縄張りの被覆 ---- */
+  function testA2Enemies(t, g) {
     g.reset();
-    t.ok(g.stealth.captures === 0 && g.stealth.jail.phase === 'none',
-      'P5 段階2 敵0: 直接呼び出し後も reset で製品初期状態に戻る');
+    var L = g.ais.list, map = g.map, i, c, r;
+    if (!t.ok(L.length === 3, 'P5e-2b 生成: 敵が3体いる', L.length)) return;
+    t.ok(g.ai === L[0], 'P5e-2b 生成: game.ai は先頭の個体（窓口は1本）');
+    var kinds = [];
+    for (i = 0; i < L.length; i++) kinds.push(L[i].kind);
+    t.ok(kinds.join(',') === 'D,E,F', 'P5e-2b 生成: 種類が meta.enemyKinds どおり', kinds.join(','));
+    var modelOk = true, terrOk = true;
+    for (i = 0; i < L.length; i++) {
+      if (L[i].enemy.kind !== L[i].kind) modelOk = false;
+      if (!L[i].territory || L[i].territory.kind !== L[i].kind) terrOk = false;
+    }
+    t.ok(modelOk, 'P5e-2b 生成: モデルの kind が AI の kind と一致（EnemyFactory 経由）');
+    t.ok(terrOk, 'P5e-2b 生成: 体と縄張りが対応している（解決順が変わってもずれない）');
+    var tri = 0;
+    for (i = 0; i < L.length; i++) tri += L[i].enemy.activeTriangles();
+    t.ok(tri <= 90000, 'P5e-2b 生成: 3体同時の三角形合計が 90k 以内', tri);
+
+    /* 縄張りの和が歩行可能マスを被覆する（契約） */
+    var bad = 0, firstBad = '';
+    for (r = 0; r < map.height; r++) {
+      for (c = 0; c < map.width; c++) {
+        if (!map.isWalkable(c, r)) continue;
+        var hit = false;
+        for (i = 0; i < L.length && !hit; i++) if (L[i].territory.contains(c, r)) hit = true;
+        if (!hit) { bad++; if (!firstBad) firstBad = c + ',' + r; }
+      }
+    }
+    t.ok(bad === 0, 'P5e-2b 縄張り: 3枚の和が歩行可能マスを被覆（未被覆0）',
+      bad ? (bad + '件 例:' + firstBad) : '0件');
+
+    /* 契約の内訳: D＝幹線と合流槽／E＝沈殿槽・ポンプ室／F＝旧坑と天井2.4の支線 */
+    var W = function (col, row) {
+      var rs = map.meta.regions || [];
+      for (var k = 0; k < rs.length; k++) {
+        var q = rs[k];
+        if (col < q.c0 || col > q.c1 || row < q.r0 || row > q.r1) continue;
+        return q.zone || null;
+      }
+      return null;
+    };
+    var D = a2Ai(g, 'D'), E = a2Ai(g, 'E'), F = a2Ai(g, 'F');
+    t.ok(!!a2CellIn(g, D, function (c2, r2) { return W(c2, r2) === 'B' && map.ceilHAt(c2, r2) >= 4.6; }),
+      'P5e-2b 縄張り: D の中に幹線（区画B・天井4.6以上）のマスがある');
+    t.ok(!!a2CellIn(g, E, function (c2, r2) { return W(c2, r2) === 'C'; }) &&
+         !!a2CellIn(g, E, function (c2, r2) { return W(c2, r2) === 'D'; }),
+      'P5e-2b 縄張り: E の中に沈殿区画(C)とポンプ室のある機関区画(D)のマスがある');
+    t.ok(!!a2CellIn(g, F, function (c2, r2) { return W(c2, r2) === 'E'; }),
+      'P5e-2b 縄張り: F の中に旧坑区画(E)のマスがある');
+    var lowOut = 0;
+    for (r = 1; r < map.height - 1; r++) {
+      for (c = 1; c < map.width - 1; c++) {
+        if (!map.isWalkable(c, r) || map.ceilHAt(c, r) > 2.4) continue;
+        if (!F.territory.contains(c, r)) lowOut++;
+      }
+    }
+    t.ok(lowOut === 0, 'P5e-2b 縄張り: 天井2.4の支線は全て F の縄張り', lowOut + '件が外');
+
+    /* 出現地点は互いに離れ、プレイヤーの spawn から BFS で 40 マス以上（契約） */
+    var sp = map.meta.spawn, far = true, apart = true, minD = 1e9;
+    var dSp = bfs(map, sp.col, sp.row);
+    for (i = 0; i < L.length; i++) {
+      var s = L[i].spawn;
+      var dd = dSp[s.row * map.width + s.col];
+      if (dd < 0 || dd < 40) far = false;
+      if (dd >= 0 && dd < minD) minD = dd;
+      for (var j = i + 1; j < L.length; j++) {
+        var s2 = L[j].spawn;
+        if (Math.hypot(s.col - s2.col, s.row - s2.row) < 25) apart = false;
+      }
+    }
+    t.ok(far, 'P5e-2b 出現: 3体ともプレイヤーの spawn から BFS 40 マス以上', '最小 ' + minD);
+    t.ok(apart, 'P5e-2b 出現: 3体が互いに離れて出る');
+    g.reset();
+  }
+
+  /* ---- 4-2) 各体の状態機械（巡回 → 調査 → 追跡 → 捕獲 → 復帰） ---- */
+  function testA2StateMachine(t, g) {
+    var KINDS = ['D', 'E', 'F'];
+    for (var k = 0; k < KINDS.length; k++) {
+      g.reset();
+      var ai = a2Ai(g, KINDS[k]), nm = 'P5e-2b 状態機械(' + KINDS[k] + ')';
+      a2Solo(g, ai);
+      /* 巡回: 縄張りの中を歩く */
+      var x0 = ai.enemy.x, z0 = ai.enemy.z;
+      a2Player(g, g.map.meta.spawn.col, g.map.meta.spawn.row, 0);
+      a2Sim(g, 240);
+      t.ok(Math.hypot(ai.enemy.x - x0, ai.enemy.z - z0) > 1.5,
+        nm + ': 巡回で動いている', Math.hypot(ai.enemy.x - x0, ai.enemy.z - z0).toFixed(2) + 'm');
+      t.ok(ai.state === 'patrol' && ai.territory.contains(ai.map.colOf(ai.enemy.x), ai.map.rowOf(ai.enemy.z)),
+        nm + ': 巡回中は自分の縄張りの中にいる', ai.state);
+
+      /* 調査: 音イベント（罠）に反応して音源へ向かう */
+      var e = ai.enemy, near = null, cells = g.map.walkableCells();
+      for (var i = 0; i < cells.length; i++) {
+        var cc = g.map.cellCenter(cells[i].col, cells[i].row);
+        var d = Math.hypot(cc.x - e.x, cc.z - e.z);
+        if (d <= 8 || d >= 20) continue;
+        if (!ai.blockedLine(e.x, e.z, cc.x, cc.z)) continue;
+        /* 経路で辿り着ける音源だけを使う（深水の対岸は直線では近くても歩いて行けない） */
+        if (g.ais.pathDistTo(ai, cc.x, cc.z, false) > 32) continue;
+        near = cc; break;
+      }
+      if (t.ok(!!near, nm + ': 音源に使える見えないマスがある')) {
+        ESCAPE.noise.emit(near.x, near.z, 40, 'trap');
+        a2Sim(g, 2);
+        t.ok(ai.state === 'investigate', nm + ': 罠の音で調査へ入る', ai.state);
+        t.ok(ai.screams >= 1, nm + ': 罠の音には絶叫で応える', ai.screams);
+        var got = a2SimUntil(g, function () {
+          return Math.hypot(ai.enemy.x - near.x, ai.enemy.z - near.z) < 2.5 || ai.state === 'search';
+        }, 900);
+        t.ok(got >= 0, nm + ': 音源へ辿り着く', got + 'フレーム');
+      }
+
+      /* 追跡: 目の前に立つと見つかる */
+      g.reset(); a2Solo(g, ai);
+      var ec = { col: ai.map.colOf(ai.enemy.x), row: ai.map.rowOf(ai.enemy.z) };
+      var pc = null, dir = null, D4b = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+      for (var m = 0; m < 4; m++) {
+        /* 途中のマスも歩行可能＝視線が通る（遮蔽で見つからない偽の失敗を作らない） */
+        if (!g.map.isWalkable(ec.col + D4b[m][0], ec.row + D4b[m][1])) continue;
+        if (!g.map.isWalkable(ec.col + D4b[m][0] * 2, ec.row + D4b[m][1] * 2)) continue;
+        pc = { col: ec.col + D4b[m][0] * 2, row: ec.row + D4b[m][1] * 2 };
+        dir = D4b[m]; break;
+      }
+      if (t.ok(!!pc, nm + ': 敵の目の前に立てるマスがある')) {
+        a2Player(g, pc.col, pc.row, 0);
+        /* 敵をその場に据え、プレイヤーの方を向かせる（巡回で余所を向いたまま始めない） */
+        a2Put(ai, ec.col, ec.row, a2YawTo(dir[0], dir[1]));
+        if (g.headlight) { g.headlight.on = true; g.headlight.level = 1; }
+        var saw = a2SimUntil(g, function () { return ai.state === 'chase'; }, 180);
+        t.ok(saw >= 0, nm + ': 目の前のプレイヤーを見つけて追跡へ入る', ai.state);
+        /* 捕獲: 逃げずに立っていれば捕まる */
+        var caught = a2SimUntil(g, function () {
+          return g.stealth.captures >= 1;
+        }, 900);
+        t.ok(caught >= 0, nm + ': 追いつかれて捕獲される（演出が始まる）',
+          caught + 'フレーム / ' + ai.state);
+      }
+
+      /* 復帰: 演出が終わると巡回起点へ戻る */
+      ai.afterJail();
+      a2Sim(g, 2);
+      t.ok(ai.state === 'patrol' && ai.form === 'stand',
+        nm + ': 復帰で巡回・直立形態へ戻る', ai.state + '/' + ai.form);
+      t.ok(ai.map.colOf(ai.enemy.x) === ai.spawn.col && ai.map.rowOf(ai.enemy.z) === ai.spawn.row,
+        nm + ': 復帰で出現地点に戻る',
+        ai.map.colOf(ai.enemy.x) + ',' + ai.map.rowOf(ai.enemy.z));
+    }
+    g.reset();
+  }
+
+  /* ---- 4-3) D: 天井→床の落下（1.2秒の猶予・当たり判定は床）・壁面姿勢・水路で減速なし ---- */
+  function testA2KindD(t, g) {
+    g.reset();
+    var ai = a2Ai(g, 'D'), T = ai.T, map = g.map, e = ai.enemy;
+    a2Solo(g, ai);
+    t.ok(T.patrolSpeed === 1.40 && T.chaseSpeed === 5.40 && T.fovDeg === 140 &&
+         T.sightDark === 7.0 && T.sightLit === 14.0,
+      'P5e-2b D: 契約の数値（巡回1.4／追跡5.4／fov140／暗所7／明所14）',
+      T.patrolSpeed + '/' + T.chaseSpeed + '/' + T.fovDeg + '/' + T.sightDark + '/' + T.sightLit);
+    t.ok(T.waterSpeedMul === 1 && ESCAPE.ENEMY_TUNING.waterSpeedMul < 1,
+      'P5e-2b D: 水路で減速しない（既定は減速する）', T.waterSpeedMul);
+
+    /* 天井の高い幹線へ置く。stand は天井、crawl は床。落下の 1.2 秒は移動しない */
+    var cell = a2CellIn(g, ai, function (c, r) {
+      return map.ceilHAt(c, r) >= 4.6 && map.isWalkable(c, r + 1) && map.isWalkable(c, r - 1);
+    });
+    if (!t.ok(!!cell, 'P5e-2b D: 天井の高い検証用マスがある')) { g.reset(); return; }
+    a2Put(ai, cell.col, cell.row, 180);
+    ai.state = 'patrol'; ai.form = 'stand'; e.setForm('stand', true);
+    e.update(0, 10); e.group.updateMatrixWorld(true);
+    var box = new THREE.Box3().setFromObject(e.group);
+    var floorY = map.floorYAt(e.x, e.z);
+    t.ok(box.min.y > floorY + 1.0,
+      'P5e-2b D: 直立形態（stand）では体が天井側にあり床から浮いている',
+      (box.min.y - floorY).toFixed(2) + 'm');
+
+    /* 発見 → 落下の遷移。遷移中は動かず、捕まえもしない */
+    ai.state = 'chase'; ai.lastSeen = { x: e.x + 4, z: e.z };
+    ai._applyForm();
+    t.ok(e.state === 'trans', 'P5e-2b D: 追跡へ入ると落下の遷移が始まる', e.state);
+    t.near(e.transDur, 1.20, 1e-6, 'P5e-2b D: 落下の遷移は 1.2 秒', e.transDur);
+    var bx = e.x, bz = e.z, moved = 0, frames = 0;
+    while (e.state === 'trans' && frames < 200) {
+      ai.stepSelf(ESCAPE.FIXED_DT);
+      moved = Math.max(moved, Math.hypot(e.x - bx, e.z - bz));
+      frames++;
+    }
+    ai.stepSelf(ESCAPE.FIXED_DT);      /* 落ちきった次のフレーム＝着地 */
+    t.ok(moved < 0.02, 'P5e-2b D: 落下中は移動しない（契約の 1.2 秒の猶予）', moved.toFixed(4) + 'm');
+    t.ok(frames >= 70 && frames <= 76, 'P5e-2b D: 落下は約72フレーム（1.2秒）', frames);
+    t.ok(ai._lands >= 1, 'P5e-2b D: 着地の音が鳴る（水路なら水しぶき）', ai._lands);
+    e.update(0, 12); e.group.updateMatrixWorld(true);
+    var box2 = new THREE.Box3().setFromObject(e.group);
+    t.ok(Math.abs(box2.min.y - map.floorYAt(e.x, e.z)) < 0.35,
+      'P5e-2b D: 落ちきると当たり判定（接地）が床に戻る',
+      (box2.min.y - map.floorYAt(e.x, e.z)).toFixed(3) + 'm');
+
+    /* 支線（天井2.4）では壁面姿勢: AI が壁の向きを渡す */
+    var low = a2CellIn(g, ai, function (c, r) { return map.ceilHAt(c, r) <= 2.4; });
+    if (t.ok(!!low && typeof e.setWall === 'function',
+      'P5e-2b D: 支線のマスとモデルの壁面姿勢の口がある')) {
+      a2Put(ai, low.col, low.row, 180);
+      ai.state = 'patrol'; ai.form = 'stand'; e.setForm('stand', true);
+      e.wallOn = 0;
+      ai._syncWallPose();
+      t.ok(e.wallOn === 1, 'P5e-2b D: 支線では壁の向きを受け取って壁面姿勢になる', e.wallOn);
+      a2Put(ai, cell.col, cell.row, 180);
+      ai._syncWallPose();
+      t.ok(e.wallOn === 0, 'P5e-2b D: 幹線（天井が高い）では壁面姿勢を解く', e.wallOn);
+    }
+    g.reset();
+  }
+
+  /* ---- 4-4) E: 板を踏み潰す・水路で減速しない・執拗（探索2倍・最後の位置を再訪）・咆哮 ---- */
+  function testA2KindE(t, g) {
+    g.reset();
+    var ai = a2Ai(g, 'E'), T = ai.T, map = g.map, e = ai.enemy, B = ESCAPE.ENEMY_TUNING;
+    a2Solo(g, ai);
+    t.ok(T.patrolSpeed === 1.10 && T.chaseSpeed === 3.80,
+      'P5e-2b E: 契約の数値（巡回1.1／追跡3.8＝プレイヤー走り4.6より遅い）',
+      T.patrolSpeed + '/' + T.chaseSpeed);
+    t.ok(T.chaseSpeed < ESCAPE.Player.SPEED_RUN,
+      'P5e-2b E: 走れば逃げ切れる', T.chaseSpeed + ' < ' + ESCAPE.Player.SPEED_RUN);
+    t.ok(T.hearMul === 1.5 && T.searchDurMul === 2 && T.revisitLastSeen === true,
+      'P5e-2b E: 聴覚1.5倍・探索2倍・最後の位置へ来続ける');
+    t.ok(T.lockerPeekChance === 0 && T.trapLockerPeekChance === 0,
+      'P5e-2b E: ロッカーを覗かない');
+    t.ok(T.waterSpeedMul === 1, 'P5e-2b E: 水路で減速しない', T.waterSpeedMul);
+
+    /* 聴覚: 同じ音イベントを E は聞き取り、基準の距離では届かない */
+    var ev = { x: e.x + (B.hearMax * 1.2), z: e.z, radius: B.hearMax * 1.2 };
+    t.ok(ai.hears(ev, false) === true, 'P5e-2b E: 基準の聴取距離より遠い音も聞こえる');
+
+    /* 水路: 同じ距離を D/E は速く、F（既定 0.75）は遅く歩く */
+    var wcell = null, TILE = ESCAPE.TILE;
+    for (var r = 1; r < map.height - 1 && !wcell; r++) {
+      for (var c = 1; c < map.width - 1; c++) {
+        if (map.tileAt(c, r) === TILE.WATER && ai.territory.contains(c, r)) { wcell = { col: c, row: r }; break; }
+      }
+    }
+    if (t.ok(!!wcell, 'P5e-2b E: 縄張りの中に水路のマスがある')) {
+      a2Put(ai, wcell.col, wcell.row, 180);
+      t.ok(Math.abs(ai._speedScale() - 1) < 1e-9,
+        'P5e-2b E: 水路の上でも速度係数が 1（減速なし）', ai._speedScale().toFixed(3));
+      var F = a2Ai(g, 'F');
+      a2Put(F, wcell.col, wcell.row, 180);
+      t.ok(F._speedScale() < 0.9,
+        'P5e-2b E: 比較 — 既定の体（F）は水路で減速する', F._speedScale().toFixed(3));
+    }
+
+    /* 板: 倒した板の上を E は止まらずに通る（板は消費される） */
+    var boards = g.stealth.boards, bd = null;
+    for (var i = 0; i < boards.length; i++) {
+      if (ai.territory.contains(boards[i].col, boards[i].row)) { bd = boards[i]; break; }
+    }
+    if (!bd && boards.length) bd = boards[0];
+    if (t.ok(!!bd, 'P5e-2b E: 検証に使える板がある')) {
+      bd.toppled = true; bd.used = false;
+      var from = null, D4c = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+      for (var m = 0; m < 4; m++) {
+        if (map.isWalkable(bd.col + D4c[m][0], bd.row + D4c[m][1])) {
+          from = { col: bd.col + D4c[m][0], row: bd.row + D4c[m][1] }; break;
+        }
+      }
+      a2Put(ai, from.col, from.row, 180);
+      ai.state = 'chase'; ai.stateTime = 0;
+      var tc = map.cellCenter(bd.col, bd.row), crushed0 = ai._crushed;
+      for (var f = 0; f < 120 && ai.state === 'chase'; f++) {
+        ai._moveTo(ESCAPE.FIXED_DT, tc.x, tc.z, T.chaseSpeed);
+      }
+      t.ok(ai.state !== 'stalled', 'P5e-2b E: 板で足止めされない（踏み潰して通る）', ai.state);
+      t.ok(ai._crushed > crushed0, 'P5e-2b E: 踏み潰した板を数えている', ai._crushed);
+      t.ok(bd.used === true, 'P5e-2b E: 踏み潰された板は消費される（再利用不可）');
+      /* 比較: 既定の体（D）は同じ板で足止めされる */
+      var D = a2Ai(g, 'D');
+      bd.used = false;
+      a2Put(D, from.col, from.row, 180);
+      D.state = 'chase'; D.stateTime = 0;
+      for (var f2 = 0; f2 < 120 && D.state === 'chase'; f2++) {
+        D._moveTo(ESCAPE.FIXED_DT, tc.x, tc.z, D.T.chaseSpeed);
+      }
+      t.ok(D.state === 'stalled', 'P5e-2b E: 比較 — 既定の体は板で足止めされる', D.state);
+    }
+
+    /* 咆哮と、見失った最後の位置の再訪 */
+    g.reset(); ai = a2Ai(g, 'E'); a2Solo(g, ai);
+    ai.state = 'chase'; ai.form = 'stand'; ai.enemy.setForm('stand', true);
+    ai._applyForm();
+    t.ok(ai._roars >= 1, 'P5e-2b E: 形態遷移で咆哮が鳴る', ai._roars);
+    t.near(ai.enemy.transDur, 0.80, 1e-6, 'P5e-2b E: 咆哮の遷移は 0.8 秒', ai.enemy.transDur);
+    ai.lastSeen = { x: ai.enemy.x + 3, z: ai.enemy.z };
+    ai._revisit = false;
+    ai._pickSearchSpot();
+    t.ok(Math.abs(ai.goal.x - ai.lastSeen.x) < 1e-6 && (ai.revisits || 0) >= 1,
+      'P5e-2b E: 探索では見失った最後の位置そのものへ戻る', ai.revisits);
+    g.reset();
+  }
+
+  /* ---- 4-5) F: 低天井での速度切替・ワイヤーを越える・聴覚最鋭・視野が狭い ---- */
+  function testA2KindF(t, g) {
+    g.reset();
+    var ai = a2Ai(g, 'F'), T = ai.T, map = g.map;
+    a2Solo(g, ai);
+    t.ok(T.patrolSpeed === 1.80 && T.fovDeg === 80 && T.hearMul === 2.0,
+      'P5e-2b F: 契約の数値（巡回1.8／fov80／聴覚2.0倍）',
+      T.patrolSpeed + '/' + T.fovDeg + '/' + T.hearMul);
+    t.ok(T.hearMul > a2Ai(g, 'E').T.hearMul, 'P5e-2b F: 聴覚は3体で最も鋭い');
+
+    var low = a2CellIn(g, ai, function (c, r) { return map.ceilHAt(c, r) <= 2.4; });
+    var high = a2CellIn(g, ai, function (c, r) { return map.ceilHAt(c, r) >= 4.3; });
+    if (t.ok(!!low && !!high, 'P5e-2b F: 低天井と高天井のマスが縄張りの中にある')) {
+      a2Put(ai, low.col, low.row, 180);
+      var vLow = ai.chaseSpeedNow();
+      a2Put(ai, high.col, high.row, 180);
+      var vHigh = ai.chaseSpeedNow();
+      t.ok(Math.abs(vLow - 5.80) < 1e-9, 'P5e-2b F: 低天井の支線では追跡 5.8', vLow);
+      t.ok(Math.abs(vHigh - 3.60) < 1e-9, 'P5e-2b F: それ以外では追跡 3.6', vHigh);
+      t.ok(vLow > ESCAPE.Player.SPEED_RUN && vHigh < ESCAPE.Player.SPEED_RUN,
+        'P5e-2b F: 支線では逃げられず、幹線では逃げられる');
+    }
+
+    /* ワイヤー罠: F は引っかからず越える（他の体は屈む一拍を払う） */
+    var wire = null, traps = (map.meta.traps || []);
+    for (var i = 0; i < traps.length; i++) if (traps[i].kind === 'wire') { wire = traps[i]; break; }
+    if (t.ok(!!wire, 'P5e-2b F: ワイヤー罠がマップにある')) {
+      a2Put(ai, wire.col, wire.row, 180);
+      t.ok(Math.abs(ai._speedScale() - 1) < 1e-9,
+        'P5e-2b F: ワイヤーのマスでも減速しない（壁を伝って越える）', ai._speedScale().toFixed(3));
+      var D = a2Ai(g, 'D');
+      a2Put(D, wire.col, wire.row, 180);
+      t.ok(D._speedScale() < 0.5,
+        'P5e-2b F: 比較 — 他の体はワイヤーを潜る一拍を払う', D._speedScale().toFixed(3));
+      t.ok(ai._wireAt(wire.col, wire.row) && !ai._wireAt(0, 0),
+        'P5e-2b F: ワイヤーのマス索引は meta.traps から引いている');
+    }
+    g.reset();
+  }
+
+  /* ---- 4-6) 3体が同じ罠に反応し、近い順に到着する ---- */
+  function testA2TrapOrder(t, g) {
+    g.reset();
+    var L = g.ais.list, map = g.map, i;
+    /* プレイヤーは遠くのロッカーへ隠す（見つかって追跡に化けないように） */
+    var sp = map.meta.spawn;
+    a2Player(g, sp.col, sp.row, 0);
+    /* 音源＝中央の合流槽（3体の縄張りが重なる場所の近く） */
+    var src = map.cellCenter(39, 39);
+    ESCAPE.noise.emit(src.x, src.z, 40, 'trap');
+    a2Sim(g, 2);
+    var reacted = 0, screams = 0;
+    for (i = 0; i < L.length; i++) {
+      if (L[i].state === 'investigate' || L[i].state === 'chase') reacted++;
+      screams += L[i].screams;
+    }
+    t.ok(reacted === 3, 'P5e-2b 罠: 3体とも同じ罠に反応する', reacted + '/3');
+    t.ok(screams >= 1, 'P5e-2b 罠: 絶叫が鳴る（P4.10 据え置き）', screams);
+
+    /* 近い順に走り出す（P4.10 の規約: 明らかに遠い個体だけが一拍遅れる） */
+    var d0 = [];
+    for (i = 0; i < L.length; i++) {
+      d0.push({ ai: L[i], d: g.ais.pathDistTo(L[i], src.x, src.z, false) });
+    }
+    d0.sort(function (a, b) { return a.d - b.d; });
+    t.ok(d0[0].ai.holdT === 0, 'P5e-2b 罠: 経路距離が最も近い体は一拍も置かずに走り出す',
+      d0[0].ai.kind + ' holdT=' + d0[0].ai.holdT);
+    t.ok(d0[2].d - d0[0].d <= ESCAPE.ENEMY_TUNING.farReactGap || d0[2].ai.holdT > 0,
+      'P5e-2b 罠: 明らかに遠い体は一拍置いてから寄る',
+      d0[2].ai.kind + ' 差' + (d0[2].d - d0[0].d).toFixed(1) + 'm holdT=' + d0[2].ai.holdT.toFixed(2));
+    /* 「順に到着」＝同時に着かず、時間差をもって次々に来る（距離と疾走速度の両方で決まるので
+       どの体が先かは場所しだい。ここで見るのは “順に来ること” そのもの）。 */
+    var order = [], arrived = {}, at = [];
+    for (var f = 0; f < 5400 && order.length < 3; f++) {
+      g.stepFrame(ESCAPE.FIXED_DT);
+      for (i = 0; i < L.length; i++) {
+        if (arrived[L[i].kind]) continue;
+        if (Math.hypot(L[i].enemy.x - src.x, L[i].enemy.z - src.z) < 4.0) {
+          arrived[L[i].kind] = true; order.push(L[i].kind); at.push(f);
+        }
+      }
+    }
+    t.ok(order.length >= 2, 'P5e-2b 罠: 少なくとも2体が音源へ到着する', order.join('→'));
+    if (order.length >= 2) {
+      t.ok(at[1] - at[0] >= 30,
+        'P5e-2b 罠: 同時ではなく順に到着する（間隔0.5秒以上）',
+        order.join('→') + ' @' + at.join('/') + 'フレーム');
+    }
+    g.reset();
+  }
+
+  /* ---- 4-7) 敵3体でも通しクリアできる（板・ロッカーで回避） ---- */
+  function testA2ClearWithEnemies(t, g) {
+    g.reset();
+    var pr = g.progress, map = g.map;
+    t.ok(g.ais.list.length === 3, 'P5e-2b 通し: 3体を凍結せずに走らせる', g.ais.list.length);
+    /* ハンドル → 操作盤 → 到達パッド。敵は動いたまま（捕獲されたら復帰して続ける） */
+    global.__test._place(14, 59, 270);
+    global.__pump(30);
+    a2PressInteract();
+    t.ok(pr.gimmick.key === true, 'P5e-2b 通し: 敵3体が動いている中でハンドルを取得');
+    pr._flashT = 0; pr._flashMsg = '';
+    global.__test._place(68, 70, 90);
+    global.__pump(10);
+    a2PressInteract();
+    t.ok(pr.gimmick.doorOpen === true, 'P5e-2b 通し: 水門を開放');
+    global.__test._place(68, 70, 270);
+    global.__pump(2);
+    a2SendKey('keydown', 'KeyW');
+    var frames = 0;
+    while (frames < 900 && !pr.cleared) { global.__pump(1); frames++; }
+    a2SendKey('keyup', 'KeyW');
+    t.ok(pr.cleared === true, 'P5e-2b 通し: 敵3体のままエリア2をクリアできる', frames + 'フレーム');
+    /* 板とロッカーが回避手段として生きている（板は敵を止め、ロッカーは姿を消す） */
+    var bd = g.stealth.boards[0];
+    t.ok(!!bd, 'P5e-2b 通し: 倒せる板がある');
+    var lk = (map.meta.lockers || [])[0];
+    if (t.ok(!!lk, 'P5e-2b 通し: 隠れられるロッカーがある')) {
+      var c = map.cellCenter(lk.col, lk.row);
+      g.player.x = c.x; g.player.z = c.z;
+      var ok = g.stealth.enterLocker(lk.col, lk.row);
+      t.ok(ok && g.stealth.hidden(), 'P5e-2b 通し: ロッカーに入れば敵から見えなくなる');
+      g.stealth.exitLocker();
+    }
+    g.reset();
   }
 
   /* ---------------- 5) 日誌1・2の発火地点 ---------------- */
@@ -1132,7 +1586,13 @@
       testA2RunLuma(t, g);
       testA2RunPlaythrough(t, g);
       testA2RunWater(t, g);
-      testA2RunEnemyZero(t, g);
+      testA2Enemies(t, g);
+      testA2StateMachine(t, g);
+      testA2KindD(t, g);
+      testA2KindE(t, g);
+      testA2KindF(t, g);
+      testA2TrapOrder(t, g);
+      testA2ClearWithEnemies(t, g);
       testA2RunDiaries(t, g);
     } catch (err) {
       t.ok(false, 'runArea2 実行中に例外', err && (err.message || String(err)));
