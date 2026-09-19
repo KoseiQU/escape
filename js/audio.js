@@ -2599,6 +2599,29 @@
         this.play('lockerDoor', { x: p.x, z: p.z, gain: 1.0, open: true });
         this.play('enemyMoan', { x: p.x, z: p.z, bus: 'enemy', gain: 0.9, r: 0.35, when: 0.18, maxDist: 30 });
         break;
+      /* ---- P5e-2b エリア2の敵3体（契約 §4「P5e-2」の P5e-2b「音」）----
+         既存の声（noiseStep/boardCrash/scream/enemyDrag/metalScrape）の重ねで作る。
+         新しい音色は足さない＝音の系統（P4.15「機械音感を薄める」）を崩さない。 */
+      case 'splash':               /* D が水路へ落ちた着地の水しぶき */
+        this.play('noiseStep', { x: p.x, z: p.z, bus: 'enemy', gain: 1.0,
+          mat: 'water', r: this._rand(), maxDist: 34 });
+        this.play('boardCrash', { x: p.x, z: p.z, bus: 'enemy', gain: 0.30, maxDist: 30 });
+        break;
+      case 'thud':                 /* D が歩廊へ落ちた着地（鈍い音） */
+        this.play('boardCrash', { x: p.x, z: p.z, bus: 'enemy', gain: 0.62, maxDist: 32 });
+        this.play('enemyJoint', { x: p.x, z: p.z, bus: 'enemy', gain: 0.7,
+          r: this._rand(), when: 0.06, maxDist: 26 });
+        break;
+      case 'roar':                 /* E の形態遷移（0.8秒の咆哮） */
+        this.play('scream', { x: p.x, z: p.z, bus: 'enemy', priority: 1, gain: 1.0,
+          maxDist: 46, attenFloor: 0.10 });
+        this.play('enemyMoan', { x: p.x, z: p.z, bus: 'enemy', gain: 0.85,
+          r: this._rand(), when: 0.34, maxDist: 40 });
+        this._flash(0.16, 0.26);
+        break;
+      case 'boardCrush':           /* E が倒れた板を踏み潰して通る */
+        this.play('boardCrash', { x: p.x, z: p.z, bus: 'enemy', gain: 0.85, maxDist: 32 });
+        break;
       case 'stall':                /* 敵が板に引っかかった */
         this.play('boardCrash', { x: p.x, z: p.z, bus: 'enemy', gain: 0.7, maxDist: 30 });
         this.play('enemyMoan', { x: p.x, z: p.z, bus: 'enemy', gain: 0.8, when: 0.25, r: 0.2, maxDist: 34 });
@@ -2754,6 +2777,30 @@
     if (this.bus && this.bus.amb) this.bus.amb.gain.value = AMB_BUS_GAIN;
     this.ambDuck = 0;
   };
+
+  /* ---------------- P5e-2b E の鎖の常時音 ----------------
+   * 契約「鎖の常時音（距離減衰つきループ。25m まで聞こえる）」。
+   * 持続する AudioNode のループは作らず、短い引きずり音を一定間隔で撒いて「常時鳴っている」
+   * を作る（空間化・遮蔽・距離減衰は既存の _route にそのまま乗る＝規則が1本で済む）。
+   * 呼ぶのは js/enemy_ai.js の EnemyAI._syncChain（毎フレーム。鳴らす判断はここ）。 */
+  var CHAIN_GAP_MOVE = 620;    // 歩いている間の間隔(ms)
+  var CHAIN_GAP_IDLE = 1450;   // 止まっている間の間隔(ms)
+
+  Engine.prototype.chainLoop = function (id, o) {
+    if (!this._chains) this._chains = Object.create(null);
+    if (!o || o.on === false) { delete this._chains[id]; return; }
+    var st = this._chains[id] || (this._chains[id] = { next: 0, n: 0 });
+    var now = this._nowMs();
+    if (st.next && now < st.next) return;
+    var gap = o.moving ? CHAIN_GAP_MOVE : CHAIN_GAP_IDLE;
+    st.next = now + gap * (0.82 + 0.36 * this._rand());
+    st.n++;
+    this.play((st.n % 2) ? 'enemyDrag' : 'metalScrape', {
+      x: o.x, z: o.z, bus: 'enemy', gain: o.moving ? 0.58 : 0.34,
+      r: this._rand(), maxDist: o.range || 25
+    });
+  };
+  Engine.prototype.chainStopAll = function () { this._chains = Object.create(null); };
 
   /** 緊迫層のノードを即座に落とす（追跡解除・リセット・非表示時） */
   Engine.prototype._killTension = function () {
