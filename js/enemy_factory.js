@@ -65,7 +65,7 @@
 
   /** 皮膚/骨/布のアルベド: 斑・血管・皺・毛穴 */
   function skinCanvas(o) {
-    var S = o.size || 256, cv = document.createElement('canvas');
+    var S = o.size || 512, cv = document.createElement('canvas');
     cv.width = cv.height = S;
     var c = cv.getContext('2d'), R = rng(o.seed || 7), i, n;
     c.fillStyle = o.base || '#8f9490'; c.fillRect(0, 0, S, S);
@@ -109,7 +109,7 @@
   /** 皮膚材質（アルベド＋法線＋粗さ）。同じ seed/寸法ならテクスチャを共有する。 */
   A2.skin = function (o) {
     o = o || {};
-    var key = 'sk' + (o.seed || 7) + '_' + (o.size || 256) + '_' + (o.base || '') + '_' + (o.bump || '') +
+    var key = 'sk' + (o.seed || 7) + '_' + (o.size || 512) + '_' + (o.base || '') + '_' + (o.bump || '') +
       '_' + (o.roughLo || '') + '_' + (o.roughHi || '') + '_' + (o.mottle || '') + '_' + (o.vein || '') +
       '_' + (o.repeat ? o.repeat[0] + 'x' + o.repeat[1] : '1');
     var set = texCache[key];
@@ -299,16 +299,19 @@
 
   /* 暗がりでの見え方（emissive の下限/傾き/上限）。
      契約: 顔は闇でも読める／眼窩と口腔は光っても闇のまま／捕獲演出中だけ顔を底上げ。 */
-  /* 実測較正（2026-09-20・area2 の暗い合流槽で捕獲の寄りを撮り、顔の中央値輝度で合わせた）:
-     cine の上限 0.15→中央値29 / 0.45→72 / 1.1→107。読めてなお暗い 70〜90 を狙う。 */
+  /* 2026-09-20 事前ゲート差し戻し（①肌が平板・④暗所で粒状ノイズに潰れる）を受けて再較正。
+     造形を立てるのは**実ライト**の仕事で、emissive は「真っ暗でも顔の位置が分かる」保険に
+     徹する。上限を低く抑えないと明るい区画で法線と粗さの起伏が飛んで平板になる。
+     cine（捕獲演出）だけは契約 §4「捕獲時限定の高解像度顔」に合わせて底上げする
+     （暗い合流槽での顔アップで中央値 35〜50 になる実測値）。 */
   var LIT = {
-    body: { min: 0.030, gain: 0.85, max: 0.200, cine: [0.090, 0.300] },
-    face: { min: 0.075, gain: 1.30, max: 0.300, cine: [0.160, 0.400] },
-    tooth: { min: 0.040, gain: 0.80, max: 0.190, cine: [0.140, 0.380] },
-    cloth: { min: 0.020, gain: 0.65, max: 0.140, cine: [0.060, 0.210] },
-    hair: { min: 0.010, gain: 0.40, max: 0.080, cine: [0.030, 0.120] },
-    metal: { min: 0.018, gain: 0.75, max: 0.150, cine: [0.050, 0.220] },
-    flesh: { min: 0.024, gain: 0.60, max: 0.130, cine: [0.080, 0.230] },
+    body: { min: 0.022, gain: 0.26, max: 0.060, cine: [0.060, 0.150] },
+    face: { min: 0.046, gain: 0.34, max: 0.090, cine: [0.115, 0.260] },
+    tooth: { min: 0.026, gain: 0.24, max: 0.058, cine: [0.070, 0.160] },
+    cloth: { min: 0.016, gain: 0.20, max: 0.046, cine: [0.044, 0.110] },
+    hair: { min: 0.005, gain: 0.08, max: 0.018, cine: [0.008, 0.024] },
+    metal: { min: 0.012, gain: 0.22, max: 0.046, cine: [0.036, 0.100] },
+    flesh: { min: 0.016, gain: 0.20, max: 0.042, cine: [0.048, 0.120] },
     hollow: { min: 0.000, gain: 0.00, max: 0.000, cine: [0.000, 0.000] }
   };
   A2.LIT = LIT;
