@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>ESCAPE — P5e-2a 案F 本番モデル 検証ハーネス（納品前に削除）</title>
+<style>
+  html,body{margin:0;padding:0;background:#000;overflow:hidden}
+  canvas{display:block}
+  #cap{position:fixed;left:16px;bottom:12px;z-index:5;
+    font:13px/1.5 "Hiragino Sans","Noto Sans JP",sans-serif;color:#b9b2a2;
+    text-shadow:0 1px 3px #000,0 0 8px #000;letter-spacing:.04em;opacity:.8;pointer-events:none}
+  #cap b{display:block;font-size:16px;font-weight:600;color:#ddd4be;letter-spacing:.06em}
+</style>
+</head>
+<body>
+<div id="cap"></div>
+<script src="../../js/three.min.js"></script>
+<script src="../../js/render_quality.js"></script>
+<script src="../../js/map.js"></script>
+<script src="../../js/textures.js"></script>
+<script src="../../js/maps/area2.js"></script>
+<script src="../../js/enemy_model_a2_f.js"></script>
+<script>
+(function () {
+  'use strict';
+  var THREE = window.THREE, ESCAPE = window.ESCAPE;
+  function q(k, d) { var m = new RegExp('[?&]' + k + '=([^&]*)').exec(location.search || ''); return m ? decodeURIComponent(m[1]) : d; }
+  var VIEW = q('v', 'stand');
+  var W = 1280, H = 720;
+
+  /* ---- 舞台の素材（下水道: 濡れた煉瓦・石床・水） ---- */
+  function h2(x, y) { var n = Math.sin(x * 127.1 + y * 311.7) * 43758.5453; return n - Math.floor(n); }
+  function vnn(x, y) {
+    var xi = Math.floor(x), yi = Math.floor(y), xf = x - xi, yf = y - yi;
+    var u = xf * xf * (3 - 2 * xf), v = yf * yf * (3 - 2 * yf);
+    var a = h2(xi, yi), b = h2(xi + 1, yi), c = h2(xi, yi + 1), d = h2(xi + 1, yi + 1);
+    return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v;
+  }
+  function fbm(x, y, o) { var s = 0, a = .5, f = 1, i; for (i = 0; i < (o || 4); i++) { s += a * vnn(x * f, y * f); f *= 2.07; a *= .5; } return s; }
+  function tex(draw, rep) {
+    var S = 256, cv = document.createElement('canvas'); cv.width = cv.height = S;
+    var c = cv.getContext('2d'), im = c.createImageData(S, S), d = im.data, x, y;
+    for (y = 0; y < S; y++) for (x = 0; x < S; x++) draw(x, y, d, (y * S + x) * 4, S);
+    c.putImageData(im, 0, 0);
+    var t = new THREE.CanvasTexture(cv);
+    t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(rep[0], rep[1]);
+    if (THREE.SRGBColorSpace) t.colorSpace = THREE.SRGBColorSpace;
+    return t;
+  }
+  var brick = tex(function (x, y, d, i) {
+    var row = Math.floor(y / 26), off = (row % 2) * 26;
+    var bx = ((x + off) % 52) / 52, by = (y % 26) / 26;
+    var mortar = (bx < .055 || bx > .945 || by < .10 || by > .90) ? 1 : 0;
+    var n = fbm(x / 13, y / 13, 4), base = mortar ? 22 + n * 15 : 40 + n * 34;
+    var moss = Math.max(0, fbm(x / 34 + 9, y / 34, 3) - .52) * 2.4;
+    d[i] = Math.min(255, base * (1 - moss * .5) * .80);
+    d[i + 1] = Math.min(255, base * (1 + moss * .12) * .88);
+    d[i + 2] = Math.min(255, base * (1 - moss * .6) * .58); d[i + 3] = 255;
+  }, [4, 2]);
+  var stone = tex(function (x, y, d, i) {
+    var seam = (x % 32 < 1.5 || y % 32 < 1.5) ? .5 : 1;
+    var n = fbm(x / 9, y / 9, 5), t = fbm(x / 40, y / 40, 2), v = (26 + n * 28) * seam * (.68 + t * .5);
+    d[i] = v * .94; d[i + 1] = v * .97; d[i + 2] = v * .84; d[i + 3] = 255;
+  }, [6, 6]);
+  function lin(t) { var c = t.clone(); c.needsUpdate = true; c.colorSpace = THREE.NoColorSpace; return c; }
+
+  /* ---- 舞台 ---- */
+  var scene = new THREE.Scene();
+  scene.fog = new THREE.FogExp2(0x05060a, 0.070);
+  var TS = 2.0, CEIL = 2.4;
+  var matWall = new THREE.MeshStandardMaterial({ map: brick, bumpMap: lin(brick), bumpScale: .07, roughness: .95, metalness: 0, color: 0x4e4c3a });
+  var matFloor = new THREE.MeshStandardMaterial({ map: stone, bumpMap: lin(stone), bumpScale: .03, roughness: .80, metalness: 0, color: 0x5c5e55 });
+  var matWater = new THREE.MeshStandardMaterial({ color: 0x0c241b, roughness: .12, metalness: .40 });
+  /* 支線: x=[0,4] の床、x=0 と x=4 に壁、長さ z=[0,24]、天井 2.4 */
+  function box(w, h, d, m, p, r) {
+    var g = new THREE.BoxGeometry(w, h, d), o = new THREE.Mesh(g, m);
+    o.position.set(p[0], p[1], p[2]); if (r) o.rotation.set(r[0], r[1], r[2]);
+    scene.add(o); return o;
+  }
+  box(4, .1, 26, matFloor, [2, -.05, 12]);
+  box(4, .1, 26, matWall, [2, CEIL + .05, 12]);
+  box(.3, CEIL, 26, matWall, [-.15, CEIL / 2, 12]);
+  box(.3, CEIL, 26, matWall, [4.15, CEIL / 2, 12]);
+  box(4, CEIL, .3, matWall, [2, CEIL / 2, 25.15]);
+  box(1.2, .02, 26, matWater, [2.6, .015, 12]);
+
+  /* ナトリウム橙のキー1灯（斜め上）＋水面の緑のリム（下・背後）＋ごく弱いフィル */
+  scene.add(new THREE.AmbientLight(0x1a2028, 0.34));
+  var key = new THREE.PointLight(0xffa64a, 9.0, 16, 2); key.position.set(1.05, 2.25, 8.6); scene.add(key);
+  var key2 = new THREE.PointLight(0xffb060, 3.2, 12, 2); key2.position.set(2.6, 2.2, 14.4); scene.add(key2);
+  var rim = new THREE.PointLight(0x2f8f6a, 2.4, 9, 2); rim.position.set(2.9, .22, 11.4); scene.add(rim);
+  var fill = new THREE.PointLight(0x556070, 0.9, 10, 2); fill.position.set(3.2, 1.6, 7.2); scene.add(fill);
+
+  /* ---- 地図（幅1の支線＝左右に壁。F の縄張り） ---- */
+  ESCAPE.Maps.register({
+    id: 'p5e2f', name: 'F ハーネス',
+    legend: { '#': 'WALL', '.': 'FLOOR' },
+    rows: ['###', '#.#', '#.#', '#.#', '#.#', '#.#', '#.#', '#.#', '#.#', '#.#', '#.#', '#.#', '#.#', '###'],
+    meta: { ceilings: [{ c0: 0, r0: 0, c1: 2, r1: 13, h: 2.4 }] }
+  });
+  var map = ESCAPE.Maps.load('p5e2f');
+  /* 舞台は x∈[0,4] なので、地図の col1（x∈[2,4]）を通路にして壁は col0/col2 */
+
+  /* ---- 敵 ---- */
+  var enemy = new ESCAPE.EnemyModelsA2.F({ seed: 5 });
+  scene.add(enemy.group);
+  window.__enemy = enemy;
+
+  var renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+  renderer.setPixelRatio(1);
+  renderer.setSize(W, H, false);
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.12;
+  document.body.appendChild(renderer.domElement);
+  var cam = new THREE.PerspectiveCamera(58, W / H, 0.05, 90);
+
+  /* 世界の明るさの代役: 通路の暗がり（syncLight の入力） */
+  var fakeWorld = {
+    lightIndex: true,
+    _shade: function (x, y, z, nx, ny, nz, key, u, out) {
+      var d = Math.hypot(x - 1.05, y - 2.25, z - 8.6);
+      var k = 0.42 / (1 + d * d * 0.12) + 0.035;
+      out[0] = k * 1.00; out[1] = k * 0.62; out[2] = k * 0.30; return out;
+    }
+  };
+
+  function tri() { return enemy.activeTriangles(); }
+  function cap(title, sub) {
+    document.getElementById('cap').innerHTML = '<b>' + title + '</b>' + sub;
+  }
+
+  function pump(form, secs, detail) {
+    enemy.placeAt(3.0, 10.2, Math.PI, map);       /* 支線の中・南向き（−Z が前） */
+    enemy.setForm(form, true);
+    enemy.setDetail(detail || 'normal');
+    var t = 0, dt = 1 / 60;
+    while (t < secs) { t += dt; enemy.update(dt, t); }
+    enemy.syncLight(fakeWorld, map);
+    return t;
+  }
+
+  var VIEWS = {
+    /* 壁を這う: 斜め前から。左の壁（x=0 側）に貼りついているはず */
+    stand: function () {
+      var t = pump('stand', 3.4);
+      cam.fov = 52; cam.position.set(3.35, 1.62, 6.55); cam.lookAt(2.55, 1.30, 10.1);
+      cap('案F 本番モデル — stand（壁を這う）', tri().toLocaleString() + ' 三角形 / detail normal');
+    },
+    /* 床を走る: 低い視点から正面 */
+    crawl: function () {
+      var t = pump('crawl', 4.1);
+      cam.fov = 58; cam.position.set(2.75, 0.82, 6.10); cam.lookAt(2.85, 0.42, 9.9);
+      cap('案F 本番モデル — crawl（床を走る・肢12本）', tri().toLocaleString() + ' 三角形 / detail normal');
+    },
+    /* 顔アップ: capture.js と同じ据え方（顔の正面 0.42m・少し見上げ） */
+    maw: function () {
+      pump('stand', 2.2, 'hi');
+      enemy.pulseEyes(2.2, 1);
+      var fp = new THREE.Vector3();
+      enemy.nodes.head.getWorldPosition(fp);
+      var f = { x: -Math.sin(enemy.facing), z: -Math.cos(enemy.facing) };
+      fp.x += f.x * 0.055; fp.z += f.z * 0.055; fp.y += 0.015;
+      var d = 0.42;
+      cam.fov = 46;
+      cam.position.set(fp.x - f.x * d, fp.y - d * 0.34, fp.z - f.z * d);
+      cam.lookAt(fp);
+      cap('案F 本番モデル — 顔の寄り（捕獲演出 detail hi）', tri().toLocaleString() + ' 三角形');
+    },
+    /* 捕獲の口: 複数の頭蓋が覗き込む（camera 空間） */
+    mawprop: function () {
+      pump('stand', 2.0, 'hi');
+      var maw = enemy.createMaw();
+      cam.add(maw.group);
+      scene.add(cam);
+      maw.group.visible = true;
+      maw.setOpen(0.82);
+      var sc = 0.30 + 3.00 * Math.pow(0.86, 1.55);
+      maw.group.scale.set(sc, sc, sc);
+      maw.group.position.set(0, -0.02 + 0.05 * 0.86, -0.40 + 0.33 * 0.86);
+      enemy.group.visible = false;
+      enemy.pulseEyes(2.0, 1);
+      cam.fov = 46; cam.position.set(2.2, 1.5, 6.0); cam.lookAt(2.2, 1.5, 4.0);
+      cap('案F 本番モデル — 捕獲の口（複数の頭蓋が覗き込む）', tri().toLocaleString() + ' 三角形');
+    },
+    /* 遷移の途中（壁から剥がれ落ちる 0.9 秒の中ほど） */
+    trans: function () {
+      pump('stand', 2.0);
+      enemy.setForm('crawl', false);
+      var t = 2.0, dt = 1 / 60;
+      while (t < 2.0 + 0.45) { t += dt; enemy.update(dt, t); }
+      enemy.syncLight(fakeWorld, map);
+      cam.fov = 55; cam.position.set(3.45, 1.45, 6.9); cam.lookAt(2.5, 1.0, 10.0);
+      cap('案F 本番モデル — 遷移 0.45s（壁から剥がれ落ちる）', tri().toLocaleString() + ' 三角形');
+    }
+  };
+
+  window.__shot = function (v) {
+    (VIEWS[v] || VIEWS.stand)();
+    cam.updateProjectionMatrix();
+    renderer.render(scene, cam);
+    return tri();
+  };
+  window.__measure = function () {
+    enemy.setDetail('normal'); var hi = enemy.activeTriangles();
+    enemy.setDetail('low'); var lo = enemy.activeTriangles();
+    enemy.setDetail('hi'); var cine = enemy.activeTriangles();
+    enemy.createGrabHands(); enemy.grabHands.visible = true;
+    var withHands = enemy.activeTriangles();
+    enemy.grabHands.visible = false;
+    enemy.createMaw(); enemy.maw.group.visible = true;
+    var withMaw = enemy.activeTriangles();
+    enemy.maw.group.visible = false;
+    enemy.setDetail('normal');
+    return { hi: hi, lo: lo, cine: cine, hands: withHands, maw: withMaw,
+      top: { stand: enemy.TOP_STAND, crawl: enemy.TOP_CRAWL, lift: enemy.LIFT, off: enemy.WALL_OFF } };
+  };
+  var m = document.createElement('div');
+  m.id = 'm'; m.style.display = 'none';
+  document.body.appendChild(m);
+  m.textContent = JSON.stringify(window.__measure());
+  window.__shot(VIEW);
+  window.__ready = true;
+})();
+</script>
+</body>
+</html>
