@@ -571,7 +571,10 @@
     this.plan = opts.plan || null;
     this.manager = null;
     this.map = game.map;
-    this.enemy = new ESCAPE.Enemy({ seed: (this.T.seed || 3) });
+    /* P5e-2a: 生成はファクトリ経由（kind 未指定＝'A1'＝エリア1の実験体で挙動不変） */
+    var kind = opts.kind || this.T.kind || 'A1';
+    this.kind = kind;
+    this.enemy = ESCAPE.EnemyFactory.create(kind, { seed: (this.T.seed || 3), kind: kind });
     this.enemy.group.name = 'enemy' + this.index;
     this.enemy.group.visible = true;
     game.scene.add(this.enemy.group);
