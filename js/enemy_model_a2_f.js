@@ -810,9 +810,21 @@
   }
 
   EnemyF.prototype._track = function (o) { this.disposables.push(o); return o; };
+  /**
+   * 材質を「暗がりの見え方」の系統に登録する（syncLight が毎フレーム emissive を書く）。
+   * 絵柄を持つ材質は emissiveMap が下限光を濁らせるが、単色の材質は
+   * そのままだと「黒い髪が灰色に光る」＝明暗の関係が反転する。
+   * そこで単色材質だけ、下限光を自分のアルベドに比例させる（中間色 0.20 を基準）。
+   */
   EnemyF.prototype._lit = function (mat, prof, k) {
     mat.userData.a2lit = prof;
-    mat.userData.a2k = (k === undefined ? 1 : k);
+    var g = (k === undefined ? 1 : k);
+    if (!mat.map) {
+      var c = mat.color;            /* three は linear-sRGB で保持している */
+      var lum = 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
+      g *= Math.min(1, lum / 0.20);
+    }
+    mat.userData.a2k = g;
     this.litMats.push(mat); this._track(mat); return mat;
   };
   /** lod=1 のメッシュは setDetail('low') で消える飾り */
